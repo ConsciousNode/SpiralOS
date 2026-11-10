@@ -128,9 +128,26 @@ function buildBootSector() {
   put(0x81, 0xFE); put16(704);       // cmp si, 704
   put(0x7C, (loopLabel - (p + 2)) & 0xFF); // jl loopLabel
 
-  // 5. Set VBE video mode 0x4112 (640x480x32 LFB at 0xE0000000)
+  // 5a. [Kehai audit 2026-11-10] Ask the VBE BIOS where the linear framebuffer really lives:
+  //     INT 10h AX=4F01h, CX=mode -> ModeInfoBlock at 0000:5000; PhysBasePtr is at +0x28.
+  //     It used to assume 0xE0000000 (Hummingbird's address); QEMU uses 0xFD000000 and real cards vary.
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8E, 0xC0);                   // mov es, ax
+  put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
+  put(0xB9); put16(0x0112);          // mov cx, 0x0112
+  put(0xBF); put16(0x5000);          // mov di, 0x5000
+  put(0xCD, 0x10);                   // int 10h
+  //     Mode 0x112 is 32 bpp on Hummingbird and many real cards, but 24 bpp on QEMU/Bochs.
+  //     If BitsPerPixel (+0x19) isn't 32, fall back to the Bochs/QEMU 640x480x32 mode 0x142.
+  put(0x80, 0x3E); put16(0x5019); put(32); // cmp byte [0x5019], 32
+  put(0x74, 8);                      // je +8 (skip the fallback query)
+  put(0xB9); put16(0x0142);          // mov cx, 0x0142
+  put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
+  put(0xCD, 0x10);                   // int 10h (refreshes ModeInfo at 0x5000)
+  // 5b. Set the chosen VBE mode (CX) with the linear-framebuffer bit
   put(0xB8); put16(0x4F02);          // mov ax, 0x4F02
-  put(0xBB); put16(0x4112);          // mov bx, 0x4112
+  put(0x89, 0xCB);                   // mov bx, cx
+  put(0x80, 0xCF, 0x40);             // or bh, 0x40 (LFB)
   put(0xCD, 0x10);                   // int 10h
 
   // 6. Enable A20 line (Port 0x92)
@@ -156,10 +173,14 @@ function buildBootSector() {
   put(0x83, 0xC7, 0x04);             // add di, 4
   put(0xE2, (pdeLoop - (p + 2)) & 0xFF); // loop pdeLoop
   // Map VBE LFB at 0xE0000000 (entry 896 = offset 896*4 = 0x0E00 -> 0x6E00)
+  // [Kehai audit 2026-11-10] Virtual 0xE0000000 stays fixed (all drawing code is unchanged),
+  // but it now maps to the PhysBasePtr the BIOS reported (assumed 4 MB aligned, as LFB BARs are).
   put(0xBF); put16(0x6E00);
-  put(0x66, 0xB8); put32(0xE0000083);
+  put(0x66, 0xA1); put16(0x5028);    // mov eax, [0x5028] (PhysBasePtr)
+  put(0x66, 0x25); put32(0xFFC00000);// and eax, 0xFFC00000
+  put(0x0C, 0x83);                   // or al, 0x83 (Present | RW | PS)
   put(0x66, 0x26, 0x89, 0x05);
-  put(0x66, 0xB8); put32(0xE0400083);
+  put(0x66, 0x05); put32(0x00400000);// add eax, 4MB (second 4 MB page)
   put(0x66, 0x26, 0x89, 0x45, 0x04);
 
   // 8. Load GDTR, CR3, CR4.PSE, and CR0 (PE | PG)

@@ -68,3 +68,24 @@ SpiralOS was a deliberate ceiling probe: the prompt asked for more than one shot
   - real-hardware boot (hard-coded framebuffer).
 
 **Where the ceiling is:** a large system whose parts all work, and whose hardest single requirement got a convincing stand-in. Argon's own §6 points at the same wall: it ran out of bytecode space for a real compiler inside the OS.
+
+---
+
+## Fix: SpiralOS now boots in QEMU (2026-11-10)
+
+`core/core_x86.js`, boot sector only (it now has 1 spare byte):
+
+1. **Ask the BIOS where the framebuffer is.** INT 10h `4F01h` writes the mode info to `0000:5000`. The page-directory entry for *virtual* `0xE0000000` now maps the reported **`PhysBasePtr`**, so none of the drawing code changes.
+2. **Make sure the mode is really 32 bpp.** Mode `0x112` is 32 bpp on Hummingbird but 24 bpp on QEMU/Bochs (which gave a striped, tripled image). If `BitsPerPixel` isn't 32, it falls back to the Bochs/QEMU 640×480×32 mode `0x142`.
+
+Results:
+- **QEMU (SeaBIOS, std VGA): full desktop.** See `screenshots/audit-qemu-fixed.png`, and `audit-qemu-black.png` for before.
+- All six suites still pass, Hummingbird included.
+- `spiralos.img` rebuilt with `node tools/build.js`, and `index.html` with `tools/build_station.py`.
+
+### Still in the way of real hardware
+
+- **The loader's disk reads are unusual.** It loads the OS with INT 13h reads of **64 sectors at a time, across track and head boundaries**, with no error check. Hummingbird and SeaBIOS accept that; many real BIOSes cap a read at one track (18 sectors) and fail silently. Next fix: read track by track, and check the carry flag.
+- **24-bit-only cards.** On a real card where `0x112` is 24 bpp, the `0x142` fallback (a Bochs mode number) won't exist. A full fix would scan the BIOS mode list for 640×480×32.
+- **StudioNet assumes the card is present.** On QEMU, reading the missing NIC's ports returns junk, and SpiralMon counted it as **RX: 28280** bytes. The driver needs a presence check.
+- **No floppy controller behind a USB stick,** so saving (and the patcher's rebuild) can't write back.
