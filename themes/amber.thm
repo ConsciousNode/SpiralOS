@@ -1,0 +1,17 @@
+# SpiralOS Theme File: Kyoto Amber Phosphor (1987)
+name=Kyoto Amber 1987
+desk_top=48
+desk_bot=52
+taskbar_bg=50
+taskbar_fg=14
+win_bg=49
+win_border=14
+title_active=6
+title_inactive=51
+title_text=15
+btn_face=52
+btn_hi=14
+btn_sh=48
+accent=14
+wallpaper_style=1
+bevel_style=0

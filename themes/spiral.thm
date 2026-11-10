@@ -1,0 +1,17 @@
+# SpiralOS Theme File: Spiral Aether (1991 Default)
+name=Spiral Aether 1991
+desk_top=16
+desk_bot=22
+taskbar_bg=18
+taskbar_fg=15
+win_bg=24
+win_border=11
+title_active=68
+title_inactive=20
+title_text=15
+btn_face=28
+btn_hi=11
+btn_sh=17
+accent=14
+wallpaper_style=0
+bevel_style=1

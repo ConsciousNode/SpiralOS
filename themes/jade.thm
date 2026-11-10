@@ -1,0 +1,17 @@
+# SpiralOS Theme File: Neo-Taipei Jade (1993)
+name=Neo-Taipei Jade 1993
+desk_top=80
+desk_bot=86
+taskbar_bg=82
+taskbar_fg=10
+win_bg=84
+win_border=10
+title_active=2
+title_inactive=81
+title_text=15
+btn_face=85
+btn_hi=10
+btn_sh=80
+accent=14
+wallpaper_style=3
+bevel_style=1

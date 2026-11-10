@@ -1,0 +1,17 @@
+# SpiralOS Theme File: ETH Ceres Paper (1990)
+name=ETH Ceres Paper 1990
+desk_top=7
+desk_bot=15
+taskbar_bg=8
+taskbar_fg=15
+win_bg=15
+win_border=0
+title_active=4
+title_inactive=8
+title_text=15
+btn_face=7
+btn_hi=15
+btn_sh=0
+accent=4
+wallpaper_style=2
+bevel_style=2
