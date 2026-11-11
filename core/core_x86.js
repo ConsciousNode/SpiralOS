@@ -79,7 +79,6 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
   put(0x88, 0x16); put16(0x7DFC);    // mov [0x7DFC], dl (save boot drive)
   put(0xFB);                         // sti
-
   // 1. Print 'S' via INT 10h AH=0Eh (triggers Milestone 1: Boot sector runs)
   put(0xB8); put16(0x0E53);          // mov ax, 0x0E53
   put(0x31, 0xDB);                   // xor bx, bx
@@ -100,31 +99,156 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   put(0xB4, 0x01);                   // mov ah, 0x01
   put(0xCD, 0x16);                   // int 16h
 
-  // 3. Load Stage 2 Loader (Sector 1 = Cyl 0, Head 0, Sect 2, Count 1) to 0000:7E00 with 3 retries
-  put(0x31, 0xC0);                   // xor ax, ax
-  put(0x8E, 0xC0);                   // mov es, ax
-  put(0xBE); put16(3);               // mov si, 3 (retries)
-  const retryS2 = p;
-  put(0xBB); put16(0x7E00);          // mov bx, 0x7E00
-  put(0xB8); put16(0x0201);          // mov ax, 0x0201 (read 1 sector)
-  put(0xB9); put16(0x0002);          // mov cx, 0x0002 (cyl 0, sect 2)
-  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
-  put(0x30, 0xF6);                   // xor dh, dh (head 0)
-  put(0xCD, 0x13);                   // int 13h
-  const jncS2Pos = p + 1;
-  put(0x73, 0);                      // jnc s2_ok
-  put(0x31, 0xC0);                   // xor ax, ax
-  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
-  put(0xCD, 0x13);                   // int 13h (reset)
-  put(0x4E);                         // dec si
-  put(0x75, (retryS2 - (p + 2)) & 0xFF);
-  // Boot error fallback: print '!' and halt
-  put(0xB8); put16(0x0E21);
-  put(0xCD, 0x10);
-  put(0xFA, 0xF4);                   // cli; hlt
-  // s2_ok: jump to Stage 2 at 0000:7E00
-  b[jncS2Pos] = (p - (jncS2Pos + 1)) & 0xFF;
-  put(0xEA); put16(0x7E00); put16(0x0000);
+  // --------------------------------------------------------------------------
+  // AUDIT FIX (Kehai, 2026-11-10): one disk reader for every boot medium.
+  // A USB stick usually boots as a hard disk (DL >= 0x80) with a geometry the BIOS
+  // invents (SeaBIOS reports 2/16/90 for a 1.44 MB image; real PCs vary), so fixed
+  // 18-sector, 2-head CHS math read the wrong sectors and halted with 'E'.
+  // Now: hard disks use INT 13h extensions (LBA, AH=42h) when present; everything
+  // else uses CHS with the geometry INT 13h AH=08h reports (default 18/2). Reads never
+  // cross a track (CHS) or a 64 KB DMA boundary. Stage 2 calls this same routine.
+  // Variables: [7DF0] sectors/track, [7DF1] heads, [7DF2] use LBA, [7DF4] CX, [7DF6] DH,
+  //            [7DF8] chunk count, [7DFA] retries, [7DFC] boot drive. DAP built on the stack.
+  // --------------------------------------------------------------------------
+  const L = {}, fx = [];
+  const lab = (n) => { L[n] = p; };
+  const j8 = (op, n) => { put(op, 0); fx.push([p - 1, n, 1]); };
+  const j16 = (op, n) => { put(op); put16(0); fx.push([p - 2, n, 2]); };
+
+  // Geometry. Defaults (18 spt, 2 heads, CHS) are stored in this sector's own bytes
+  // 0x1F0..0x1F2, so they are already in memory at 7DF0..7DF2 when the BIOS loads us.
+  b[0x1F0] = 18; b[0x1F1] = 2; b[0x1F2] = 0;
+  put(0xB4, 0x08);                           // mov ah, 08h
+  put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
+  put(0xCD, 0x13);                           // int 13h
+  j8(0x72, 'geom_done');                     // jc geom_done
+  put(0x80, 0xE1, 0x3F);                     // and cl, 3Fh
+  j8(0x74, 'geom_done');                     // jz geom_done (0 sectors/track = bogus)
+  put(0x88, 0x0E); put16(0x7DF0);            // mov [7DF0], cl
+  put(0xFE, 0xC6);                           // inc dh
+  put(0x88, 0x36); put16(0x7DF1);            // mov [7DF1], dh
+  lab('geom_done');
+  // INT 13h extensions (hard-disk boot only)
+  put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
+  put(0x80, 0xFA, 0x80);                     // cmp dl, 80h
+  j8(0x72, 'ext_done');                      // jb ext_done
+  put(0xB4, 0x41);                           // mov ah, 41h
+  put(0xBB); put16(0x55AA);                  // mov bx, 55AAh
+  put(0xCD, 0x13);                           // int 13h
+  j8(0x72, 'ext_done');                      // jc ext_done
+  put(0x81, 0xFB); put16(0xAA55);            // cmp bx, AA55h
+  j8(0x75, 'ext_done');                      // jne ext_done
+  put(0xF6, 0xC1, 0x01);                     // test cl, 1
+  j8(0x74, 'ext_done');                      // jz ext_done
+  put(0xC6, 0x06); put16(0x7DF2); put(1);    // mov byte [7DF2], 1
+  lab('ext_done');
+
+  // Load Stage 2 (LBA 1, 1 sector) to 0000:7E00 and jump to it
+  put(0xBE); put16(1);                       // mov si, 1
+  put(0xBD); put16(1);                       // mov bp, 1
+  put(0xBF); put16(0x07E0);                  // mov di, 07E0h
+  j16(0xE8, 'read_range');                   // call read_range
+  put(0xEA); put16(0x7E00); put16(0x0000);   // jmp 0000:7E00
+
+  // read_range: SI = first LBA, BP = sector count, DI = destination segment
+  lab('read_range');
+  lab('rr_loop');
+  put(0x85, 0xED);                           // test bp, bp
+  put(0x0F); j16(0x84, 'rr_done');           // jz near rr_done
+  put(0x89, 0xFB);                           // mov bx, di
+  put(0x81, 0xE3); put16(0x0FFF);            // and bx, 0FFFh
+  put(0xC1, 0xEB, 0x05);                     // shr bx, 5
+  put(0xF7, 0xDB);                           // neg bx
+  put(0x81, 0xC3); put16(128);               // add bx, 128   (sectors left before 64 KB boundary)
+  put(0x89, 0xE8);                           // mov ax, bp
+  put(0x39, 0xD8);                           // cmp ax, bx
+  put(0x76, 0x02);                           // jbe +2
+  put(0x89, 0xD8);                           // mov ax, bx
+  put(0x3C, 0x7F);                           // cmp al, 127 (ax <= 128 here, so ah = 0)
+  put(0x76, 0x02);                           // jbe +2
+  put(0xB0, 0x7F);                           // mov al, 127 (some BIOSes reject >127 per call)
+  put(0x80, 0x3E); put16(0x7DF2); put(0);    // cmp byte [7DF2], 0
+  j8(0x75, 'rr_chunk');                      // jne rr_chunk (LBA: no track limit)
+  put(0x50);                                 // push ax
+  put(0x89, 0xF0);                           // mov ax, si
+  put(0xF6, 0x36); put16(0x7DF0);            // div byte [7DF0] -> al = track, ah = sector-1
+  put(0x88, 0xE1);                           // mov cl, ah
+  put(0xFE, 0xC1);                           // inc cl
+  put(0x30, 0xE4);                           // xor ah, ah
+  put(0xF6, 0x36); put16(0x7DF1);            // div byte [7DF1] -> al = cyl, ah = head
+  put(0x88, 0xC5);                           // mov ch, al
+  put(0x89, 0x0E); put16(0x7DF4);            // mov [7DF4], cx
+  put(0x88, 0x26); put16(0x7DF6);            // mov [7DF6], ah (head)
+  put(0x8A, 0x1E); put16(0x7DF0);            // mov bl, [7DF0]
+  put(0x28, 0xCB);                           // sub bl, cl
+  put(0xFE, 0xC3);                           // inc bl
+  put(0x30, 0xFF);                           // xor bh, bh   (sectors left on this track)
+  put(0x58);                                 // pop ax
+  put(0x39, 0xD8);                           // cmp ax, bx
+  put(0x76, 0x02);                           // jbe +2
+  put(0x89, 0xD8);                           // mov ax, bx
+  lab('rr_chunk');
+  put(0xA3); put16(0x7DF8);                  // mov [7DF8], ax
+  put(0xC6, 0x06); put16(0x7DFA); put(3);    // mov byte [7DFA], 3
+  lab('rr_retry');
+  put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
+  put(0x80, 0x3E); put16(0x7DF2); put(0);    // cmp byte [7DF2], 0
+  j8(0x74, 'rr_chs');                        // je rr_chs
+  // Disk address packet built on the stack (SS = DS = 0): size 16, count, 0000:offset, LBA
+  put(0x56);                                 // push si (keep LBA)
+  put(0x31, 0xC0);                           // xor ax, ax
+  put(0x50, 0x50, 0x50);                     // push ax x3 (LBA bits 16..63)
+  put(0x56);                                 // push si (LBA bits 0..15)
+  put(0x57);                                 // push di (segment)
+  put(0x50);                                 // push ax (offset 0)
+  put(0xFF, 0x36); put16(0x7DF8);            // push word [7DF8] (count)
+  put(0x6A, 0x10);                           // push 10h (size 16, reserved 0)
+  put(0x89, 0xE6);                           // mov si, sp
+  put(0xB4, 0x42);                           // mov ah, 42h
+  put(0xCD, 0x13);                           // int 13h
+  put(0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B); // pop bx x8 (drop the packet; keeps CF)
+  put(0x5E);                                 // pop si
+  j8(0xEB, 'rr_check');                      // jmp rr_check
+  lab('rr_chs');
+  put(0x8E, 0xC7);                           // mov es, di
+  put(0x31, 0xDB);                           // xor bx, bx
+  put(0x8B, 0x0E); put16(0x7DF4);            // mov cx, [7DF4]
+  put(0x8A, 0x36); put16(0x7DF6);            // mov dh, [7DF6]
+  put(0xA0); put16(0x7DF8);                  // mov al, [7DF8]
+  put(0xB4, 0x02);                           // mov ah, 02h
+  put(0xCD, 0x13);                           // int 13h
+  lab('rr_check');
+  j8(0x73, 'rr_ok');                         // jnc rr_ok
+  put(0x31, 0xC0);                           // xor ax, ax
+  put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
+  put(0xCD, 0x13);                           // int 13h (reset)
+  put(0xFE, 0x0E); put16(0x7DFA);            // dec byte [7DFA]
+  j8(0x75, 'rr_retry');                      // jnz rr_retry
+  put(0xB8); put16(0x0E45);                  // mov ax, 0E45h ('E')
+  put(0x31, 0xDB);                           // xor bx, bx
+  put(0xCD, 0x10);                           // int 10h
+  put(0xFA, 0xF4);                           // cli; hlt
+  lab('rr_ok');
+  put(0xA1); put16(0x7DF8);                  // mov ax, [7DF8]
+  put(0x01, 0xC6);                           // add si, ax
+  put(0x29, 0xC5);                           // sub bp, ax
+  put(0xC1, 0xE0, 0x05);                     // shl ax, 5
+  put(0x01, 0xC7);                           // add di, ax
+  j16(0xE9, 'rr_loop');                      // jmp near rr_loop
+  lab('rr_done');
+  put(0xC3);                                 // ret
+
+  for (const [at, n, size] of fx) {
+    const rel = L[n] - (at + size);
+    if (size === 1) {
+      if (rel < -128 || rel > 127) throw new Error(`Stage 1 short jump to ${n} out of range (${rel})`);
+      b[at] = rel & 0xFF;
+    } else {
+      dv.setInt16(at, rel, true);
+    }
+  }
+  if (p > 0x180) throw new Error(`Stage 1 code overflows into the boot banner (${p} > 0x180)`);
+  b.readRangeAddr = 0x7C00 + L.read_range;
 
   // Offset 0x180 (phys 0x7D80): 16-byte Boot Banner String
   for (let i = 0; i < 16; i++) {
@@ -149,7 +273,7 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   return b;
 }
 
-function buildStage2Loader(pmBiosWriteRetAddr) {
+function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr) {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
   let p = 0;
@@ -245,81 +369,11 @@ function buildStage2Loader(pmBiosWriteRetAddr) {
   put(0x0F, 0x22, 0xC0);                // mov cr0, eax
   put(0x66, 0xEA); put32(0x00008000); put16(0x0008);
 
-  // --------------------------------------------------------------------------
-  // Subroutine: rm_read_lba_range (SI = start_lba, BP = count, DI = dst_es)
-  // Reads track-by-track (<= 18 - sect_0 sectors per INT 13h call), checks CF,
-  // retries up to 3 times with AH=00h reset, shows red error on failure.
-  // --------------------------------------------------------------------------
-  const subReadAddr = p;
-  dv.setInt16(call1Pos + 1, subReadAddr - (call1Pos + 3), true);
-  dv.setInt16(call2Pos + 1, subReadAddr - (call2Pos + 3), true);
+  // AUDIT FIX (Kehai, 2026-11-10): both loads above call Stage 1's read_range, which
+  // handles LBA/CHS, BIOS-reported geometry, track and 64 KB DMA boundaries.
+  dv.setInt16(call1Pos + 1, (readRangeAddr - 0x7E00) - (call1Pos + 3), true);
+  dv.setInt16(call2Pos + 1, (readRangeAddr - 0x7E00) - (call2Pos + 3), true);
 
-  const readLoop = p;
-  put(0x85, 0xED);                   // test bp, bp
-  put(0x74, 0x4A);                   // jz read_done (+74, patched below)
-  const jzDonePos = p - 1;
-
-  put(0x8E, 0xC7);                   // mov es, di
-  put(0x89, 0xF0);                   // mov ax, si (lba)
-  put(0xB3, 18);                     // mov bl, 18
-  put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect_0 (0..17)
-  put(0x88, 0xE1);                   // mov cl, ah
-  put(0xFE, 0xC1);                   // inc cl (cl = sect 1..18)
-  put(0x88, 0xC6);                   // mov dh, al
-  put(0x80, 0xE6, 0x01);             // and dh, 1 (head)
-  put(0xD0, 0xE8);                   // shr al, 1
-  put(0x88, 0xC5);                   // mov ch, al (cyl)
-  // Compute max sectors remaining on this track: al = 18 - ah
-  put(0xB0, 18);                     // mov al, 18
-  put(0x28, 0xE0);                   // sub al, ah
-  put(0x30, 0xE4);                   // xor ah, ah
-  put(0x39, 0xE8);                   // cmp ax, bp
-  put(0x76, 0x02);                   // jbe +2
-  put(0x89, 0xE8);                   // mov ax, bp
-  // AUDIT FIX (Kehai, 2026-11-10): never let one INT 13h transfer cross a 64 KB physical
-  // boundary. Floppy DMA can't, and real BIOSes (SeaBIOS/QEMU, real PCs) fail the read with
-  // status 09h, which printed 'E' and halted. Clamp to sectors left before the boundary:
-  // bx = 128 - ((es & 0x0FFF) >> 5)
-  put(0x89, 0xFB);                   // mov bx, di (segment)
-  put(0x81, 0xE3); put16(0x0FFF);    // and bx, 0x0FFF
-  put(0xC1, 0xEB, 0x05);             // shr bx, 5
-  put(0xF7, 0xDB);                   // neg bx
-  put(0x81, 0xC3); put16(128);       // add bx, 128
-  put(0x39, 0xD8);                   // cmp ax, bx
-  put(0x76, 0x02);                   // jbe +2
-  put(0x89, 0xD8);                   // mov ax, bx
-  put(0xA3); put16(0x7DF8);          // mov [0x7DF8], ax (chunk count)
-
-  // Retry loop (3 attempts)
-  put(0xC6, 0x06); put16(0x7DFA); put(3); // mov byte [0x7DFA], 3
-  const retryChunk = p;
-  put(0x31, 0xDB);                   // xor bx, bx
-  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
-  put(0xA0); put16(0x7DF8);          // mov al, [0x7DF8]
-  put(0xB4, 0x02);                   // mov ah, 0x02
-  put(0xCD, 0x13);                   // int 13h
-  const jncChunkPos = p + 1;
-  put(0x73, 0);                      // jnc chunk_ok
-  put(0x31, 0xC0);                   // xor ax, ax
-  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
-  put(0xCD, 0x13);                   // int 13h (reset)
-  put(0xFE, 0x0E); put16(0x7DFA);    // dec byte [0x7DFA]
-  put(0x75, (retryChunk - (p + 2)) & 0xFF);
-  // Fatal disk error: print 'E' and halt
-  put(0xB8); put16(0x0E45);
-  put(0xCD, 0x10);
-  put(0xFA, 0xF4);
-  // chunk_ok:
-  b[jncChunkPos] = (p - (jncChunkPos + 1)) & 0xFF;
-  put(0xA1); put16(0x7DF8);          // mov ax, [0x7DF8]
-  put(0x01, 0xC6);                   // add si, ax
-  put(0x29, 0xC5);                   // sub bp, ax
-  put(0xC1, 0xE0, 0x05);             // shl ax, 5 (count * 32 paragraphs)
-  put(0x01, 0xC7);                   // add di, ax
-  put(0xEB, (readLoop - (p + 2)) & 0xFF);
-
-  b[jzDonePos] = (p - (jzDonePos + 1)) & 0xFF;
-  put(0xC3);                         // ret
   if (p > 0x0140) throw new Error(`Stage 2 loader overflows into the BIOS write thunk (${p} > 0x140)`);
 
   // --------------------------------------------------------------------------
@@ -346,21 +400,45 @@ function buildStage2Loader(pmBiosWriteRetAddr) {
 
   // Compute CHS from LBA at [0x57FC]
   put(0xA1); put16(0x57FC);          // mov ax, [0x57FC]
-  put(0xB3, 18);                     // mov bl, 18
+  put(0x8A, 0x1E); put16(0x7DF0);    // mov bl, [0x7DF0] (sectors per track, saved by stage 1)
   put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect - 1
   put(0x88, 0xE1);                   // mov cl, ah
   put(0xFE, 0xC1);                   // inc cl
-  put(0x88, 0xC6);                   // mov dh, al
-  put(0x80, 0xE6, 0x01);             // and dh, 1
-  put(0xD0, 0xE8);                   // shr al, 1
+  put(0x30, 0xE4);                   // xor ah, ah
+  put(0xF6, 0x36); put16(0x7DF1);    // div byte [0x7DF1] -> al = cyl, ah = head
+  put(0x88, 0xE6);                   // mov dh, ah
   put(0x88, 0xC5);                   // mov ch, al
 
   put(0xBE); put16(3);               // mov si, 3 retries
   const wrRetry = p;
-  put(0xBB); put16(0x5800);          // mov bx, 0x5800
+  // AUDIT FIX (Kehai, 2026-11-10): on a hard-disk/USB boot with INT 13h extensions, write by
+  // LBA (AH=43h) like Stage 1 reads; BIOS-invented CHS geometry would hit the wrong sector.
   put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0x80, 0x3E); put16(0x7DF2); put(0); // cmp byte [0x7DF2], 0
+  const jeChsWr = p + 1;
+  put(0x74, 0);                      // je chs_write
+  put(0x56);                         // push si (retry counter)
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x50, 0x50, 0x50);             // push ax x3 (LBA bits 16..63)
+  put(0xFF, 0x36); put16(0x57FC);    // push word [0x57FC] (LBA bits 0..15)
+  put(0x50);                         // push ax (segment 0)
+  put(0x68); put16(0x5800);          // push 0x5800 (offset)
+  put(0x6A, 0x01);                   // push 1 (count)
+  put(0x6A, 0x10);                   // push 0x10 (packet size)
+  put(0x89, 0xE6);                   // mov si, sp
+  put(0xB8); put16(0x4300);          // mov ax, 0x4300 (extended write, no verify)
+  put(0xCD, 0x13);                   // int 13h
+  put(0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B, 0x5B); // pop bx x8 (keeps CF)
+  put(0x5E);                         // pop si
+  const jmpWrCheck = p + 1;
+  put(0xEB, 0);                      // jmp wr_check
+  b[jeChsWr] = (p - (jeChsWr + 1)) & 0xFF;
+  // chs_write:
+  put(0xBB); put16(0x5800);          // mov bx, 0x5800
   put(0xB8); put16(0x0301);          // mov ax, 0x0301 (write 1 sector)
   put(0xCD, 0x13);                   // int 13h
+  b[jmpWrCheck] = (p - (jmpWrCheck + 1)) & 0xFF;
+  // wr_check:
   const jncWrPos = p + 1;
   put(0x73, 0);                      // jnc wr_ok
   put(0x31, 0xC0);                   // xor ax, ax
@@ -377,6 +455,7 @@ function buildStage2Loader(pmBiosWriteRetAddr) {
   put(0x0F, 0x22, 0xC0);                // mov cr0, eax
   put(0x66, 0xEA); put32(pmBiosWriteRetAddr >>> 0); put16(0x0008);
 
+  if (p > 0x1F0) throw new Error(`BIOS write thunk overflows into the IDTRs (${p} > 0x1F0)`);
   // Offset 0x01F0 (phys 0x7FF0): Real-Mode IDTR (limit 0x03FF, base 0x00000000)
   dv.setUint16(0x1F0, 0x03FF, true);
   dv.setUint32(0x1F2, 0x00000000, true);
@@ -452,6 +531,15 @@ function buildProtectedModeCore() {
   x.jeLabel("no_fdc_chip");
   x.movMemImm32(R.EBX, ADDR_HAS_FDC, 1);
   x.label("no_fdc_chip");
+  // AUDIT FIX (Kehai, 2026-11-10): only save through the FDC when we booted from a floppy.
+  // Booted from a USB stick or hard disk (boot drive >= 0x80, saved by Stage 1 at 0x7DFC),
+  // a present-but-empty FDC would swallow every save; use the BIOS thunk on the boot drive.
+  x.movRegMem32(R.EAX, R.EBX, 0x7DFC);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0x80);
+  x.jlLabel("fdc_boot_ok");
+  x.movMemImm32(R.EBX, ADDR_HAS_FDC, 0);
+  x.label("fdc_boot_ok");
 
   // Reprogram 8259A Master & Slave PICs (vectors 0x20..0x27 and 0x28..0x2F, unmask IRQ0 timer)
   x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
@@ -2040,7 +2128,7 @@ function formatHexLines(bytesArr, startIdx, endIdx) {
 function buildX86Core(customBanner = "SpiralOS 1.1") {
   const pm = buildProtectedModeCore();
   const bootSector = buildBootSector(customBanner);
-  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret);
+  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr);
   const combined = new Uint8Array(32 * 512); // Sectors 0..31 (16 KB)
   combined.set(bootSector, 0);
   combined.set(stage2, 512);

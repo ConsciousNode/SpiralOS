@@ -44,6 +44,22 @@ Fixes in this commit:
 3. **`tests/qemu.js`:** the old version passed on any screendump taken 2 seconds after launch, including the halted text console. It now waits 25 seconds and requires a 640×480 framebuffer with at least 50,000 lit pixels.
 4. **`spiralos.img` and `index.html` are rebuilt.** I first confirmed that the delivered `index.html` is byte-for-byte what `tools/build_station.py` produces from the delivered sources.
 
+## Addendum: USB-stick boot, saving, and the build station (same day)
+
+Kham's first physical try with the fixed image fell through to GRUB, and the build-station page wouldn't start either machine. Three more problems turned up, all fixed here:
+
+1. **Booting from USB as a hard disk.** BIOSes usually present a USB stick as a hard disk (`DL = 0x80`) with a geometry they make up. SeaBIOS reports 2 cylinders, 16 heads and 90 sectors per track for a 1.44 MB image, and real PCs vary. The loaders assumed 18 sectors per track and 2 heads, so they read the wrong sectors and halted with `SE`. In QEMU, floppy boot worked but IDE and USB boot did not.
+   - **Fix:** Stage 1 now holds one disk reader that both stages call. On a hard-disk boot with INT 13h extensions it reads by LBA (`AH=42h`, with the address packet built on the stack). Otherwise it uses CHS with the geometry `AH=08h` reports, defaulting to 18/2.
+   - Every read stays inside a track (CHS) and a 64 KB DMA boundary, and at most 127 sectors per call.
+   - Stage 1 now uses all 384 of its bytes.
+2. **Saving to USB.** The PM core chose the FDC whenever a controller answered on `0x3F4`, even when we booted from USB. Every save went to an empty floppy drive. In QEMU, `rebuild` reported success and changed nothing on the stick.
+   - **Fix:** the FDC is now used only when the boot drive is a floppy. The BIOS write thunk writes by LBA (`AH=43h`) when extensions are in use.
+   - **Verified:** I put junk bytes in an unused part of the stick image, booted it as a QEMU USB stick and typed `rebuild`. The junk was overwritten, and the stick came out byte-identical to the clean image. That shows the rebuild reaches the fixed point on real-BIOS USB too.
+   - The in-OS assembler still matches the JS-built core byte-for-byte.
+3. **The build station didn't run at all.** A find-and-replace from "1.0" to `1.1 "Real Spiral"` put unescaped double quotes inside a JS string in `tools/build_station.py`, so the page's main script was a syntax error in every browser. Fixed; both machines now boot in the page (checked in headless Chromium).
+
+`tests/qemu.js` now boots the image three ways (floppy, IDE hard disk, USB stick via xHCI), and each must reach the 640×480 desktop.
+
 ## Packaging
 
 The zip alone does not run. It omits `themes/`, which `tools/build.js` needs, and `screenshots/`, which five suites write into. Out of the box, 11 of 13 suites crash. In this repo both directories carry over unchanged from 1.0: the four themes are byte-identical to the copies inside the delivered image. With them in place, all 13 suites pass.

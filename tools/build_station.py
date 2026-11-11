@@ -478,7 +478,7 @@ def build_station_html():
     spfs.writeFile("/www/sonder.hts", "<h1>Sonder Procedural Capsule</h1>\\n<p>Timeline 1991-B: ConsciousNode SoftWorks Aether Network.</p>\\n<a href='/index.hts'>Return to Node Index</a>\\n", 2048);
     spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 6144);
     spfs.writeFile("/art/prism.pic", createProceduralPic(1), 6144);
-    spfs.writeFile("/docs/README.txt", "SpiralOS 1.1 "Real Spiral" - ConsciousNode SoftWorks (MIT)\\nUnified VM Bytecode OS for TabComp & Hummingbird.\\n", 2048);
+    spfs.writeFile("/docs/README.txt", "SpiralOS 1.1 'Real Spiral' - ConsciousNode SoftWorks (MIT)\\nUnified VM Bytecode OS for TabComp & Hummingbird.\\n", 2048);
 
     const compiled = compileSpiralSource(spfs.readFile("/src/os.sp"), function(p) {{ return spfs.readFile(p); }});
 
