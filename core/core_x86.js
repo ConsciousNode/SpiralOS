@@ -107,7 +107,7 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   // Now: hard disks use INT 13h extensions (LBA, AH=42h) when present; everything
   // else uses CHS with the geometry INT 13h AH=08h reports (default 18/2). Reads never
   // cross a track (CHS) or a 64 KB DMA boundary. Stage 2 calls this same routine.
-  // Variables: [7DF0] sectors/track, [7DF1] heads, [7DF2] use LBA, [7DF4] CX, [7DF6] DH,
+  // Variables: [7D90] sectors/track, [7D91] heads, [7D92] use LBA, [7DF4] CX, [7DF6] DH,
   //            [7DF8] chunk count, [7DFA] retries, [7DFC] boot drive. DAP built on the stack.
   // --------------------------------------------------------------------------
   const L = {}, fx = [];
@@ -116,17 +116,17 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   const j16 = (op, n) => { put(op); put16(0); fx.push([p - 2, n, 2]); };
 
   // Geometry. Defaults (18 spt, 2 heads, CHS) are stored in this sector's own bytes
-  // 0x1F0..0x1F2, so they are already in memory at 7DF0..7DF2 when the BIOS loads us.
-  b[0x1F0] = 18; b[0x1F1] = 2; b[0x1F2] = 0;
+  // 0x190..0x192 (right after the banner), so they are already in memory at 7D90..7D92 when the BIOS loads us.
+  b[0x190] = 18; b[0x191] = 2; b[0x192] = 0;
   put(0xB4, 0x08);                           // mov ah, 08h
   put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
   put(0xCD, 0x13);                           // int 13h
   j8(0x72, 'geom_done');                     // jc geom_done
   put(0x80, 0xE1, 0x3F);                     // and cl, 3Fh
   j8(0x74, 'geom_done');                     // jz geom_done (0 sectors/track = bogus)
-  put(0x88, 0x0E); put16(0x7DF0);            // mov [7DF0], cl
+  put(0x88, 0x0E); put16(0x7D90);            // mov [7D90], cl
   put(0xFE, 0xC6);                           // inc dh
-  put(0x88, 0x36); put16(0x7DF1);            // mov [7DF1], dh
+  put(0x88, 0x36); put16(0x7D91);            // mov [7D91], dh
   lab('geom_done');
   // INT 13h extensions (hard-disk boot only)
   put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
@@ -140,7 +140,7 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   j8(0x75, 'ext_done');                      // jne ext_done
   put(0xF6, 0xC1, 0x01);                     // test cl, 1
   j8(0x74, 'ext_done');                      // jz ext_done
-  put(0xC6, 0x06); put16(0x7DF2); put(1);    // mov byte [7DF2], 1
+  put(0xC6, 0x06); put16(0x7D92); put(1);    // mov byte [7D92], 1
   lab('ext_done');
 
   // Load Stage 2 (LBA 1, 1 sector) to 0000:7E00 and jump to it
@@ -167,19 +167,19 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   put(0x3C, 0x7F);                           // cmp al, 127 (ax <= 128 here, so ah = 0)
   put(0x76, 0x02);                           // jbe +2
   put(0xB0, 0x7F);                           // mov al, 127 (some BIOSes reject >127 per call)
-  put(0x80, 0x3E); put16(0x7DF2); put(0);    // cmp byte [7DF2], 0
+  put(0x80, 0x3E); put16(0x7D92); put(0);    // cmp byte [7D92], 0
   j8(0x75, 'rr_chunk');                      // jne rr_chunk (LBA: no track limit)
   put(0x50);                                 // push ax
   put(0x89, 0xF0);                           // mov ax, si
-  put(0xF6, 0x36); put16(0x7DF0);            // div byte [7DF0] -> al = track, ah = sector-1
+  put(0xF6, 0x36); put16(0x7D90);            // div byte [7D90] -> al = track, ah = sector-1
   put(0x88, 0xE1);                           // mov cl, ah
   put(0xFE, 0xC1);                           // inc cl
   put(0x30, 0xE4);                           // xor ah, ah
-  put(0xF6, 0x36); put16(0x7DF1);            // div byte [7DF1] -> al = cyl, ah = head
+  put(0xF6, 0x36); put16(0x7D91);            // div byte [7D91] -> al = cyl, ah = head
   put(0x88, 0xC5);                           // mov ch, al
   put(0x89, 0x0E); put16(0x7DF4);            // mov [7DF4], cx
   put(0x88, 0x26); put16(0x7DF6);            // mov [7DF6], ah (head)
-  put(0x8A, 0x1E); put16(0x7DF0);            // mov bl, [7DF0]
+  put(0x8A, 0x1E); put16(0x7D90);            // mov bl, [7D90]
   put(0x28, 0xCB);                           // sub bl, cl
   put(0xFE, 0xC3);                           // inc bl
   put(0x30, 0xFF);                           // xor bh, bh   (sectors left on this track)
@@ -192,7 +192,7 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
   put(0xC6, 0x06); put16(0x7DFA); put(3);    // mov byte [7DFA], 3
   lab('rr_retry');
   put(0x8A, 0x16); put16(0x7DFC);            // mov dl, [7DFC]
-  put(0x80, 0x3E); put16(0x7DF2); put(0);    // cmp byte [7DF2], 0
+  put(0x80, 0x3E); put16(0x7D92); put(0);    // cmp byte [7D92], 0
   j8(0x74, 'rr_chs');                        // je rr_chs
   // Disk address packet built on the stack (SS = DS = 0): size 16, count, 0000:offset, LBA
   put(0x56);                                 // push si (keep LBA)
@@ -255,18 +255,10 @@ function buildBootSector(customBanner = "SpiralOS 1.1") {
     b[0x180 + i] = i < customBanner.length ? (customBanner.charCodeAt(i) & 0xFF) : 0;
   }
 
-  // Offset 0x1A0 (phys 0x7DA0): GDTR (6 bytes) + 5 GDT descriptors at 0x7DA8 (40 bytes)
-  dv.setUint16(0x1A0, 39, true);
-  dv.setUint32(0x1A2, 0x00007DA8, true);
-  // 0x08: 32-bit Code segment (base 0, limit 4GB, 0x9A, 0xCF)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00], 0x1A8 + 8);
-  // 0x10: 32-bit Data segment (base 0, limit 4GB, 0x92, 0xCF)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00], 0x1A8 + 16);
-  // 0x18: 16-bit Code segment (base 0, limit 64KB, 0x9A, 0x00)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0x00, 0x00], 0x1A8 + 24);
-  // 0x20: 16-bit Data segment (base 0, limit 64KB, 0x92, 0x00)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0x00, 0x00], 0x1A8 + 32);
-
+  // AUDIT FIX (Kehai, 2026-11-10): the GDT used to live at 0x1A0..0x1CF, on top of the MBR
+  // partition table (entry 1 status byte was 0xCF). Older BIOSes reject a USB stick whose
+  // partition status bytes aren't 0x00/0x80, so the table is now all zeros (a classic
+  // "superfloppy" with a FAT12 BPB) and the GDT lives in Stage 2 at 0x7F00.
   // Boot sector signature 0xAA55
   b[510] = 0x55;
   b[511] = 0xAA;
@@ -358,7 +350,7 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0x66, 0x26, 0x89, 0x45, 0x04);
 
   // 6. Load GDTR, CR3, CR4.PSE, CR0 (PG | PE), and far jump to 0x0008:0x00008000
-  put(0x0F, 0x01, 0x16); put16(0x7DA0); // lgdt [0x7DA0]
+  put(0x0F, 0x01, 0x16); put16(0x7F00); // lgdt [0x7F00]
   put(0x66, 0xB8); put32(0x00006000);   // mov eax, 0x6000
   put(0x0F, 0x22, 0xD8);                // mov cr3, eax
   put(0x0F, 0x20, 0xE0);                // mov eax, cr4
@@ -374,7 +366,19 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   dv.setInt16(call1Pos + 1, (readRangeAddr - 0x7E00) - (call1Pos + 3), true);
   dv.setInt16(call2Pos + 1, (readRangeAddr - 0x7E00) - (call2Pos + 3), true);
 
-  if (p > 0x0140) throw new Error(`Stage 2 loader overflows into the BIOS write thunk (${p} > 0x140)`);
+  if (p > 0x0100) throw new Error(`Stage 2 loader overflows into the GDT (${p} > 0x100)`);
+
+  // Offset 0x100 (phys 0x7F00): GDTR (6 bytes) + 5 GDT descriptors at 0x7F08 (40 bytes)
+  dv.setUint16(0x100, 39, true);
+  dv.setUint32(0x102, 0x00007F08, true);
+  // 0x08: 32-bit Code segment (base 0, limit 4GB, 0x9A, 0xCF)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00], 0x108 + 8);
+  // 0x10: 32-bit Data segment (base 0, limit 4GB, 0x92, 0xCF)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00], 0x108 + 16);
+  // 0x18: 16-bit Code segment (base 0, limit 64KB, 0x9A, 0x00)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0x00, 0x00], 0x108 + 24);
+  // 0x20: 16-bit Data segment (base 0, limit 64KB, 0x92, 0x00)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0x00, 0x00], 0x108 + 32);
 
   // --------------------------------------------------------------------------
   // Offset 0x0140 (phys 0x7F40): Real-Mode BIOS INT 13h AH=03h Write Thunk
@@ -400,12 +404,12 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
 
   // Compute CHS from LBA at [0x57FC]
   put(0xA1); put16(0x57FC);          // mov ax, [0x57FC]
-  put(0x8A, 0x1E); put16(0x7DF0);    // mov bl, [0x7DF0] (sectors per track, saved by stage 1)
+  put(0x8A, 0x1E); put16(0x7D90);    // mov bl, [0x7D90] (sectors per track, saved by stage 1)
   put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect - 1
   put(0x88, 0xE1);                   // mov cl, ah
   put(0xFE, 0xC1);                   // inc cl
   put(0x30, 0xE4);                   // xor ah, ah
-  put(0xF6, 0x36); put16(0x7DF1);    // div byte [0x7DF1] -> al = cyl, ah = head
+  put(0xF6, 0x36); put16(0x7D91);    // div byte [0x7D91] -> al = cyl, ah = head
   put(0x88, 0xE6);                   // mov dh, ah
   put(0x88, 0xC5);                   // mov ch, al
 
@@ -414,7 +418,7 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   // AUDIT FIX (Kehai, 2026-11-10): on a hard-disk/USB boot with INT 13h extensions, write by
   // LBA (AH=43h) like Stage 1 reads; BIOS-invented CHS geometry would hit the wrong sector.
   put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
-  put(0x80, 0x3E); put16(0x7DF2); put(0); // cmp byte [0x7DF2], 0
+  put(0x80, 0x3E); put16(0x7D92); put(0); // cmp byte [0x7D92], 0
   const jeChsWr = p + 1;
   put(0x74, 0);                      // je chs_write
   put(0x56);                         // push si (retry counter)
@@ -448,7 +452,7 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0x75, (wrRetry - (p + 2)) & 0xFF);
   // wr_ok: return to 32-bit Protected Mode with Paging!
   b[jncWrPos] = (p - (jncWrPos + 1)) & 0xFF;
-  put(0x0F, 0x01, 0x16); put16(0x7DA0); // lgdt [0x7DA0]
+  put(0x0F, 0x01, 0x16); put16(0x7F00); // lgdt [0x7F00]
   put(0x66, 0xB8); put32(0x00006000);   // mov eax, 0x6000
   put(0x0F, 0x22, 0xD8);                // mov cr3, eax
   put(0x66, 0xB8); put32(0x80000011);   // mov eax, 0x80000011 (PG | PE | ET)

@@ -58,6 +58,10 @@ Kham's first physical try with the fixed image fell through to GRUB, and the bui
    - The in-OS assembler still matches the JS-built core byte-for-byte.
 3. **The build station didn't run at all.** A find-and-replace from "1.0" to `1.1 "Real Spiral"` put unescaped double quotes inside a JS string in `tools/build_station.py`, so the page's main script was a syntax error in every browser. Fixed; both machines now boot in the page (checked in headless Chromium).
 
+4. **Garbage partition table.** The GDT sat at sector offset `0x1A0..0x1CF`, on top of the MBR partition table, so entry 1's status byte read `0xCF`. Older BIOSes, like the Core 2 Duo-era Toshiba Kham is testing on, can refuse to boot a USB stick whose status bytes aren't `0x00` or `0x80`.
+   - **Fix:** the GDT moved into stage 2 at `0x7F00`, and the geometry defaults moved to `0x190`. The partition table is now all zeros, the standard layout for a floppy image (FAT12 BPB plus `55AA`).
+   - **Re-verified:** all three QEMU boot modes and the USB save probe still pass.
+
 `tests/qemu.js` now boots the image three ways (floppy, IDE hard disk, USB stick via xHCI), and each must reach the 640×480 desktop.
 
 ## Packaging
