@@ -1,13 +1,18 @@
 /**
- * SpiralOS — Hummingbird i586 Native Core (Real-Mode Bootloader + 32-Bit Protected-Mode Core)
+ * SpiralOS 1.1 — Hummingbird i586 Native Core
+ * (Stage 1 Boot Sector + Stage 2 Track-Safe Loader & BIOS Thunk + 32-Bit Protected-Mode Core)
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
  * Uses core/x86_asm.js to build:
- *   1. Sector 0 (512B at 0x7C00): 16-bit BIOS Bootloader (FAT12 BPB, INT 13h loader,
- *      VBE 3.0 640x480x32 mode set, A20 enable, GDT, 4MB PSE paging, protected mode jump)
- *   2. Sectors 1..31 (at 0x8000): 32-bit x86 Protected-Mode Kernel + Hardware Drivers
- *      (PS/2 keyboard & mouse, VBE 2x LFB blitter, 8237 DMA + 82077AA FDC floppy sync,
- *      StudioNet port I/O 0x02A0..0x02AF, PIT speaker) + Spiral VM Interpreter.
+ *   1. Sector 0 (512B at 0x7C00): Stage 1 BIOS Boot Sector (FAT12 BPB, boot banner at 0x180,
+ *      3-retry INT 13h load of Stage 2 to 0x7E00, GDT with 32-bit & 16-bit descriptors)
+ *   2. Sector 1 (512B at 0x7E00): Stage 2 Real-Mode Loader (track-safe LBA-to-CHS reader
+ *      that never crosses 18-sector track boundaries, 3-retry CF error check, VBE 32/24-bpp
+ *      mode scanner, PhysBasePtr page-directory mapper, and Real-Mode INT 13h AH=03h write thunk)
+ *   3. Sectors 2..31 (at 0x8000): 32-bit x86 Protected-Mode Kernel + Hardware Drivers
+ *      (8259A PIC + 8254 PIT IRQ0 timer ISR + Preemptive VM Task Scheduler, PS/2 keyboard & mouse,
+ *      VBE 24-bpp & 32-bpp 2x LFB blitter, 82077AA FDC + BIOS INT 13h fallback sync,
+ *      StudioNet presence detection & port I/O, PIT speaker) + Spiral VM Interpreter.
  */
 
 "use strict";
@@ -42,7 +47,7 @@ const X86_FONT_8X8_HEX =
   "0000c66c386cc6000000c6c6ce76067c0000fc983064fc000e18187018180e00" +
   "18181800181818007018180e1818700076dc0000000000000010386cc6c6fe00";
 
-function buildBootSector() {
+function buildBootSector(customBanner = "SpiralOS 1.1") {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
 
@@ -64,10 +69,6 @@ function buildBootSector() {
   let p = 0x3E;
   const put = (...arr) => { for (const v of arr) b[p++] = v & 0xFF; };
   const put16 = (v) => { b[p++] = v & 0xFF; b[p++] = (v >>> 8) & 0xFF; };
-  const put32 = (v) => {
-    b[p++] = v & 0xFF; b[p++] = (v >>> 8) & 0xFF;
-    b[p++] = (v >>> 16) & 0xFF; b[p++] = (v >>> 24) & 0xFF;
-  };
 
   // 16-bit Real Mode entry at 0x7C3E
   put(0xFA);                         // cli
@@ -76,6 +77,7 @@ function buildBootSector() {
   put(0x8E, 0xC0);                   // mov es, ax
   put(0x8E, 0xD0);                   // mov ss, ax
   put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
+  put(0x88, 0x16); put16(0x7DFC);    // mov [0x7DFC], dl (save boot drive)
   put(0xFB);                         // sti
 
   // 1. Print 'S' via INT 10h AH=0Eh (triggers Milestone 1: Boot sector runs)
@@ -83,107 +85,155 @@ function buildBootSector() {
   put(0x31, 0xDB);                   // xor bx, bx
   put(0xCD, 0x10);                   // int 10h
 
-  // 2. Write "SpiralOS" on row 2 of 0xB8000 and call INT 16h AH=01h (triggers Milestone 2)
+  // 2. Write banner from 0x7D80 (offset 0x180) onto row 2 of 0xB8000 and call INT 16h AH=01h
   put(0xB8); put16(0xB800);          // mov ax, 0xB800
   put(0x8E, 0xC0);                   // mov es, ax
+  put(0xBE); put16(0x7D80);          // mov si, 0x7D80
   put(0xBF); put16(2 * 160 + 4);     // mov di, 324
-  const banner = "SpiralOS 1.0";
-  for (let i = 0; i < banner.length; i++) {
-    put(0x26, 0xC7, 0x05); put16(0x1F00 | banner.charCodeAt(i)); // mov word es:[di], char
-    put(0x83, 0xC7, 0x02);           // add di, 2
-  }
+  const bannerLoop = p;
+  put(0xAC);                         // lodsb
+  put(0x84, 0xC0);                   // test al, al
+  put(0x74, 0x06);                   // jz +6
+  put(0xB4, 0x1F);                   // mov ah, 0x1F
+  put(0xAB);                         // stosw
+  put(0xEB, (bannerLoop - (p + 2)) & 0xFF);
   put(0xB4, 0x01);                   // mov ah, 0x01
   put(0xCD, 0x16);                   // int 16h
 
-  // 3. Load Sectors 1..31 (31 sectors) to 0x0800:0x0000 (phys 0x00008000)
-  put(0xB8); put16(0x0800);          // mov ax, 0x0800
-  put(0x8E, 0xC0);                   // mov es, ax
-  put(0x31, 0xDB);                   // xor bx, bx
-  put(0xB8); put16(0x021F);          // mov ax, 0x021F (AH=02 read, AL=31 sectors)
-  put(0xB9); put16(0x0002);          // mov cx, 0x0002 (cyl 0, sect 2)
-  put(0x31, 0xD2);                   // xor dx, dx (head 0, drive 0)
-  put(0xCD, 0x13);                   // int 13h
-
-  // 4. Load Sectors 0..703 (11 chunks of 64 sectors = 352 KB) to 0x1000:0000 .. 0x67FF:000F
-  // SI = current LBA (0, 64, 128, ..., 640), DI = current ES (0x1000, 0x1800, ...)
-  put(0x31, 0xF6);                   // xor si, si
-  put(0xBF); put16(0x1000);          // mov di, 0x1000
-  const loopLabel = p;
-  put(0x8E, 0xC7);                   // mov es, di
-  put(0x89, 0xF0);                   // mov ax, si (ax = lba)
-  put(0xB3, 18);                     // mov bl, 18
-  put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect - 1
-  put(0x88, 0xE1);                   // mov cl, ah
-  put(0xFE, 0xC1);                   // inc cl (cl = sect 1..18)
-  put(0x88, 0xC6);                   // mov dh, al
-  put(0x80, 0xE6, 0x01);             // and dh, 1 (dh = head 0..1)
-  put(0xD0, 0xE8);                   // shr al, 1
-  put(0x88, 0xC5);                   // mov ch, al (ch = cyl)
-  put(0x30, 0xD2);                   // xor dl, dl (drive 0)
-  put(0x31, 0xDB);                   // xor bx, bx
-  put(0xB8); put16(0x0240);          // mov ax, 0x0240 (AH=02 read, AL=64 sectors)
-  put(0xCD, 0x13);                   // int 13h
-  put(0x81, 0xC7); put16(0x0800);    // add di, 0x0800 (+32KB segment)
-  put(0x83, 0xC6, 64);               // add si, 64
-  put(0x81, 0xFE); put16(704);       // cmp si, 704
-  put(0x7C, (loopLabel - (p + 2)) & 0xFF); // jl loopLabel
-
-  // 5a. [Kehai audit 2026-11-10] Ask the VBE BIOS where the linear framebuffer really lives:
-  //     INT 10h AX=4F01h, CX=mode -> ModeInfoBlock at 0000:5000; PhysBasePtr is at +0x28.
-  //     It used to assume 0xE0000000 (Hummingbird's address); QEMU uses 0xFD000000 and real cards vary.
+  // 3. Load Stage 2 Loader (Sector 1 = Cyl 0, Head 0, Sect 2, Count 1) to 0000:7E00 with 3 retries
   put(0x31, 0xC0);                   // xor ax, ax
   put(0x8E, 0xC0);                   // mov es, ax
-  put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
+  put(0xBE); put16(3);               // mov si, 3 (retries)
+  const retryS2 = p;
+  put(0xBB); put16(0x7E00);          // mov bx, 0x7E00
+  put(0xB8); put16(0x0201);          // mov ax, 0x0201 (read 1 sector)
+  put(0xB9); put16(0x0002);          // mov cx, 0x0002 (cyl 0, sect 2)
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0x30, 0xF6);                   // xor dh, dh (head 0)
+  put(0xCD, 0x13);                   // int 13h
+  const jncS2Pos = p + 1;
+  put(0x73, 0);                      // jnc s2_ok
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0xCD, 0x13);                   // int 13h (reset)
+  put(0x4E);                         // dec si
+  put(0x75, (retryS2 - (p + 2)) & 0xFF);
+  // Boot error fallback: print '!' and halt
+  put(0xB8); put16(0x0E21);
+  put(0xCD, 0x10);
+  put(0xFA, 0xF4);                   // cli; hlt
+  // s2_ok: jump to Stage 2 at 0000:7E00
+  b[jncS2Pos] = (p - (jncS2Pos + 1)) & 0xFF;
+  put(0xEA); put16(0x7E00); put16(0x0000);
+
+  // Offset 0x180 (phys 0x7D80): 16-byte Boot Banner String
+  for (let i = 0; i < 16; i++) {
+    b[0x180 + i] = i < customBanner.length ? (customBanner.charCodeAt(i) & 0xFF) : 0;
+  }
+
+  // Offset 0x1A0 (phys 0x7DA0): GDTR (6 bytes) + 5 GDT descriptors at 0x7DA8 (40 bytes)
+  dv.setUint16(0x1A0, 39, true);
+  dv.setUint32(0x1A2, 0x00007DA8, true);
+  // 0x08: 32-bit Code segment (base 0, limit 4GB, 0x9A, 0xCF)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00], 0x1A8 + 8);
+  // 0x10: 32-bit Data segment (base 0, limit 4GB, 0x92, 0xCF)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00], 0x1A8 + 16);
+  // 0x18: 16-bit Code segment (base 0, limit 64KB, 0x9A, 0x00)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0x00, 0x00], 0x1A8 + 24);
+  // 0x20: 16-bit Data segment (base 0, limit 64KB, 0x92, 0x00)
+  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0x00, 0x00], 0x1A8 + 32);
+
+  // Boot sector signature 0xAA55
+  b[510] = 0x55;
+  b[511] = 0xAA;
+  return b;
+}
+
+function buildStage2Loader(pmBiosWriteRetAddr) {
+  const b = new Uint8Array(512);
+  const dv = new DataView(b.buffer);
+  let p = 0;
+  const put = (...arr) => { for (const v of arr) b[p++] = v & 0xFF; };
+  const put16 = (v) => { b[p++] = v & 0xFF; b[p++] = (v >>> 8) & 0xFF; };
+  const put32 = (v) => {
+    b[p++] = v & 0xFF; b[p++] = (v >>> 8) & 0xFF;
+    b[p++] = (v >>> 16) & 0xFF; b[p++] = (v >>> 24) & 0xFF;
+  };
+
+  // Stage 2 entry at 0x7E00:
+  // 1. Load 32-bit Protected Mode Core: Sectors 2..31 (SI=2, BP=30) to ES=0x0800 (phys 0x00008000)
+  put(0xBE); put16(2);               // mov si, 2
+  put(0xBD); put16(30);              // mov bp, 30
+  put(0xBF); put16(0x0800);          // mov di, 0x0800
+  const call1Pos = p;
+  put(0xE8); put16(0);               // call rm_read_lba_range (patched below)
+
+  // 2. Load 480 KB Unified Image: Sectors 0..959 (SI=0, BP=960) to ES=0x1000 (phys 0x00010000..0x00087FFF)
+  put(0x31, 0xF6);                   // xor si, si
+  put(0xBD); put16(960);             // mov bp, 960
+  put(0xBF); put16(0x1000);          // mov di, 0x1000
+  const call2Pos = p;
+  put(0xE8); put16(0);               // call rm_read_lba_range (patched below)
+
+  // 3. Query VBE ModeInfoBlock into 0000:5000 for 0x0112; if bpp != 32, try 0x0142; if 0x0142 fails, re-query 0x0112 (24-bpp)
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8E, 0xC0);                   // mov es, ax
   put(0xB9); put16(0x0112);          // mov cx, 0x0112
   put(0xBF); put16(0x5000);          // mov di, 0x5000
+  put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
   put(0xCD, 0x10);                   // int 10h
-  //     Mode 0x112 is 32 bpp on Hummingbird and many real cards, but 24 bpp on QEMU/Bochs.
-  //     If BitsPerPixel (+0x19) isn't 32, fall back to the Bochs/QEMU 640x480x32 mode 0x142.
   put(0x80, 0x3E); put16(0x5019); put(32); // cmp byte [0x5019], 32
-  put(0x74, 8);                      // je +8 (skip the fallback query)
+  const jeMode1 = p + 1;
+  put(0x74, 0);                      // je vbe_set_mode
   put(0xB9); put16(0x0142);          // mov cx, 0x0142
   put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
-  put(0xCD, 0x10);                   // int 10h (refreshes ModeInfo at 0x5000)
-  // 5b. Set the chosen VBE mode (CX) with the linear-framebuffer bit
+  put(0xCD, 0x10);                   // int 10h
+  put(0x3D); put16(0x004F);          // cmp ax, 0x004F
+  const jeMode2 = p + 1;
+  put(0x74, 0);                      // je vbe_set_mode
+  put(0xB9); put16(0x0112);          // mov cx, 0x0112 (fallback to 24-bpp 0x0112)
+  put(0xB8); put16(0x4F01);          // mov ax, 0x4F01
+  put(0xCD, 0x10);                   // int 10h
+  // vbe_set_mode:
+  b[jeMode1] = (p - (jeMode1 + 1)) & 0xFF;
+  b[jeMode2] = (p - (jeMode2 + 1)) & 0xFF;
   put(0xB8); put16(0x4F02);          // mov ax, 0x4F02
   put(0x89, 0xCB);                   // mov bx, cx
   put(0x80, 0xCF, 0x40);             // or bh, 0x40 (LFB)
   put(0xCD, 0x10);                   // int 10h
 
-  // 6. Enable A20 line (Port 0x92)
+  // 4. Enable A20 line (Port 0x92)
   put(0xFA);                         // cli
   put(0xE4, 0x92);                   // in al, 0x92
   put(0x0C, 0x02);                   // or al, 2
   put(0xE6, 0x92);                   // out 0x92, al
 
-  // 7. Build 4MB PSE Page Directory at 0x00006000 (1024 dwords = 4096 bytes)
+  // 5. Build 4MB PSE Page Directory at 0x00006000
   put(0x31, 0xC0);                   // xor ax, ax
   put(0x8E, 0xC0);                   // mov es, ax
   put(0xBF); put16(0x6000);          // mov di, 0x6000
   put(0xB9); put16(2048);            // mov cx, 2048 words
   put(0xFC);                         // cld
   put(0xF3, 0xAB);                   // rep stosw
-  // Map first 64 MB (16 * 4MB PSE pages: entries 0..15)
+  // Map first 64 MB identity (entries 0..15)
   put(0x66, 0xB8); put32(0x00000083);// mov eax, 0x83 (Present | RW | PS)
-  put(0xBF); put16(0x6000);          // mov di, 0x6000
-  put(0xB9); put16(16);              // mov cx, 16
+  put(0xBF); put16(0x6000);
+  put(0xB9); put16(16);
   const pdeLoop = p;
-  put(0x66, 0x26, 0x89, 0x05);       // mov es:[di], eax
-  put(0x66, 0x05); put32(0x00400000);// add eax, 4MB
-  put(0x83, 0xC7, 0x04);             // add di, 4
-  put(0xE2, (pdeLoop - (p + 2)) & 0xFF); // loop pdeLoop
-  // Map VBE LFB at 0xE0000000 (entry 896 = offset 896*4 = 0x0E00 -> 0x6E00)
-  // [Kehai audit 2026-11-10] Virtual 0xE0000000 stays fixed (all drawing code is unchanged),
-  // but it now maps to the PhysBasePtr the BIOS reported (assumed 4 MB aligned, as LFB BARs are).
-  put(0xBF); put16(0x6E00);
-  put(0x66, 0xA1); put16(0x5028);    // mov eax, [0x5028] (PhysBasePtr)
-  put(0x66, 0x25); put32(0xFFC00000);// and eax, 0xFFC00000
-  put(0x0C, 0x83);                   // or al, 0x83 (Present | RW | PS)
   put(0x66, 0x26, 0x89, 0x05);
-  put(0x66, 0x05); put32(0x00400000);// add eax, 4MB (second 4 MB page)
+  put(0x66, 0x05); put32(0x00400000);
+  put(0x83, 0xC7, 0x04);
+  put(0xE2, (pdeLoop - (p + 2)) & 0xFF);
+  // Map VBE LFB PhysBasePtr ([0x5028]) at virtual 0xE0000000 (PDE 896 at 0x6E00)
+  put(0xBF); put16(0x6E00);
+  put(0x66, 0xA1); put16(0x5028);    // mov eax, [0x5028]
+  put(0x66, 0x25); put32(0xFFC00000);
+  put(0x0C, 0x83);
+  put(0x66, 0x26, 0x89, 0x05);
+  put(0x66, 0x05); put32(0x00400000);
   put(0x66, 0x26, 0x89, 0x45, 0x04);
 
-  // 8. Load GDTR, CR3, CR4.PSE, and CR0 (PE | PG)
+  // 6. Load GDTR, CR3, CR4.PSE, CR0 (PG | PE), and far jump to 0x0008:0x00008000
   put(0x0F, 0x01, 0x16); put16(0x7DA0); // lgdt [0x7DA0]
   put(0x66, 0xB8); put32(0x00006000);   // mov eax, 0x6000
   put(0x0F, 0x22, 0xD8);                // mov cr3, eax
@@ -193,27 +243,140 @@ function buildBootSector() {
   put(0x0F, 0x20, 0xC0);                // mov eax, cr0
   put(0x66, 0x0D); put32(0x80000001);   // or eax, 0x80000001 (PG | PE)
   put(0x0F, 0x22, 0xC0);                // mov cr0, eax
-
-  // 9. Far jump to 32-bit Protected Mode Core at 0x0008:0x00008000
   put(0x66, 0xEA); put32(0x00008000); put16(0x0008);
 
-  // GDT at offset 0x01A0 (phys 0x7DA0: 6-byte GDTR followed by 3 descriptors at 0x7DA8)
-  dv.setUint16(0x1A0, 23, true);
-  dv.setUint32(0x1A2, 0x00007DA8, true);
-  // 0x00: Null descriptor
-  // 0x08: 32-bit Code segment (base 0, limit 4GB, 0x9A, 0xCF)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00], 0x1A8 + 8);
-  // 0x10: 32-bit Data segment (base 0, limit 4GB, 0x92, 0xCF)
-  b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00], 0x1A8 + 16);
+  // --------------------------------------------------------------------------
+  // Subroutine: rm_read_lba_range (SI = start_lba, BP = count, DI = dst_es)
+  // Reads track-by-track (<= 18 - sect_0 sectors per INT 13h call), checks CF,
+  // retries up to 3 times with AH=00h reset, shows red error on failure.
+  // --------------------------------------------------------------------------
+  const subReadAddr = p;
+  dv.setInt16(call1Pos + 1, subReadAddr - (call1Pos + 3), true);
+  dv.setInt16(call2Pos + 1, subReadAddr - (call2Pos + 3), true);
 
-  // Boot sector signature 0xAA55
-  b[510] = 0x55;
-  b[511] = 0xAA;
+  const readLoop = p;
+  put(0x85, 0xED);                   // test bp, bp
+  put(0x74, 0x4A);                   // jz read_done (+74, patched below)
+  const jzDonePos = p - 1;
+
+  put(0x8E, 0xC7);                   // mov es, di
+  put(0x89, 0xF0);                   // mov ax, si (lba)
+  put(0xB3, 18);                     // mov bl, 18
+  put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect_0 (0..17)
+  put(0x88, 0xE1);                   // mov cl, ah
+  put(0xFE, 0xC1);                   // inc cl (cl = sect 1..18)
+  put(0x88, 0xC6);                   // mov dh, al
+  put(0x80, 0xE6, 0x01);             // and dh, 1 (head)
+  put(0xD0, 0xE8);                   // shr al, 1
+  put(0x88, 0xC5);                   // mov ch, al (cyl)
+  // Compute max sectors remaining on this track: al = 18 - ah
+  put(0xB0, 18);                     // mov al, 18
+  put(0x28, 0xE0);                   // sub al, ah
+  put(0x30, 0xE4);                   // xor ah, ah
+  put(0x39, 0xE8);                   // cmp ax, bp
+  put(0x76, 0x02);                   // jbe +2
+  put(0x89, 0xE8);                   // mov ax, bp
+  put(0xA3); put16(0x7DF8);          // mov [0x7DF8], ax (chunk count)
+
+  // Retry loop (3 attempts)
+  put(0xC6, 0x06); put16(0x7DFA); put(3); // mov byte [0x7DFA], 3
+  const retryChunk = p;
+  put(0x31, 0xDB);                   // xor bx, bx
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0xA0); put16(0x7DF8);          // mov al, [0x7DF8]
+  put(0xB4, 0x02);                   // mov ah, 0x02
+  put(0xCD, 0x13);                   // int 13h
+  const jncChunkPos = p + 1;
+  put(0x73, 0);                      // jnc chunk_ok
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0xCD, 0x13);                   // int 13h (reset)
+  put(0xFE, 0x0E); put16(0x7DFA);    // dec byte [0x7DFA]
+  put(0x75, (retryChunk - (p + 2)) & 0xFF);
+  // Fatal disk error: print 'E' and halt
+  put(0xB8); put16(0x0E45);
+  put(0xCD, 0x10);
+  put(0xFA, 0xF4);
+  // chunk_ok:
+  b[jncChunkPos] = (p - (jncChunkPos + 1)) & 0xFF;
+  put(0xA1); put16(0x7DF8);          // mov ax, [0x7DF8]
+  put(0x01, 0xC6);                   // add si, ax
+  put(0x29, 0xC5);                   // sub bp, ax
+  put(0xC1, 0xE0, 0x05);             // shl ax, 5 (count * 32 paragraphs)
+  put(0x01, 0xC7);                   // add di, ax
+  put(0xEB, (readLoop - (p + 2)) & 0xFF);
+
+  b[jzDonePos] = (p - (jzDonePos + 1)) & 0xFF;
+  put(0xC3);                         // ret
+
+  // --------------------------------------------------------------------------
+  // Offset 0x0140 (phys 0x7F40): Real-Mode BIOS INT 13h AH=03h Write Thunk
+  // Entered via jmp 0x0018:0x7F40 with CR0.PG=0, sector in 0x5800, LBA in [0x57FC]
+  // --------------------------------------------------------------------------
+  p = 0x0140;
+  put(0xB8); put16(0x0020);          // mov ax, 0x0020 (16-bit data seg)
+  put(0x8E, 0xD8);                   // mov ds, ax
+  put(0x8E, 0xC0);                   // mov es, ax
+  put(0x8E, 0xD0);                   // mov ss, ax
+  put(0x66, 0xB8); put32(0x00000010);// mov eax, 0x10 (clear PE)
+  put(0x0F, 0x22, 0xC0);             // mov cr0, eax
+  const realEntryOff = 0x7E00 + p + 5;
+  put(0xEA); put16(realEntryOff); put16(0x0000); // jmp 0x0000:realEntryOff
+
+  // Now in 16-bit Real Mode!
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8E, 0xD8);                   // mov ds, ax
+  put(0x8E, 0xC0);                   // mov es, ax
+  put(0x8E, 0xD0);                   // mov ss, ax
+  put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
+  put(0x0F, 0x01, 0x1E); put16(0x7FF0); // lidt [0x7FF0] (Real-Mode IVT)
+
+  // Compute CHS from LBA at [0x57FC]
+  put(0xA1); put16(0x57FC);          // mov ax, [0x57FC]
+  put(0xB3, 18);                     // mov bl, 18
+  put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect - 1
+  put(0x88, 0xE1);                   // mov cl, ah
+  put(0xFE, 0xC1);                   // inc cl
+  put(0x88, 0xC6);                   // mov dh, al
+  put(0x80, 0xE6, 0x01);             // and dh, 1
+  put(0xD0, 0xE8);                   // shr al, 1
+  put(0x88, 0xC5);                   // mov ch, al
+
+  put(0xBE); put16(3);               // mov si, 3 retries
+  const wrRetry = p;
+  put(0xBB); put16(0x5800);          // mov bx, 0x5800
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0xB8); put16(0x0301);          // mov ax, 0x0301 (write 1 sector)
+  put(0xCD, 0x13);                   // int 13h
+  const jncWrPos = p + 1;
+  put(0x73, 0);                      // jnc wr_ok
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8A, 0x16); put16(0x7DFC);    // mov dl, [0x7DFC]
+  put(0xCD, 0x13);                   // int 13h
+  put(0x4E);                         // dec si
+  put(0x75, (wrRetry - (p + 2)) & 0xFF);
+  // wr_ok: return to 32-bit Protected Mode with Paging!
+  b[jncWrPos] = (p - (jncWrPos + 1)) & 0xFF;
+  put(0x0F, 0x01, 0x16); put16(0x7DA0); // lgdt [0x7DA0]
+  put(0x66, 0xB8); put32(0x00006000);   // mov eax, 0x6000
+  put(0x0F, 0x22, 0xD8);                // mov cr3, eax
+  put(0x66, 0xB8); put32(0x80000011);   // mov eax, 0x80000011 (PG | PE | ET)
+  put(0x0F, 0x22, 0xC0);                // mov cr0, eax
+  put(0x66, 0xEA); put32(pmBiosWriteRetAddr >>> 0); put16(0x0008);
+
+  // Offset 0x01F0 (phys 0x7FF0): Real-Mode IDTR (limit 0x03FF, base 0x00000000)
+  dv.setUint16(0x1F0, 0x03FF, true);
+  dv.setUint32(0x1F2, 0x00000000, true);
+  // Offset 0x01F8 (phys 0x7FF8): Protected-Mode IDTR (limit 383, base 0x00006800)
+  dv.setUint16(0x1F8, 383, true);
+  dv.setUint32(0x1FA, 0x00006800, true);
+
   return b;
 }
 
 function buildProtectedModeCore() {
   const x = new X86Builder(0x00008000);
+  x.orRegImm32 = (reg, imm) => { x.u8(0x81); x.modrm(3, 1, reg); x.u32(imm); };
 
   // Scratch RAM addresses at 0x00007000:
   const ADDR_VM_FP       = 0x7000;
@@ -227,6 +390,8 @@ function buildProtectedModeCore() {
   const ADDR_MOUSE_B1    = 0x7020;
   const ADDR_KEY_MODS    = 0x7024;
   const ADDR_KEY_EVENT   = 0x7028;
+  const ADDR_HAS_SNET    = 0x7030;
+  const ADDR_HAS_FDC     = 0x7034;
 
   // ==========================================================================
   // 1. 32-Bit Protected Mode Entry (0x00008000)
@@ -234,39 +399,117 @@ function buildProtectedModeCore() {
   x.label("pm_entry");
   x.cli();
   x.cld();
-  // Load 32-bit data segment 0x10 into DS, ES, SS, FS, GS
   x.movRegImm32(R.EAX, 0x0010);
   x.u8(0x8E); x.u8(0xD8); // mov ds, ax
   x.u8(0x8E); x.u8(0xC0); // mov es, ax
   x.u8(0x8E); x.u8(0xD0); // mov ss, ax
   x.u8(0x8E); x.u8(0xE0); // mov fs, ax
   x.u8(0x8E); x.u8(0xE8); // mov gs, ax
-  x.movRegImm32(R.ESP, 0x00090000);
+  x.movRegImm32(R.ESP, 0x00098000);
 
-  // Enable PS/2 Auxiliary Mouse (0x64 <- 0xA8, 0x64 <- 0xD4, 0x60 <- 0xF4, drain 0x60)
+  // Detect PS/2 controller (port 0x64 != 0xFF) and enable auxiliary mouse
+  x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("skip_ps2_init");
   x.movRegImm32(R.EAX, 0xA8); x.outImm8Al(0x64);
   x.movRegImm32(R.EAX, 0xD4); x.outImm8Al(0x64);
   x.movRegImm32(R.EAX, 0xF4); x.outImm8Al(0x60);
   x.inAlImm8(0x60);
+  x.label("skip_ps2_init");
 
-  // Copy 352 KB disk image from 0x00010000 to 0x00400000 (vmRam[0x200000])
+  // Detect StudioNet presence (port 0x02A0 == 0x4E53 'SN')
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movMemImm32(R.EBX, ADDR_HAS_SNET, 0);
+  x.movRegImm32(R.EDX, 0x02A0);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAxDx();
+  x.cmpRegImm32(R.EAX, 0x4E53);
+  x.jneLabel("no_snet_card");
+  x.movMemImm32(R.EBX, ADDR_HAS_SNET, 1);
+  x.label("no_snet_card");
+
+  // Detect 82077AA FDC presence (port 0x03F4 != 0xFF)
+  x.movMemImm32(R.EBX, ADDR_HAS_FDC, 0);
+  x.movRegImm32(R.EDX, 0x03F4);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAlDx();
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("no_fdc_chip");
+  x.movMemImm32(R.EBX, ADDR_HAS_FDC, 1);
+  x.label("no_fdc_chip");
+
+  // Reprogram 8259A Master & Slave PICs (vectors 0x20..0x27 and 0x28..0x2F, unmask IRQ0 timer)
+  x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
+  x.movRegImm32(R.EAX, 0x20); x.outImm8Al(0x21);
+  x.movRegImm32(R.EAX, 0x28); x.outImm8Al(0xA1);
+  x.movRegImm32(R.EAX, 0x04); x.outImm8Al(0x21);
+  x.movRegImm32(R.EAX, 0x02); x.outImm8Al(0xA1);
+  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x21); x.outImm8Al(0xA1);
+  x.movRegImm32(R.EAX, 0xFE); x.outImm8Al(0x21); // unmask IRQ0 (timer)
+  x.movRegImm32(R.EAX, 0xFF); x.outImm8Al(0xA1);
+
+  // Reprogram 8254 PIT Channel 0 for 100 Hz (divisor 11931 = 0x2E9B)
+  x.movRegImm32(R.EAX, 0x36); x.outImm8Al(0x43);
+  x.movRegImm32(R.EAX, 0x9B); x.outImm8Al(0x40);
+  x.movRegImm32(R.EAX, 0x2E); x.outImm8Al(0x40);
+
+  // Build 48-entry Protected-Mode IDT at 0x00006800 (vectors 0x00..0x2F)
+  x.movRegLabel32(R.EAX, "isr_default");
+  x.movRegReg32(R.EBX, R.EAX);
+  x.andRegImm32(R.EAX, 0xFFFF);
+  x.orRegImm32(R.EAX, 0x00080000); // selector 0x0008 << 16 | offset_lo
+  x.andRegImm32(R.EBX, 0xFFFF0000);
+  x.orRegImm32(R.EBX, 0x00008E00); // 32-bit interrupt gate DPL=0, P=1
+  x.movRegImm32(R.EDI, 0x00006800);
+  x.movRegImm32(R.ECX, 48);
+  x.label("idt_fill_loop");
+  x.movMemReg32(R.EDI, 0, R.EAX);
+  x.movMemReg32(R.EDI, 4, R.EBX);
+  x.addRegImm32(R.EDI, 8);
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("idt_fill_loop");
+
+  // Install IRQ0 Timer ISR at vector 0x20 (0x00006800 + 0x20*8 = 0x00006900)
+  x.movRegLabel32(R.EAX, "isr_irq0_timer");
+  x.movRegReg32(R.EBX, R.EAX);
+  x.andRegImm32(R.EAX, 0xFFFF);
+  x.orRegImm32(R.EAX, 0x00080000);
+  x.andRegImm32(R.EBX, 0xFFFF0000);
+  x.orRegImm32(R.EBX, 0x00008E00);
+  x.movRegImm32(R.EDI, 0x00006900);
+  x.movMemReg32(R.EDI, 0, R.EAX);
+  x.movMemReg32(R.EDI, 4, R.EBX);
+
+  // Load Protected-Mode IDTR from [0x7FF8]
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
+
+  // Copy 480 KB disk image from 0x00010000 to 0x00400000 (vmRam[0x200000])
   x.movRegImm32(R.ESI, 0x00010000);
   x.movRegImm32(R.EDI, 0x00400000);
-  x.movRegImm32(R.ECX, (352 * 1024) >>> 2);
+  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
   x.repMovsd();
 
   // Entry point for warm VM reboot (when vmRam[0x200000] already holds updated image)
   x.label("vm_warm_boot");
+  x.cli();
   // Clear vmRam[0x000000..0x1FFFFF] (0x00200000..0x003FFFFF)
   x.xorRegReg32(R.EAX, R.EAX);
   x.movRegImm32(R.EDI, 0x00200000);
   x.movRegImm32(R.ECX, (2 * 1024 * 1024) >>> 2);
   x.repStosd();
 
-  // Copy 64 KB bootable SPIR bytecode from 0x00408000 (Sectors 64..191) to 0x00200000 (vmRam[0])
+  // Copy 128 KB bootable SPIR bytecode from 0x00408000 (Sectors 64..319) to 0x00200000 (vmRam[0])
   x.movRegImm32(R.ESI, 0x00408000);
   x.movRegImm32(R.EDI, 0x00200000);
-  x.movRegImm32(R.ECX, (64 * 1024) >>> 2);
+  x.movRegImm32(R.ECX, (128 * 1024) >>> 2);
+  x.repMovsd();
+
+  // Copy 16-byte boot banner from mounted Sector 0 offset 0x180 (0x00400180) to vmRam[0x0FFD80] (0x002FFD80)
+  x.movRegImm32(R.ESI, 0x00400180);
+  x.movRegImm32(R.EDI, 0x002FFD80);
+  x.movRegImm32(R.ECX, 4);
   x.repMovsd();
 
   // Copy embedded 768B font to 0x002EF000 and 768B palette to 0x002FFA00
@@ -296,10 +539,12 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.EBP, 0x00200000);
   x.movRegImm32(R.EDI, 0x00100000);
 
-  // Write Machine ID = 2 (Hummingbird) at vmRam[0x0FFD1C] and initial mouse pos
+  // Write Machine ID = 2 (Hummingbird) at vmRam[0x0FFD1C], StudioNet flag at vmRam[0x0FFD30], and mouse pos
   x.movMemImm32(R.EBP, 0x0FFD1C, 2);
   x.movMemImm32(R.EBP, 0x0FFD08, 160);
   x.movMemImm32(R.EBP, 0x0FFD0C, 100);
+  x.movRegMem32(R.EAX, R.EBX, ADDR_HAS_SNET);
+  x.movMemReg32(R.EBP, 0x0FFD30, R.EAX);
 
   // Write sentinel return frame at vmRam[0x170000]: [-1, 0x00100000]
   x.movMemImm32(R.EBP, 0x170000, -1);
@@ -310,18 +555,95 @@ function buildProtectedModeCore() {
   x.cmpRegImm32(R.EAX, 0x52495053);
   x.jeLabel("has_spir_hdr");
   x.xorRegReg32(R.ESI, R.ESI); // ESI = VM_PC = 0
-  x.jmpLabel("vm_loop");
+  x.jmpLabel("init_scheduler");
   x.label("has_spir_hdr");
   x.movRegMem32(R.ESI, R.EBP, 8); // ESI = entry_pc
 
+  // Initialize Preemptive Task Table at 0x002FFE00..0x002FFF1F
+  x.label("init_scheduler");
+  x.movMemImm32(R.EBP, 0x0FFE00, 1);          // TCB[0].state = 1 (ACTIVE)
+  x.movMemReg32(R.EBP, 0x0FFE04, R.ESI);      // TCB[0].vm_pc
+  x.movMemReg32(R.EBP, 0x0FFE08, R.EDI);      // TCB[0].vm_sp
+  x.movMemImm32(R.EBP, 0x0FFE0C, 0x00100000); // TCB[0].vm_fp
+  x.movMemImm32(R.EBP, 0x0FFE10, 0x00170008); // TCB[0].vm_csp
+  x.movMemImm32(R.EBP, 0x0FFF00, 0);          // cur_tid = 0
+  x.movMemImm32(R.EBP, 0x0FFF04, 1);          // num_active_tids = 1
+  x.movMemImm32(R.EBP, 0x0FFF14, 256);        // quantum_countdown = 256
+  x.u8(0xFB);                                 // sti (enable hardware IRQ0 timer interrupts!)
+
   // ==========================================================================
-  // 2. Main Spiral VM Fetch-Decode-Execute Loop
+  // 2. Main Spiral VM Fetch-Decode-Execute Loop (with IRQ0 / Quantum Preemption)
   //    EBP = VM_BASE (0x00200000), ESI = VM_PC, EDI = VM_SP
   // ==========================================================================
   x.label("vm_loop");
   x.cmpRegImm32(R.ESI, 0);
-  x.jlLabel("vm_halt_from_ret");
+  x.jlLabel("vm_task_exit_or_halt");
 
+  // Check hardware IRQ0 preempt_flag ([EBP + 0x0FFF0C]) or quantum_countdown ([EBP + 0x0FFF14])
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF14);
+  x.subRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBP, 0x0FFF14, R.EAX);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jleLabel("vm_do_preempt_check");
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF0C);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("vm_no_preempt");
+
+  x.label("vm_do_preempt_check");
+  x.movMemImm32(R.EBP, 0x0FFF0C, 0);   // clear preempt_flag
+  x.movMemImm32(R.EBP, 0x0FFF14, 256); // reset quantum_countdown
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF04); // num_active_tids
+  x.cmpRegImm32(R.EAX, 1);
+  x.jleLabel("vm_no_preempt");
+
+  // Save current task (cur_tid) registers into TCB[cur_tid] at EBP + 0x0FFE00 + cur_tid * 32
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFF00); // ECX = cur_tid
+  x.movRegReg32(R.EBX, R.ECX);
+  x.shlRegImm(R.EBX, 5);
+  x.addRegReg32(R.EBX, R.EBP);
+  x.addRegImm32(R.EBX, 0x0FFE00);        // EBX = &TCB[cur_tid]
+  x.movMemReg32(R.EBX, 4, R.ESI);        // vm_pc
+  x.movMemReg32(R.EBX, 8, R.EDI);        // vm_sp
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_VM_FP);
+  x.movMemReg32(R.EBX, 12, R.EAX);       // vm_fp
+  x.movRegMem32(R.EAX, R.EDX, ADDR_VM_CSP);
+  x.movMemReg32(R.EBX, 16, R.EAX);       // vm_csp
+
+  // Round-robin scan for next runnable task (ECX = cur_tid)
+  x.label("sched_pick_next");
+  x.movRegImm32(R.EDX, 8);
+  x.label("sched_scan_loop");
+  x.addRegImm32(R.ECX, 1);
+  x.andRegImm32(R.ECX, 7);
+  x.movRegReg32(R.EBX, R.ECX);
+  x.shlRegImm(R.EBX, 5);
+  x.addRegReg32(R.EBX, R.EBP);
+  x.addRegImm32(R.EBX, 0x0FFE00);
+  x.movRegMem32(R.EAX, R.EBX, 0);        // TCB.state
+  x.cmpRegImm32(R.EAX, 1);
+  x.jeLabel("sched_found");
+  x.subRegImm32(R.EDX, 1);
+  x.jneLabel("sched_scan_loop");
+  x.jmpLabel("vm_no_preempt");
+
+  x.label("sched_found");
+  x.movMemReg32(R.EBP, 0x0FFF00, R.ECX); // cur_tid = cand
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF10);
+  x.addRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBP, 0x0FFF10, R.EAX); // context_switches++
+  x.movRegMem32(R.EAX, R.EBX, 20);
+  x.addRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBX, 20, R.EAX);       // TCB.ticks++
+  x.movRegMem32(R.ESI, R.EBX, 4);        // load VM_PC
+  x.movRegMem32(R.EDI, R.EBX, 8);        // load VM_SP
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EBX, 12);
+  x.movMemReg32(R.EDX, ADDR_VM_FP, R.EAX);
+  x.movRegMem32(R.EAX, R.EBX, 16);
+  x.movMemReg32(R.EDX, ADDR_VM_CSP, R.EAX);
+
+  x.label("vm_no_preempt");
   // EBX = inst = i32[EBP + ESI]; ESI += 4; [ADDR_VM_ICNT]++
   x.movRegSib32(R.EBX, R.EBP, R.ESI, 0, 0);
   x.addRegImm32(R.ESI, 4);
@@ -341,20 +663,37 @@ function buildProtectedModeCore() {
   x.jmpReg32(R.EAX);
 
   // --------------------------------------------------------------------------
+  // Hardware Interrupt Service Routines (Protected Mode IDT)
+  // --------------------------------------------------------------------------
+  x.label("isr_default");
+  x.u8(0xCF); // iretd
+
+  x.label("isr_irq0_timer");
+  x.pushReg32(R.EAX);
+  x.pushReg32(R.EDX);
+  x.movRegImm32(R.EDX, 0x002FFF00);
+  x.movRegMem32(R.EAX, R.EDX, 8);  // irq0_ticks
+  x.addRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EDX, 8, R.EAX);
+  x.movMemImm32(R.EDX, 12, 1);     // preempt_flag = 1
+  x.movRegImm32(R.EAX, 0x20);
+  x.outImm8Al(0x20);               // Master PIC EOI
+  x.popReg32(R.EDX);
+  x.popReg32(R.EAX);
+  x.u8(0xCF);                      // iretd
+
+  // --------------------------------------------------------------------------
   // Opcode Handlers (0x00 .. 0x27)
   // --------------------------------------------------------------------------
 
-  // 0x00: NOP
   x.label("op_00_nop");
   x.jmpLabel("vm_loop");
 
-  // 0x01: HALT
   x.label("op_01_halt");
   x.subRegImm32(R.EDI, 4);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.jmpLabel("vm_halt_with_eax");
 
-  // 0x02: PUSH_I16
   x.label("op_02_push_i16");
   x.movRegReg32(R.EAX, R.EBX);
   x.shlRegImm(R.EAX, 16);
@@ -363,7 +702,6 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x03: PUSH_U16
   x.label("op_03_push_u16");
   x.movRegReg32(R.EAX, R.EBX);
   x.andRegImm32(R.EAX, 0xFFFF);
@@ -371,7 +709,6 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x04: PUSH_HI
   x.label("op_04_push_hi");
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
   x.andRegImm32(R.EAX, 0xFFFF);
@@ -381,19 +718,16 @@ function buildProtectedModeCore() {
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x05: DUP
   x.label("op_05_dup");
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
   x.movSibReg32(R.EBP, R.EDI, 0, 0, R.EAX);
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x06: DROP
   x.label("op_06_drop");
   x.subRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x07: SWAP
   x.label("op_07_swap");
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
   x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, -8);
@@ -401,7 +735,6 @@ function buildProtectedModeCore() {
   x.movSibReg32(R.EBP, R.EDI, 0, -8, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x08: GET_LOCAL
   x.label("op_08_get_local");
   x.movRegReg32(R.ECX, R.EBX);
   x.andRegImm32(R.ECX, 0xFFFF);
@@ -414,7 +747,6 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x09: SET_LOCAL
   x.label("op_09_set_local");
   x.subRegImm32(R.EDI, 4);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
@@ -427,22 +759,22 @@ function buildProtectedModeCore() {
   x.movSibReg32(R.EBP, R.ECX, 0, 0, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x0A: GET_GLOBAL
+  // 0x0A: GET_GLOBAL (at 0x020000)
   x.label("op_0a_get_global");
   x.movRegReg32(R.ECX, R.EBX);
   x.andRegImm32(R.ECX, 0xFFFF);
-  x.movRegSib32(R.EAX, R.EBP, R.ECX, 2, 0x010000);
+  x.movRegSib32(R.EAX, R.EBP, R.ECX, 2, 0x020000);
   x.movSibReg32(R.EBP, R.EDI, 0, 0, R.EAX);
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x0B: SET_GLOBAL
+  // 0x0B: SET_GLOBAL (at 0x020000)
   x.label("op_0b_set_global");
   x.subRegImm32(R.EDI, 4);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.movRegReg32(R.ECX, R.EBX);
   x.andRegImm32(R.ECX, 0xFFFF);
-  x.movSibReg32(R.EBP, R.ECX, 2, 0x010000, R.EAX);
+  x.movSibReg32(R.EBP, R.ECX, 2, 0x020000, R.EAX);
   x.jmpLabel("vm_loop");
 
   // 0x0C: ADDR_LOCAL
@@ -457,17 +789,16 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // 0x0D: ADDR_GLOBAL
+  // 0x0D: ADDR_GLOBAL (at 0x020000)
   x.label("op_0d_addr_global");
   x.movRegReg32(R.EAX, R.EBX);
   x.andRegImm32(R.EAX, 0xFFFF);
   x.shlRegImm(R.EAX, 2);
-  x.addRegImm32(R.EAX, 0x010000);
+  x.addRegImm32(R.EAX, 0x020000);
   x.movSibReg32(R.EBP, R.EDI, 0, 0, R.EAX);
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
-  // Helper for address calculation in LOAD*: ECX = (tos + sign_ext(imm16)) & 0x3FFFFF
   function calcLoadAddr() {
     x.movRegReg32(R.ECX, R.EBX);
     x.shlRegImm(R.ECX, 16);
@@ -477,65 +808,56 @@ function buildProtectedModeCore() {
     x.andRegImm32(R.ECX, 0x003FFFFF);
   }
 
-  // 0x0E: LOAD8U
   x.label("op_0e_load8u");
   calcLoadAddr();
   x.movzxRegSib8(R.EAX, R.EBP, R.ECX, 0, 0);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x0F: LOAD8S
   x.label("op_0f_load8s");
   calcLoadAddr();
   x.movsxRegSib8(R.EAX, R.EBP, R.ECX, 0, 0);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x10: LOAD16U
   x.label("op_10_load16u");
   calcLoadAddr();
   x.movzxRegSib16(R.EAX, R.EBP, R.ECX, 0, 0);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x11: LOAD32
   x.label("op_11_load32");
   calcLoadAddr();
   x.movRegSib32(R.EAX, R.EBP, R.ECX, 0, 0);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // Helper for STORE*: EDI -= 8, EDX = (addr + sign_ext(imm16)) & 0x3FFFFF, EAX = val
   function calcStoreAddrVal() {
     x.subRegImm32(R.EDI, 8);
     x.movRegReg32(R.EDX, R.EBX);
     x.shlRegImm(R.EDX, 16);
     x.sarRegImm(R.EDX, 16);
-    x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0); // addr
-    x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4); // val
+    x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
+    x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
     x.addRegReg32(R.EDX, R.ECX);
     x.andRegImm32(R.EDX, 0x003FFFFF);
   }
 
-  // 0x12: STORE8
   x.label("op_12_store8");
   calcStoreAddrVal();
   x.movSibReg8(R.EBP, R.EDX, 0, 0, R.AL);
   x.jmpLabel("vm_loop");
 
-  // 0x13: STORE16
   x.label("op_13_store16");
   calcStoreAddrVal();
   x.movSibReg16(R.EBP, R.EDX, 0, 0, R.AX);
   x.jmpLabel("vm_loop");
 
-  // 0x14: STORE32
   x.label("op_14_store32");
   calcStoreAddrVal();
   x.movSibReg32(R.EBP, R.EDX, 0, 0, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // Binary ALU pops: EDI -= 4, EAX = a ([EDI-4]), ECX = b ([EDI])
   function popBinArgs() {
     x.subRegImm32(R.EDI, 4);
     x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
@@ -604,7 +926,6 @@ function buildProtectedModeCore() {
   popBinArgs(); x.andRegImm32(R.ECX, 31); x.sarRegCl(R.EAX);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX); x.jmpLabel("vm_loop");
 
-  // 0x20: CMP (subop 0..7)
   x.label("op_20_cmp");
   popBinArgs();
   x.movRegReg32(R.EDX, R.EBX);
@@ -612,7 +933,7 @@ function buildProtectedModeCore() {
   x.movRegLabel32(R.EBX, "cmp_table");
   x.movRegSib32(R.EDX, R.EBX, R.EDX, 2, 0);
   x.cmpRegReg32(R.EAX, R.ECX);
-  x.movRegImm32(R.EAX, 0); // mov eax, 0 preserves EFLAGS!
+  x.movRegImm32(R.EAX, 0);
   x.jmpReg32(R.EDX);
 
   x.label("cmp_0_eq");  x.setccAl(0x94); x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX); x.jmpLabel("vm_loop");
@@ -624,13 +945,11 @@ function buildProtectedModeCore() {
   x.label("cmp_6_ult"); x.setccAl(0x92); x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX); x.jmpLabel("vm_loop");
   x.label("cmp_7_ugt"); x.setccAl(0x97); x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX); x.jmpLabel("vm_loop");
 
-  // 0x21: JMP addr24
   x.label("op_21_jmp");
   x.movRegReg32(R.ESI, R.EBX);
   x.andRegImm32(R.ESI, 0x00FFFFFF);
   x.jmpLabel("vm_loop");
 
-  // 0x22: JZ addr24
   x.label("op_22_jz");
   x.subRegImm32(R.EDI, 4);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
@@ -640,7 +959,6 @@ function buildProtectedModeCore() {
   x.andRegImm32(R.ESI, 0x00FFFFFF);
   x.jmpLabel("vm_loop");
 
-  // 0x23: JNZ addr24
   x.label("op_23_jnz");
   x.subRegImm32(R.EDI, 4);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
@@ -650,7 +968,6 @@ function buildProtectedModeCore() {
   x.andRegImm32(R.ESI, 0x00FFFFFF);
   x.jmpLabel("vm_loop");
 
-  // 0x24: CALL addr24
   x.label("op_24_call");
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegMem32(R.ECX, R.EDX, ADDR_VM_CSP);
@@ -663,35 +980,33 @@ function buildProtectedModeCore() {
   x.andRegImm32(R.ESI, 0x00FFFFFF);
   x.jmpLabel("vm_loop");
 
-  // 0x25: ENTER [nargs:8][total_locals:16]
   x.label("op_25_enter");
   x.movRegReg32(R.EAX, R.EBX);
   x.shrRegImm(R.EAX, 16);
   x.andRegImm32(R.EAX, 0xFF);
   x.shlRegImm(R.EAX, 2);
   x.movRegReg32(R.ECX, R.EDI);
-  x.subRegReg32(R.ECX, R.EAX); // ECX = new VM_FP = VM_SP - nargs*4
+  x.subRegReg32(R.ECX, R.EAX);
   x.xorRegReg32(R.EDX, R.EDX);
   x.movMemReg32(R.EDX, ADDR_VM_FP, R.ECX);
   x.movRegReg32(R.EAX, R.EBX);
   x.andRegImm32(R.EAX, 0xFFFF);
   x.shlRegImm(R.EAX, 2);
   x.movRegReg32(R.EDI, R.ECX);
-  x.addRegReg32(R.EDI, R.EAX); // EDI = VM_SP = VM_FP + total_locals*4
+  x.addRegReg32(R.EDI, R.EAX);
   x.jmpLabel("vm_loop");
 
-  // 0x26: RET
   x.label("op_26_ret");
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4); // EAX = ret_val
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
   x.xorRegReg32(R.EDX, R.EDX);
-  x.movRegMem32(R.EDI, R.EDX, ADDR_VM_FP);   // VM_SP = VM_FP
-  x.movSibReg32(R.EBP, R.EDI, 0, 0, R.EAX);  // push(ret_val)
+  x.movRegMem32(R.EDI, R.EDX, ADDR_VM_FP);
+  x.movSibReg32(R.EBP, R.EDI, 0, 0, R.EAX);
   x.addRegImm32(R.EDI, 4);
   x.movRegMem32(R.ECX, R.EDX, ADDR_VM_CSP);
   x.subRegImm32(R.ECX, 8);
   x.movMemReg32(R.EDX, ADDR_VM_CSP, R.ECX);
-  x.movRegSib32(R.ESI, R.EBP, R.ECX, 0, 0);  // VM_PC = [VM_CSP + 0]
-  x.movRegSib32(R.EAX, R.EBP, R.ECX, 0, 4);  // VM_FP = [VM_CSP + 4]
+  x.movRegSib32(R.ESI, R.EBP, R.ECX, 0, 0);
+  x.movRegSib32(R.EAX, R.EBP, R.ECX, 0, 4);
   x.movMemReg32(R.EDX, ADDR_VM_FP, R.EAX);
   x.jmpLabel("vm_loop");
 
@@ -703,17 +1018,15 @@ function buildProtectedModeCore() {
   x.shrRegImm(R.EAX, 16);
   x.andRegImm32(R.EAX, 0xFF);
   x.shlRegImm(R.EAX, 2);
-  x.subRegReg32(R.EDI, R.EAX); // EDI = VM_SP -= nargs*4
+  x.subRegReg32(R.EDI, R.EAX);
 
-  // Sync VM_ICNT to vmRam[0x0FFD20]
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegMem32(R.EAX, R.EDX, ADDR_VM_ICNT);
   x.movMemReg32(R.EBP, 0x0FFD20, R.EAX);
 
-  // Extract sysnum = EBX & 0xFFFF
   x.andRegImm32(R.EBX, 0xFFFF);
 
-  for (let s = 0; s <= 20; s++) {
+  for (let s = 0; s <= 21; s++) {
     x.cmpRegImm32(R.EBX, s);
     x.jeLabel("sys_" + String(s).padStart(2, "0"));
   }
@@ -733,32 +1046,35 @@ function buildProtectedModeCore() {
   x.pushReg32(R.EDX);
 
   x.label("ps2_poll_next");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_KEY_EVENT);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("ps2_poll_done");
   x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("ps2_poll_done");
   x.movRegReg32(R.ECX, R.EAX);
-  x.andRegImm32(R.EAX, 0x01); // Output buffer full?
+  x.andRegImm32(R.EAX, 0x01);
   x.jeLabel("ps2_poll_done");
 
   x.inAlImm8(0x60);
   x.andRegImm32(R.EAX, 0xFF);
-  x.andRegImm32(R.ECX, 0x20); // Bit 5 = Mouse byte?
+  x.andRegImm32(R.ECX, 0x20);
   x.jneLabel("ps2_is_mouse");
 
-  // Keyboard Set 1 scancode in EAX
   x.cmpRegImm32(R.EAX, 0xE0);
   x.jeLabel("ps2_poll_next");
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegReg32(R.EBX, R.EAX);
-  x.andRegImm32(R.EBX, 0x7F); // code = scancode & 0x7F
-  // Check Shift make/break (0x2A Left Shift, 0x36 Right Shift)
+  x.andRegImm32(R.EBX, 0x7F);
   x.cmpRegImm32(R.EBX, 0x2A);
   x.jeLabel("ps2_shift_key");
   x.cmpRegImm32(R.EBX, 0x36);
   x.jeLabel("ps2_shift_key");
 
-  // Normal key make/break
   x.movRegReg32(R.ECX, R.EAX);
-  x.andRegImm32(R.ECX, 0x80); // break bit
-  // Map Set 1 scancode to ASCII + Virtual Keycode via lookup table
+  x.andRegImm32(R.ECX, 0x80);
   x.movRegMem32(R.EDX, R.EDX, ADDR_KEY_MODS);
   x.cmpRegImm32(R.EDX, 0);
   x.jneLabel("ps2_use_shift_tbl");
@@ -767,18 +1083,13 @@ function buildProtectedModeCore() {
   x.label("ps2_use_shift_tbl");
   x.movRegLabel32(R.EDX, "scancode_shift_tbl");
   x.label("ps2_lookup_done");
-  x.movzxRegSib16(R.EBX, R.EDX, R.EBX, 1, 0); // (vk << 8) | ascii
+  x.movzxRegSib16(R.EBX, R.EDX, R.EBX, 1, 0);
   x.cmpRegImm32(R.ECX, 0);
-  x.jneLabel("ps2_key_up");
-  x.orRegImm32 = (reg, imm) => { x.u8(0x81); x.modrm(3, 1, reg); x.u32(imm); };
-  x.orRegImm32(R.EBX, 0x01010000); // bit 24 = valid, bit 16 = pressed(1)
-  x.jmpLabel("ps2_store_key");
-  x.label("ps2_key_up");
-  x.orRegImm32(R.EBX, 0x01000000); // bit 24 = valid, bit 16 = pressed(0)
-  x.label("ps2_store_key");
+  x.jneLabel("ps2_poll_next");
+  x.orRegImm32(R.EBX, 0x01010000);
   x.xorRegReg32(R.EDX, R.EDX);
   x.movMemReg32(R.EDX, ADDR_KEY_EVENT, R.EBX);
-  x.jmpLabel("ps2_poll_next");
+  x.jmpLabel("ps2_poll_done");
 
   x.label("ps2_shift_key");
   x.xorRegReg32(R.EDX, R.EDX);
@@ -790,7 +1101,6 @@ function buildProtectedModeCore() {
   x.movMemImm32(R.EDX, ADDR_KEY_MODS, 0);
   x.jmpLabel("ps2_poll_next");
 
-  // Mouse packet state machine (3 bytes: b0, dx, dy)
   x.label("ps2_is_mouse");
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegMem32(R.EBX, R.EDX, ADDR_MOUSE_STAGE);
@@ -799,10 +1109,9 @@ function buildProtectedModeCore() {
   x.cmpRegImm32(R.EBX, 1);
   x.jeLabel("ms_stage1");
 
-  // Stage 2: EAX = dy byte (PS/2 dy is positive UP -> subtract from MOUSE_Y!)
   x.movMemImm32(R.EDX, ADDR_MOUSE_STAGE, 0);
   x.shlRegImm(R.EAX, 24);
-  x.sarRegImm(R.EAX, 24); // sign-extend dy
+  x.sarRegImm(R.EAX, 24);
   x.movRegMem32(R.ECX, R.EDX, ADDR_MOUSE_Y);
   x.subRegReg32(R.ECX, R.EAX);
   x.cmpRegImm32(R.ECX, 0); x.jgeLabel("ms_y_min_ok"); x.xorRegReg32(R.ECX, R.ECX);
@@ -812,7 +1121,6 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.EDX, ADDR_MOUSE_Y, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD0C, R.ECX);
 
-  // Process dx from ADDR_MOUSE_B1
   x.movRegMem32(R.EAX, R.EDX, ADDR_MOUSE_B1);
   x.shlRegImm(R.EAX, 24);
   x.sarRegImm(R.EAX, 24);
@@ -825,7 +1133,6 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.EDX, ADDR_MOUSE_X, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD08, R.ECX);
 
-  // Process buttons from ADDR_MOUSE_B0
   x.movRegMem32(R.EAX, R.EDX, ADDR_MOUSE_B0);
   x.andRegImm32(R.EAX, 0x07);
   x.movMemReg32(R.EDX, ADDR_MOUSE_BTN, R.EAX);
@@ -849,7 +1156,7 @@ function buildProtectedModeCore() {
   x.ret();
 
   // --------------------------------------------------------------------------
-  // Syscall Implementations (0 .. 20)
+  // Syscall Implementations (0 .. 21)
   // --------------------------------------------------------------------------
 
   // SYS 0: EXIT(code)
@@ -857,18 +1164,17 @@ function buildProtectedModeCore() {
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.jmpLabel("vm_halt_with_eax");
 
-  // SYS 1: YIELD() -> 2x scale 320x200x8 vmRam[0x0F0000] + palette vmRam[0x0FFA00] into 640x480x32 VBE LFB at 0xE0000000
+  // SYS 1: YIELD() -> 2x scale 320x200x8 vmRam[0x0F0000] into 640x480x32 or 640x480x24 VBE LFB at 0xE0000000
   x.label("sys_01");
   x.callLabel("sub_poll_ps2");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
 
-  // Increment frame counter at vmRam[0x0FFD04]
   x.movRegMem32(R.EAX, R.EBP, 0x0FFD04);
   x.addRegImm32(R.EAX, 1);
   x.movMemReg32(R.EBP, 0x0FFD04, R.EAX);
 
-  // Build 256-entry 32-bit BGRX lookup table at 0x00007400 from vmRam[0x0FFA00]
+  // Build 256-entry 32-bit 0x00RRGGBB lookup table at 0x00007400 from vmRam[0x0FFA00]
   x.movRegImm32(R.ESI, 0x002FFA00);
   x.movRegImm32(R.EDI, 0x00007400);
   x.movRegImm32(R.ECX, 256);
@@ -886,17 +1192,22 @@ function buildProtectedModeCore() {
   x.subRegImm32(R.ECX, 1);
   x.jneLabel("pal_lut_loop");
 
-  // Scale 320x200 (0x002F0000) 2x into 640x400 centered at y=40 in 640x480x32 LFB (0xE0000000 + 40*2560 = 0xE0019000)
+  // Check VBE BitsPerPixel at 0x00005019 (24 vs 32)
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movzxRegMem8(R.EAX, R.EBX, 0x5019);
+  x.cmpRegImm32(R.EAX, 24);
+  x.jeLabel("blit_24bpp");
+
+  // 32-bpp Blitter (pitch = 2560, y=40 offset = 0xE0019000)
   x.movRegImm32(R.ESI, 0x002F0000);
   x.movRegImm32(R.EDI, 0xE0019000);
-  x.movRegImm32(R.EDX, 200); // 200 source scanlines
+  x.movRegImm32(R.EDX, 200);
   x.label("blit_y_loop");
-  x.movRegImm32(R.ECX, 320); // 320 source pixels per line
+  x.movRegImm32(R.ECX, 320);
   x.label("blit_x_loop");
   x.movzxRegMem8(R.EAX, R.ESI, 0);
   x.xorRegReg32(R.EBX, R.EBX);
-  x.movRegSib32(R.EAX, R.EBX, R.EAX, 2, 0x7400); // 32-bit RGB pixel
-  // Write 2x2 block: [EDI], [EDI+4], [EDI+2560], [EDI+2564]
+  x.movRegSib32(R.EAX, R.EBX, R.EAX, 2, 0x7400);
   x.movMemReg32(R.EDI, 0, R.EAX);
   x.movMemReg32(R.EDI, 4, R.EAX);
   x.movMemReg32(R.EDI, 2560, R.EAX);
@@ -905,19 +1216,62 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EDI, 8);
   x.subRegImm32(R.ECX, 1);
   x.jneLabel("blit_x_loop");
-  x.addRegImm32(R.EDI, 2560); // skip second doubled scanline
+  x.addRegImm32(R.EDI, 2560);
   x.subRegImm32(R.EDX, 1);
   x.jneLabel("blit_y_loop");
+  x.jmpLabel("blit_done");
 
+  // 24-bpp Blitter (pitch = 1920, y=40 offset = 0xE0000000 + 40*1920 = 0xE0012C00)
+  x.label("blit_24bpp");
+  x.movRegImm32(R.ESI, 0x002F0000);
+  x.movRegImm32(R.EDI, 0xE0012C00);
+  x.movRegImm32(R.EDX, 200);
+  x.label("blit24_y_loop");
+  x.movRegImm32(R.ECX, 320);
+  x.label("blit24_x_loop");
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegSib32(R.EAX, R.EBX, R.EAX, 2, 0x7400); // AL=B, AH=G, EAX>>16=R
+  x.movMemReg8(R.EDI, 0, R.AL);
+  x.movMemReg8(R.EDI, 3, R.AL);
+  x.movMemReg8(R.EDI, 1920, R.AL);
+  x.movMemReg8(R.EDI, 1923, R.AL);
+  x.movMemReg8(R.EDI, 1, R.AH);
+  x.movMemReg8(R.EDI, 4, R.AH);
+  x.movMemReg8(R.EDI, 1921, R.AH);
+  x.movMemReg8(R.EDI, 1924, R.AH);
+  x.shrRegImm(R.EAX, 16);
+  x.movMemReg8(R.EDI, 2, R.AL);
+  x.movMemReg8(R.EDI, 5, R.AL);
+  x.movMemReg8(R.EDI, 1922, R.AL);
+  x.movMemReg8(R.EDI, 1925, R.AL);
+  x.addRegImm32(R.ESI, 1);
+  x.addRegImm32(R.EDI, 6);
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("blit24_x_loop");
+  x.addRegImm32(R.EDI, 1920);
+  x.subRegImm32(R.EDX, 1);
+  x.jneLabel("blit24_y_loop");
+
+  x.label("blit_done");
+  // Trigger preemptive check after frame yield
+  x.movMemImm32(R.EBP, 0x0FFF0C, 1);
   x.popReg32(R.EDI);
   x.popReg32(R.ESI);
   x.xorRegReg32(R.EAX, R.EAX);
   x.jmpLabel("sys_push_eax");
 
-  // SYS 2: TIME_MS() -> derive from VM_ICNT / 50 + frame counter * 16
+  // SYS 2: TIME_MS() -> derive from irq0_ticks * 10 + frame counter * 16 + VM_ICNT / 512
   x.label("sys_02");
   x.movRegMem32(R.EAX, R.EBP, 0x0FFD04);
-  x.shlRegImm(R.EAX, 4); // frames * 16 ms
+  x.shlRegImm(R.EAX, 4);
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFF08); // irq0_ticks
+  x.shlRegImm(R.ECX, 3);
+  x.addRegReg32(R.EAX, R.ECX);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.ECX, R.EDX, ADDR_VM_ICNT);
+  x.shrRegImm(R.ECX, 9);
+  x.addRegReg32(R.EAX, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD24, R.EAX);
   x.jmpLabel("sys_push_eax");
 
@@ -932,7 +1286,7 @@ function buildProtectedModeCore() {
   // SYS 4: MOUSE_POLL(out_ptr)
   x.label("sys_04");
   x.callLabel("sub_poll_ps2");
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0); // out_ptr
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegMem32(R.EAX, R.EDX, ADDR_MOUSE_X);
   x.movRegMem32(R.EBX, R.EDX, ADDR_MOUSE_Y);
@@ -956,26 +1310,22 @@ function buildProtectedModeCore() {
   x.label("sys_05");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);  // x
-  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);  // y
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);  // w
-  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12); // h
-  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16); // color
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16);
 
-  // Clip x < 0
   x.cmpRegImm32(R.EAX, 0); x.jgeLabel("fr5_x_ok");
   x.addRegReg32(R.ECX, R.EAX); x.xorRegReg32(R.EAX, R.EAX);
   x.label("fr5_x_ok");
-  // Clip y < 0
   x.cmpRegImm32(R.EBX, 0); x.jgeLabel("fr5_y_ok");
   x.addRegReg32(R.EDX, R.EBX); x.xorRegReg32(R.EBX, R.EBX);
   x.label("fr5_y_ok");
-  // Clip x + w > 320
   x.movRegReg32(R.EDI, R.EAX); x.addRegReg32(R.EDI, R.ECX);
   x.cmpRegImm32(R.EDI, 320); x.jleLabel("fr5_w_ok");
   x.movRegImm32(R.ECX, 320); x.subRegReg32(R.ECX, R.EAX);
   x.label("fr5_w_ok");
-  // Clip y + h > 200
   x.movRegReg32(R.EDI, R.EBX); x.addRegReg32(R.EDI, R.EDX);
   x.cmpRegImm32(R.EDI, 200); x.jleLabel("fr5_h_ok");
   x.movRegImm32(R.EDX, 200); x.subRegReg32(R.EDX, R.EBX);
@@ -984,13 +1334,12 @@ function buildProtectedModeCore() {
   x.cmpRegImm32(R.ECX, 0); x.jleLabel("fr5_done");
   x.cmpRegImm32(R.EDX, 0); x.jleLabel("fr5_done");
 
-  // EDI = 0x002F0000 + y * 320 + x
   x.movRegImm32(R.EDI, 320);
   x.imulRegReg32(R.EBX, R.EDI);
   x.addRegReg32(R.EBX, R.EAX);
   x.addRegImm32(R.EBX, 0x002F0000);
-  x.movRegReg32(R.EAX, R.ESI); // AL = color
-  x.movRegReg32(R.ESI, R.ECX); // ESI = w
+  x.movRegReg32(R.EAX, R.ESI);
+  x.movRegReg32(R.ESI, R.ECX);
 
   x.label("fr5_row");
   x.movRegReg32(R.EDI, R.EBX);
@@ -1007,7 +1356,6 @@ function buildProtectedModeCore() {
   x.jmpLabel("sys_push_eax");
 
   // Internal subroutine: draw single 8x8 glyph
-  // Input: EAX=x, EBX=y, ECX=ch, EDX=fg, ESI=bg
   x.label("sub_draw_char");
   x.subRegImm32(R.ECX, 32);
   x.cmpRegImm32(R.ECX, 0); x.jlLabel("dc6_ret");
@@ -1019,32 +1367,30 @@ function buildProtectedModeCore() {
 
   x.pushReg32(R.EDI);
   x.pushReg32(R.EBP);
-  // ECX = 0x002EF000 + (ch - 32) * 8
   x.shlRegImm(R.ECX, 3);
   x.addRegImm32(R.ECX, 0x002EF000);
-  // EDI = 0x002F0000 + y * 320 + x
   x.movRegImm32(R.EDI, 320);
   x.imulRegReg32(R.EBX, R.EDI);
   x.addRegReg32(R.EBX, R.EAX);
   x.addRegImm32(R.EBX, 0x002F0000);
   x.movRegReg32(R.EDI, R.EBX);
 
-  x.movRegImm32(R.EBP, 8); // 8 rows
+  x.movRegImm32(R.EBP, 8);
   x.label("dc6_row");
-  x.movzxRegMem8(R.EBX, R.ECX, 0); // glyph row byte
+  x.movzxRegMem8(R.EBX, R.ECX, 0);
   x.addRegImm32(R.ECX, 1);
-  x.movRegImm32(R.EAX, 128); // bit mask
+  x.movRegImm32(R.EAX, 128);
   x.label("dc6_bit");
   x.pushReg32(R.EAX);
   x.andRegReg32(R.EAX, R.EBX);
   x.jeLabel("dc6_off");
-  x.movMemReg8(R.EDI, 0, R.DL); // fg
+  x.movMemReg8(R.EDI, 0, R.DL);
   x.jmpLabel("dc6_next");
   x.label("dc6_off");
   x.cmpRegImm32(R.ESI, 0);
   x.jlLabel("dc6_next");
   x.movRegReg32(R.EAX, R.ESI);
-  x.movMemReg8(R.EDI, 0, R.AL); // bg
+  x.movMemReg8(R.EDI, 0, R.AL);
   x.label("dc6_next");
   x.popReg32(R.EAX);
   x.addRegImm32(R.EDI, 1);
@@ -1076,13 +1422,13 @@ function buildProtectedModeCore() {
   x.label("sys_07");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);  // x
-  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);  // y
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);  // str_ptr
-  x.addRegReg32(R.ECX, R.EBP);               // phys str_ptr
-  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12); // fg
-  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16); // bg
-  x.movRegReg32(R.EDI, R.ECX);               // EDI = phys str_ptr
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
+  x.addRegReg32(R.ECX, R.EBP);
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16);
+  x.movRegReg32(R.EDI, R.ECX);
 
   x.label("ds7_loop");
   x.movzxRegMem8(R.ECX, R.EDI, 0);
@@ -1113,9 +1459,9 @@ function buildProtectedModeCore() {
   x.label("sys_08");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0); // dst
-  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 4); // src
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8); // len
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
   x.movRegReg32(R.EDI, R.EAX);
   x.addRegReg32(R.EDI, R.EBP);
   x.addRegReg32(R.ESI, R.EBP);
@@ -1131,9 +1477,9 @@ function buildProtectedModeCore() {
   // SYS 9: MEMSET(dst, val, len)
   x.label("sys_09");
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 0); // dst
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4); // val
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8); // len
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
   x.movRegReg32(R.EDI, R.EBX);
   x.addRegReg32(R.EDI, R.EBP);
   x.cmpRegImm32(R.ECX, 0);
@@ -1145,19 +1491,25 @@ function buildProtectedModeCore() {
   x.jmpLabel("sys_push_eax");
 
   // SYS 10: DISK_SYNC(start_sector, sector_count)
-  // Writes sectors from vmRam[0x200000 + lba*512] (phys 0x00400000) to floppy via 8237 DMA + 82077AA FDC!
+  // Uses 8237 DMA + 82077AA FDC when ADDR_HAS_FDC == 1, or falls back to
+  // 16-bit Real-Mode BIOS INT 13h AH=03h thunk at 0x7F40 when ADDR_HAS_FDC == 0!
   x.label("sys_10");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
   x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 0); // EBX = current LBA
   x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 4); // EDX = remaining sectors
 
+  // Check if FDC is present
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movRegMem32(R.EAX, R.ECX, ADDR_HAS_FDC);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("bios_sync_loop");
+
   x.label("fdc_sync_loop");
   x.cmpRegImm32(R.EDX, 0);
   x.jleLabel("fdc_sync_done");
   x.pushReg32(R.EDX);
 
-  // Copy 1 sector (512 bytes) from 0x00400000 + EBX*512 to DMA bounce buffer at 0x00010000
   x.movRegReg32(R.ESI, R.EBX);
   x.shlRegImm(R.ESI, 9);
   x.addRegImm32(R.ESI, 0x00400000);
@@ -1165,48 +1517,43 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.ECX, 128);
   x.repMovsd();
 
-  // Program 8237A DMA Channel 2 for 512 bytes at phys 0x00010000 (page=0x01, addr=0x0000, count=511)
-  x.movRegImm32(R.EAX, 0x06); x.outImm8Al(0x0A); // mask ch2
-  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x0C); // reset flip-flop
-  x.movRegImm32(R.EAX, 0x4A); x.outImm8Al(0x0B); // mode: read from memory, ch2
-  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x04); // addr low
-  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x04); // addr high
-  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x81); // page = 0x01 (0x010000)
-  x.movRegImm32(R.EAX, 0xFF); x.outImm8Al(0x05); // count low (511 = 0x01FF)
-  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x05); // count high
-  x.movRegImm32(R.EAX, 0x02); x.outImm8Al(0x0A); // unmask ch2
+  x.movRegImm32(R.EAX, 0x06); x.outImm8Al(0x0A);
+  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x0C);
+  x.movRegImm32(R.EAX, 0x4A); x.outImm8Al(0x0B);
+  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x04);
+  x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x04);
+  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x81);
+  x.movRegImm32(R.EAX, 0xFF); x.outImm8Al(0x05);
+  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x05);
+  x.movRegImm32(R.EAX, 0x02); x.outImm8Al(0x0A);
 
-  // Compute C, H, R from LBA in EBX:
-  // track = LBA / 18, R = (LBA % 18) + 1, H = track & 1, C = track >> 1
   x.movRegReg32(R.EAX, R.EBX);
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegImm32(R.ECX, 18);
-  x.divReg32(R.ECX); // EAX = track, EDX = R - 1
+  x.divReg32(R.ECX);
   x.addRegImm32(R.EDX, 1);
   x.movRegReg32(R.ECX, R.EAX);
-  x.andRegImm32(R.ECX, 1); // ECX = H
-  x.shrRegImm(R.EAX, 1);   // EAX = C
-  x.movRegReg32(R.ESI, R.EAX); // ESI = C
-  x.movRegReg32(R.EDI, R.EDX); // EDI = R
+  x.andRegImm32(R.ECX, 1);
+  x.shrRegImm(R.EAX, 1);
+  x.movRegReg32(R.ESI, R.EAX);
+  x.movRegReg32(R.EDI, R.EDX);
 
-  // Send 9-byte FDC WRITE DATA command to port 0x03F5
   const fdcOut = (regOrImm, isReg = false) => {
     x.movRegImm32(R.EDX, 0x03F5);
     if (!isReg) x.movRegImm32(R.EAX, regOrImm);
     else if (regOrImm !== R.EAX) x.movRegReg32(R.EAX, regOrImm);
     x.outDxAl();
   };
-  fdcOut(0xC5); // WRITE DATA
-  x.movRegReg32(R.EAX, R.ECX); x.shlRegImm(R.EAX, 2); fdcOut(R.EAX, true); // HD<<2 | drv0
-  fdcOut(R.ESI, true); // C
-  fdcOut(R.ECX, true); // H
-  fdcOut(R.EDI, true); // R
-  fdcOut(0x02);        // N = 2 (512B)
-  fdcOut(18);          // EOT = 18
-  fdcOut(0x1B);        // GPL
-  fdcOut(0xFF);        // DTL
+  fdcOut(0xC5);
+  x.movRegReg32(R.EAX, R.ECX); x.shlRegImm(R.EAX, 2); fdcOut(R.EAX, true);
+  fdcOut(R.ESI, true);
+  fdcOut(R.ECX, true);
+  fdcOut(R.EDI, true);
+  fdcOut(0x02);
+  fdcOut(18);
+  fdcOut(0x1B);
+  fdcOut(0xFF);
 
-  // Drain 7 result bytes from 0x03F5
   x.movRegImm32(R.ECX, 7);
   x.movRegImm32(R.EDX, 0x03F5);
   x.label("fdc_res_loop");
@@ -1218,6 +1565,46 @@ function buildProtectedModeCore() {
   x.addRegImm32(R.EBX, 1);
   x.subRegImm32(R.EDX, 1);
   x.jmpLabel("fdc_sync_loop");
+
+  // BIOS INT 13h AH=03h Real-Mode Thunk Loop (when no FDC is present)
+  x.label("bios_sync_loop");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jleLabel("fdc_sync_done");
+  // Copy 1 sector (512B) from 0x00400000 + EBX*512 to bounce buffer 0x00005800
+  x.movRegReg32(R.ESI, R.EBX);
+  x.shlRegImm(R.ESI, 9);
+  x.addRegImm32(R.ESI, 0x00400000);
+  x.movRegImm32(R.EDI, 0x00005800);
+  x.movRegImm32(R.ECX, 128);
+  x.repMovsd();
+  // Save LBA at [0x57FC], remaining EDX at [0x57F8], ESP at [0x57F4]
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movMemReg32(R.ECX, 0x57FC, R.EBX);
+  x.movMemReg32(R.ECX, 0x57F8, R.EDX);
+  x.movMemReg32(R.ECX, 0x57F4, R.ESP);
+  // Disable interrupts, clear CR0.PG, far jump to 0x0018:0x7F40
+  x.cli();
+  x.movRegImm32(R.EAX, 0x00000011); // PE=1, PG=0
+  x.u8(0x0F); x.u8(0x22); x.u8(0xC0); // mov cr0, eax
+  x.u8(0xEA); x.u32(0x00007F40); x.u16(0x0018); // jmp 0x0018:0x00007F40
+
+  x.label("pm_bios_write_ret");
+  x.movRegImm32(R.EAX, 0x0010);
+  x.u8(0x8E); x.u8(0xD8);
+  x.u8(0x8E); x.u8(0xC0);
+  x.u8(0x8E); x.u8(0xD0);
+  x.u8(0x8E); x.u8(0xE0);
+  x.u8(0x8E); x.u8(0xE8);
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movRegMem32(R.ESP, R.ECX, 0x57F4);
+  x.movRegMem32(R.EDX, R.ECX, 0x57F8);
+  x.movRegMem32(R.EBX, R.ECX, 0x57FC);
+  x.movRegImm32(R.EBP, 0x00200000);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
+  x.u8(0xFB); // sti
+  x.addRegImm32(R.EBX, 1);
+  x.subRegImm32(R.EDX, 1);
+  x.jmpLabel("bios_sync_loop");
 
   x.label("fdc_sync_done");
   x.popReg32(R.EDI);
@@ -1231,17 +1618,20 @@ function buildProtectedModeCore() {
   x.outImm8Al(0x64);
   x.jmpLabel("vm_warm_boot");
 
-  // SYS 12: NET_SEND(buf_ptr, len) -> StudioNet ports 0x02A0..0x02AF
+  // SYS 12: NET_SEND(buf_ptr, len) -> StudioNet ports 0x02A0..0x02AF (if present)
   x.label("sys_12");
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0); // buf_ptr
-  x.addRegReg32(R.EAX, R.EBP);              // phys addr
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SNET);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("net_rx_empty");
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.addRegReg32(R.EAX, R.EBP);
   x.movRegImm32(R.EDX, 0x02A8);
-  x.outDxEax();                             // SNET_DMA_ADDR = phys addr
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4); // len
+  x.outDxEax();
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
   x.movRegImm32(R.EDX, 0x02A6);
-  x.outDxAx();                              // SNET_LEN = len
-  x.movRegImm32(R.ECX, R.EAX);
-  x.movRegImm32(R.EAX, 0x01);               // CMD_TX_SEND
+  x.outDxAx();
+  x.movRegImm32(R.EAX, 0x01);
   x.movRegImm32(R.EDX, 0x02A2);
   x.outDxAl();
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
@@ -1249,20 +1639,24 @@ function buildProtectedModeCore() {
 
   // SYS 13: NET_RECV(buf_ptr, max_len)
   x.label("sys_13");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SNET);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("net_rx_empty");
   x.movRegImm32(R.EDX, 0x02A2);
   x.inAlDx();
-  x.andRegImm32(R.EAX, 0x01);               // RX_READY?
+  x.andRegImm32(R.EAX, 0x01);
   x.jeLabel("net_rx_empty");
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0); // buf_ptr
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.addRegReg32(R.EAX, R.EBP);
   x.movRegImm32(R.EDX, 0x02A8);
-  x.outDxEax();                             // SNET_DMA_ADDR
-  x.movRegImm32(R.EAX, 0x02);               // CMD_RX_POP
+  x.outDxEax();
+  x.movRegImm32(R.EAX, 0x02);
   x.movRegImm32(R.EDX, 0x02A2);
   x.outDxAl();
   x.movRegImm32(R.EDX, 0x02A6);
   x.xorRegReg32(R.EAX, R.EAX);
-  x.inAxDx();                               // popped frame length
+  x.inAxDx();
   x.jmpLabel("sys_push_eax");
   x.label("net_rx_empty");
   x.xorRegReg32(R.EAX, R.EAX);
@@ -1270,7 +1664,11 @@ function buildProtectedModeCore() {
 
   // SYS 14: NET_INFO(cmd, val)
   x.label("sys_14");
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0); // cmd
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SNET);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("net_rx_empty");
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
   x.cmpRegImm32(R.ECX, 0); x.jeLabel("ni_get_id");
   x.cmpRegImm32(R.ECX, 1); x.jeLabel("ni_set_id");
   x.cmpRegImm32(R.ECX, 2); x.jeLabel("ni_get_tx");
@@ -1285,12 +1683,12 @@ function buildProtectedModeCore() {
 
   // SYS 15: SOUND_TONE(freq_hz, duration_ms, wave) -> PIT Ch2 + Port 0x61 PC Speaker
   x.label("sys_15");
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0); // freq_hz
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
   x.cmpRegImm32(R.ECX, 20);
   x.jlLabel("snd_mute");
   x.movRegImm32(R.EAX, 1193182);
   x.xorRegReg32(R.EDX, R.EDX);
-  x.divReg32(R.ECX); // EAX = reload
+  x.divReg32(R.ECX);
   x.movRegReg32(R.ECX, R.EAX);
   x.movRegImm32(R.EAX, 0xB6); x.outImm8Al(0x43);
   x.movRegReg32(R.EAX, R.ECX); x.outImm8Al(0x42);
@@ -1307,32 +1705,34 @@ function buildProtectedModeCore() {
   x.xorRegReg32(R.EAX, R.EAX);
   x.jmpLabel("sys_push_eax");
 
-  // SYS 16: MACHINE_INFO(query) -> 0: machineId(2), 1: vmRamSize(4MB), 2: icnt, 3: nodeId(0x0201)
+  // SYS 16: MACHINE_INFO(query) -> 0: machineId(2), 1: vmRamSize(4MB), 2: icnt, 3: nodeId(0x0201), 4: hasSnet
   x.label("sys_16");
   x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
   x.cmpRegImm32(R.ECX, 0); x.jeLabel("mi16_0");
   x.cmpRegImm32(R.ECX, 1); x.jeLabel("mi16_1");
   x.cmpRegImm32(R.ECX, 2); x.jeLabel("mi16_2");
+  x.cmpRegImm32(R.ECX, 4); x.jeLabel("mi16_4");
   x.movRegImm32(R.EAX, 0x0201); x.jmpLabel("sys_push_eax");
   x.label("mi16_0"); x.movRegImm32(R.EAX, 2); x.jmpLabel("sys_push_eax");
   x.label("mi16_1"); x.movRegImm32(R.EAX, 0x00400000); x.jmpLabel("sys_push_eax");
   x.label("mi16_2"); x.xorRegReg32(R.EDX, R.EDX); x.movRegMem32(R.EAX, R.EDX, ADDR_VM_ICNT); x.jmpLabel("sys_push_eax");
+  x.label("mi16_4"); x.xorRegReg32(R.EDX, R.EDX); x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SNET); x.jmpLabel("sys_push_eax");
 
   // SYS 17: BLIT_RECT(x, y, w, h, src_ptr)
   x.label("sys_17");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);  // x
-  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);  // y
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);  // w
-  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12); // h
-  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16); // src_ptr
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 12);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 16);
   x.addRegReg32(R.ESI, R.EBP);
   x.movRegImm32(R.EDI, 320);
   x.imulRegReg32(R.EBX, R.EDI);
   x.addRegReg32(R.EBX, R.EAX);
   x.addRegImm32(R.EBX, 0x002F0000);
-  x.movRegReg32(R.EAX, R.ECX); // EAX = w
+  x.movRegReg32(R.EAX, R.ECX);
   x.cmpRegImm32(R.EAX, 0); x.jleLabel("br17_done");
   x.cmpRegImm32(R.EDX, 0); x.jleLabel("br17_done");
   x.label("br17_row");
@@ -1384,10 +1784,10 @@ function buildProtectedModeCore() {
   x.label("sys_20");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0); // val
-  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4); // buf_ptr
-  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8); // base
-  x.addRegReg32(R.EBX, R.EBP);              // phys buf_ptr
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
+  x.addRegReg32(R.EBX, R.EBP);
   x.cmpRegImm32(R.EAX, 0);
   x.jneLabel("itoa20_nz");
   x.movRegImm32(R.EDX, 48); x.movMemReg8(R.EBX, 0, R.DL);
@@ -1396,7 +1796,7 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.EAX, 1); x.jmpLabel("sys_push_eax");
 
   x.label("itoa20_nz");
-  x.xorRegReg32(R.ESI, R.ESI); // neg flag
+  x.xorRegReg32(R.ESI, R.ESI);
   x.cmpRegImm32(R.ECX, 10);
   x.jneLabel("itoa20_pos");
   x.cmpRegImm32(R.EAX, 0);
@@ -1404,12 +1804,12 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.ESI, 1);
   x.negReg32(R.EAX);
   x.label("itoa20_pos");
-  x.movRegImm32(R.EDI, 0); // count in temp buffer at 0x00007300
+  x.movRegImm32(R.EDI, 0);
   x.label("itoa20_div");
   x.cmpRegImm32(R.EAX, 0);
   x.jeLabel("itoa20_div_done");
   x.xorRegReg32(R.EDX, R.EDX);
-  x.divReg32(R.ECX); // EAX = quot, EDX = rem
+  x.divReg32(R.ECX);
   x.cmpRegImm32(R.EDX, 10);
   x.jlLabel("itoa20_dec");
   x.addRegImm32(R.EDX, 55);
@@ -1422,7 +1822,7 @@ function buildProtectedModeCore() {
   x.jmpLabel("itoa20_div");
 
   x.label("itoa20_div_done");
-  x.movRegReg32(R.EAX, R.EDI); // total len
+  x.movRegReg32(R.EAX, R.EDI);
   x.cmpRegImm32(R.ESI, 0);
   x.jeLabel("itoa20_rev");
   x.movRegImm32(R.EDX, 45);
@@ -1446,12 +1846,86 @@ function buildProtectedModeCore() {
   x.popReg32(R.ESI);
   x.jmpLabel("sys_push_eax");
 
+  // SYS 21: TASK_SPAWN_VM(fn_pc, arg0) -> tid (1..7) or -1
+  x.label("sys_21");
+  x.pushReg32(R.ESI);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 0); // ESI = fn_pc
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 4); // EDX = arg0
+  x.movRegImm32(R.ECX, 1);                  // ECX = candidate tid = 1..7
+  x.label("ts21_find");
+  x.movRegReg32(R.EBX, R.ECX);
+  x.shlRegImm(R.EBX, 5);
+  x.addRegReg32(R.EBX, R.EBP);
+  x.addRegImm32(R.EBX, 0x0FFE00);           // EBX = &TCB[tid]
+  x.movRegMem32(R.EAX, R.EBX, 0);           // state
+  x.cmpRegImm32(R.EAX, 1);
+  x.jneLabel("ts21_found");
+  x.addRegImm32(R.ECX, 1);
+  x.cmpRegImm32(R.ECX, 8);
+  x.jlLabel("ts21_find");
+  x.popReg32(R.ESI);
+  x.movRegImm32(R.EAX, -1);
+  x.jmpLabel("sys_push_eax");
+
+  x.label("ts21_found");
+  // EAX = sp_base = 0x140000 + tid * 0x6000
+  x.movRegReg32(R.EAX, R.ECX);
+  x.movRegImm32(R.EBX, 0x006000);
+  x.imulRegReg32(R.EAX, R.EBX);
+  x.addRegImm32(R.EAX, 0x00140000);
+  // Push arg0 at vmRam[sp_base]
+  x.movSibReg32(R.EBP, R.EAX, 0, 0, R.EDX);
+  // EDX = csp_base = 0x178000 + tid * 0x2000
+  x.movRegReg32(R.EDX, R.ECX);
+  x.shlRegImm(R.EDX, 13);
+  x.addRegImm32(R.EDX, 0x00178000);
+  x.movRegImm32(R.EBX, -1);
+  x.movSibReg32(R.EBP, R.EDX, 0, 0, R.EBX); // sentinel PC = -1
+  x.movSibReg32(R.EBP, R.EDX, 0, 4, R.EAX); // sentinel FP = sp_base
+
+  // Populate TCB[tid]
+  x.movRegReg32(R.EBX, R.ECX);
+  x.shlRegImm(R.EBX, 5);
+  x.addRegReg32(R.EBX, R.EBP);
+  x.addRegImm32(R.EBX, 0x0FFE00);
+  x.movMemImm32(R.EBX, 0, 1);               // state = 1 (ACTIVE)
+  x.movMemReg32(R.EBX, 4, R.ESI);           // vm_pc = fn_pc
+  x.movMemReg32(R.EBX, 12, R.EAX);          // vm_fp = sp_base
+  x.addRegImm32(R.EAX, 4);
+  x.movMemReg32(R.EBX, 8, R.EAX);           // vm_sp = sp_base + 4
+  x.addRegImm32(R.EDX, 8);
+  x.movMemReg32(R.EBX, 16, R.EDX);          // vm_csp = csp_base + 8
+  x.movMemImm32(R.EBX, 20, 0);              // ticks = 0
+  x.movMemReg32(R.EBX, 24, R.ESI);          // entry_pc
+  x.movMemImm32(R.EBX, 28, 0);              // exit_val = 0
+
+  // Increment num_active_tids at [EBP + 0x0FFF04]
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF04);
+  x.addRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBP, 0x0FFF04, R.EAX);
+  x.movRegReg32(R.EAX, R.ECX);              // return tid
+  x.popReg32(R.ESI);
+  x.jmpLabel("sys_push_eax");
+
   // ==========================================================================
-  // 4. VM Halt & Jump Tables
+  // 4. VM Task Exit / Halt & Jump Tables
   // ==========================================================================
-  x.label("vm_halt_from_ret");
-  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
-  x.jmpLabel("vm_halt_with_eax");
+  x.label("vm_task_exit_or_halt");
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4); // EAX = return value
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFF00);     // ECX = cur_tid
+  x.cmpRegImm32(R.ECX, 0);
+  x.jeLabel("vm_halt_with_eax");
+  // Background task finished: mark TCB as HALTED (2), decrement num_active_tids, and switch!
+  x.movRegReg32(R.EBX, R.ECX);
+  x.shlRegImm(R.EBX, 5);
+  x.addRegReg32(R.EBX, R.EBP);
+  x.addRegImm32(R.EBX, 0x0FFE00);
+  x.movMemImm32(R.EBX, 0, 2);                // state = 2 (HALTED)
+  x.movMemReg32(R.EBX, 28, R.EAX);           // exit_val
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFF04);
+  x.subRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBP, 0x0FFF04, R.EAX);
+  x.jmpLabel("sched_pick_next");
 
   x.label("vm_halt_bad_op");
   x.movRegImm32(R.EAX, -99);
@@ -1459,9 +1933,9 @@ function buildProtectedModeCore() {
   x.label("vm_halt_with_eax");
   x.xorRegReg32(R.EDX, R.EDX);
   x.movRegMem32(R.ECX, R.EDX, ADDR_VM_ICNT);
-  x.movMemReg32(R.EBP, 0x0FFD20, R.ECX); // store VM_ICNT at vmRam[0x0FFD20]
-  x.movMemReg32(R.EBP, 0x0FFD28, R.EAX); // store exitCode at vmRam[0x0FFD28]
-  x.movMemImm32(R.EBP, 0x0FFD2C, 1);     // store halted=1 at vmRam[0x0FFD2C]
+  x.movMemReg32(R.EBP, 0x0FFD20, R.ECX);
+  x.movMemReg32(R.EBP, 0x0FFD28, R.EAX);
+  x.movMemImm32(R.EBP, 0x0FFD2C, 1);
   x.label("halt_spin");
   x.hlt();
   x.jmpLabel("halt_spin");
@@ -1488,13 +1962,11 @@ function buildProtectedModeCore() {
   x.label("cmp_table");
   x.labelTable32(cmpLabels);
 
-  // Embedded 8x8 Font (768 bytes)
   x.label("embedded_font");
   for (let i = 0; i < 768; i++) {
     x.u8(parseInt(X86_FONT_8X8_HEX.substr(i * 2, 2), 16));
   }
 
-  // Embedded 256-color Palette (768 bytes, identical to TabComp default)
   x.label("embedded_palette");
   const ega16 = [
     [0,0,0],       [0,18,110],    [0,150,40],    [0,160,160],
@@ -1509,58 +1981,88 @@ function buildProtectedModeCore() {
     x.u8((i * 37) & 255); x.u8((i * 73) & 255); x.u8((i * 139) & 255);
   }
 
-  // PS/2 Set 1 Scancode -> (vk << 8) | ascii tables (128 * 2 bytes each)
   const plainMap = new Uint16Array(128);
   const shiftMap = new Uint16Array(128);
-  const rowsPlain = [
-    [0x02, "`1234567890-=", 0x29],
-    [0x10, "qwertyuiop[]", 0],
-    [0x1E, "asdfghjkl;'", 0],
-    [0x2C, "zxcvbnm,./", 0]
-  ];
   const plainChars = "1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;'`\0\\zxcvbnm,./";
   const shiftChars = "!@#$%^&*()_+\b\tQWERTYUIOP{}\r\0ASDFGHJKL:\"~\0|ZXCVBNM<>?";
   for (let i = 0; i < plainChars.length; i++) {
     const sc = i + 2;
     const cp = plainChars.charCodeAt(i);
     const cs = shiftChars.charCodeAt(i);
-    if (cp) plainMap[sc] = (cp.toString ? cp : 0) | ((cp >= 97 && cp <= 122 ? cp - 32 : cp) << 8);
-    if (cs) shiftMap[sc] = (cs.toString ? cs : 0) | ((cp >= 97 && cp <= 122 ? cp - 32 : cp) << 8);
+    if (cp) plainMap[sc] = cp | ((cp >= 97 && cp <= 122 ? cp - 32 : cp) << 8);
+    if (cs) shiftMap[sc] = cs | ((cp >= 97 && cp <= 122 ? cp - 32 : cp) << 8);
   }
-  plainMap[0x01] = (27 << 8) | 27; shiftMap[0x01] = (27 << 8) | 27; // Esc
-  plainMap[0x0E] = (8 << 8) | 8;   shiftMap[0x0E] = (8 << 8) | 8;   // Backspace
-  plainMap[0x0F] = (9 << 8) | 9;   shiftMap[0x0F] = (9 << 8) | 9;   // Tab
-  plainMap[0x1C] = (13 << 8) | 13; shiftMap[0x1C] = (13 << 8) | 13; // Enter
-  plainMap[0x39] = (32 << 8) | 32; shiftMap[0x39] = (32 << 8) | 32; // Space
-  plainMap[0x48] = (38 << 8) | 0;  shiftMap[0x48] = (38 << 8) | 0;  // Up
-  plainMap[0x50] = (40 << 8) | 0;  shiftMap[0x50] = (40 << 8) | 0;  // Down
-  plainMap[0x4B] = (37 << 8) | 0;  shiftMap[0x4B] = (37 << 8) | 0;  // Left
-  plainMap[0x4D] = (39 << 8) | 0;  shiftMap[0x4D] = (39 << 8) | 0;  // Right
+  plainMap[0x01] = (27 << 8) | 27; shiftMap[0x01] = (27 << 8) | 27;
+  plainMap[0x0E] = (8 << 8) | 8;   shiftMap[0x0E] = (8 << 8) | 8;
+  plainMap[0x0F] = (9 << 8) | 9;   shiftMap[0x0F] = (9 << 8) | 9;
+  plainMap[0x1C] = (13 << 8) | 13; shiftMap[0x1C] = (13 << 8) | 13;
+  plainMap[0x39] = (32 << 8) | 32; shiftMap[0x39] = (32 << 8) | 32;
+  plainMap[0x48] = (38 << 8) | 0;  shiftMap[0x48] = (38 << 8) | 0;
+  plainMap[0x50] = (40 << 8) | 0;  shiftMap[0x50] = (40 << 8) | 0;
+  plainMap[0x4B] = (37 << 8) | 0;  shiftMap[0x4B] = (37 << 8) | 0;
+  plainMap[0x4D] = (39 << 8) | 0;  shiftMap[0x4D] = (39 << 8) | 0;
 
   x.label("scancode_plain_tbl");
   for (let i = 0; i < 128; i++) x.u16(plainMap[i]);
   x.label("scancode_shift_tbl");
   for (let i = 0; i < 128; i++) x.u16(shiftMap[i]);
 
-  return x.finalize();
+  return { bytes: x.finalize(), labels: x.labels, asmLines: x.asmLines };
 }
 
-function buildX86Core() {
-  const bootSector = buildBootSector();
-  const pmCore = buildProtectedModeCore();
+function formatHexLines(bytesArr, startIdx, endIdx) {
+  const lines = [];
+  let hex = "";
+  for (let i = startIdx; i < endIdx; i++) {
+    hex += (bytesArr[i] & 0xFF).toString(16).padStart(2, "0");
+    if (hex.length >= 64) {
+      lines.push("  .hex " + hex);
+      hex = "";
+    }
+  }
+  if (hex.length > 0) lines.push("  .hex " + hex);
+  return lines;
+}
+
+function buildX86Core(customBanner = "SpiralOS 1.1") {
+  const pm = buildProtectedModeCore();
+  const bootSector = buildBootSector(customBanner);
+  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret);
   const combined = new Uint8Array(32 * 512); // Sectors 0..31 (16 KB)
   combined.set(bootSector, 0);
-  combined.set(pmCore, 512);
+  combined.set(stage2, 512);
+  combined.set(pm.bytes, 1024);
+
+  const asmLines = [
+    "; SpiralOS 1.1 — Hummingbird i586 Native Core Assembly (/src/core_x86.asm)",
+    "; Stage 1 Boot Sector (0x7C00), Stage 2 Track-Safe Loader + BIOS Thunk (0x7E00),",
+    "; and 32-bit Protected-Mode Core (0x8000)",
+    "  .org 0x7C00",
+    "stage1_boot_sector:"
+  ];
+  asmLines.push(...formatHexLines(bootSector, 0, 0x0180));
+  asmLines.push("boot_banner:");
+  asmLines.push(`  .banner "${customBanner}"`);
+  asmLines.push(...formatHexLines(bootSector, 0x0190, 512));
+  asmLines.push("stage2_loader:");
+  asmLines.push(...formatHexLines(stage2, 0, 512));
+  asmLines.push("pm_core_entry:");
+  asmLines.push(...pm.asmLines);
+
   return {
     bootSector,
-    pmCore,
+    stage2,
+    pmCore: pm.bytes,
+    labels: pm.labels,
     bytes: combined,
-    totalBytes: 512 + pmCore.length
+    totalBytes: 1024 + pm.bytes.length,
+    bannerOffset: 0x0180,
+    asmSource: asmLines.join("\n") + "\n"
   };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { buildX86Core, buildBootSector, buildProtectedModeCore };
+  module.exports = { buildX86Core, buildBootSector, buildStage2Loader, buildProtectedModeCore };
 }
 if (typeof globalThis !== "undefined") {
   globalThis.buildX86Core = buildX86Core;

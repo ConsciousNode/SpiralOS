@@ -1,9 +1,9 @@
 // ============================================================================
-// SpiralOS — SpiralFS Filesystem Driver (/src/fs.sp)
+// SpiralOS 1.1 — SpiralFS Filesystem Driver (/src/fs.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 //
-// Operates on the mounted SpiralFS volume at VMRAM_SPFS_BASE (0x218000,
-// Sectors 192..703 of spiralos.img).
+// Operates on the mounted SpiralFS volume at VMRAM_SPFS_BASE (0x228000,
+// Sectors 320..959 of spiralos.img, 320 KB capacity).
 // ============================================================================
 
 const FS_MAX_ENTRIES = 63;
@@ -49,7 +49,6 @@ int fs_count() {
   return c;
 }
 
-// Returns nth active file index (0..fs_count()-1)
 int fs_nth_index(int n) {
   int seen = 0;
   for (int i = 0; i < FS_MAX_ENTRIES; i++) {
@@ -82,13 +81,12 @@ int fs_write(int path_str, int src_ptr, int len) {
     int next_free = r32(VMRAM_SPFS_BASE + 0x0C);
     int need = (len + 1024) & (~511);
     if (need < 1024) need = 1024;
-    if (next_free + need > 0x40000) return -2;
+    if (next_free + need > 0x50000) return -2;
     rel_off = next_free;
     cap = need;
     w32(VMRAM_SPFS_BASE + 0x0C, next_free + need);
   }
 
-  // Write filename (up to 39 chars)
   hal_memset(e, 0, 40);
   int plen = hal_strlen(path_str);
   if (plen > 39) plen = 39;
@@ -106,9 +104,9 @@ int fs_write(int path_str, int src_ptr, int len) {
     hal_memcpy(dst, src_ptr, len);
   }
 
-  // Sync directory table (Sectors 192..199) and modified file sectors to disk!
-  hal_disk_sync(192, 8);
-  int file_start_sec = 192 + (rel_off >> 9);
+  // Sync directory table (Sectors 320..327) and modified file sectors to disk
+  hal_disk_sync(320, 8);
+  int file_start_sec = 320 + (rel_off >> 9);
   int file_sec_cnt = (cap + 511) >> 9;
   hal_disk_sync(file_start_sec, file_sec_cnt);
   return idx;
@@ -119,6 +117,6 @@ int fs_delete(int path_str) {
   if (idx < 0) return -1;
   int e = fs_entry_ptr(idx);
   w32(e + 0x28, 0);
-  hal_disk_sync(192, 8);
+  hal_disk_sync(320, 8);
   return 0;
 }

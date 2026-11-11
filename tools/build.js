@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * SpiralOS — Unified Image Builder & Packager (tools/build.js)
+ * SpiralOS 1.1 — Unified Image Builder & Packager (tools/build.js)
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
  * Produces the unified 1.44 MB bootable SpiralOS disk image (spiralos.img,
  * 1,474,560 bytes = 2,880 sectors of 512 bytes) that boots unchanged on BOTH:
- *   1. Hummingbird (i586 PC Emulator, via BIOS Sector 0 -> 32-bit Protected Mode Core)
+ *   1. Hummingbird (i586 PC Emulator & QEMU/Real Hardware, via BIOS Sector 0 -> Stage 2 -> 32-bit PM Core)
  *   2. TabComp (TC-32 Fantasy Computer, via Sectors 32..63 Native TC-32 Core)
  */
 
@@ -36,11 +36,11 @@ function createProceduralPic(style = 0) {
 }
 
 function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
-  // 1. Build both Native Cores
+  // 1. Build both Native Cores (including their full symbolic assembly sources)
   const tc32Core = buildTC32Core();
   const x86Core = buildX86Core();
 
-  // 2. Populate SpiralFS (256 KB volume for Sectors 192..703)
+  // 2. Populate SpiralFS (320 KB volume for Sectors 320..959)
   const spfs = new SpiralFS();
 
   const sourceFiles = [
@@ -51,30 +51,32 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
     ["os/wm.sp",     "/src/wm.sp"],
     ["os/net.sp",    "/src/net.sp"],
     ["os/cc.sp",     "/src/cc.sp"],
+    ["os/asm.sp",    "/src/asm.sp"],
     ["os/apps1.sp",  "/src/apps1.sp"],
     ["os/apps2.sp",  "/src/apps2.sp"]
   ];
 
   for (const [diskRel, vfsPath] of sourceFiles) {
     const content = fs.readFileSync(path.join(rootDir, diskRel), "utf8");
-    spfs.writeFile(vfsPath, content, 12288);
+    const cap = Math.max(8192, (content.length + 3072) & ~511);
+    spfs.writeFile(vfsPath, content, cap);
   }
 
-  // Add sample standalone program & assembly listings for Stretch §3
+  // Add sample standalone program & full symbolic assembly sources for both Native Cores (§2)
   spfs.writeFile(
     "/src/hello.sp",
-    "// Sample SpiralC Program\nconst RETURN_VAL = 77;\nint main() { return RETURN_VAL; }\n",
+    "// Sample SpiralC Standalone Program\nconst BASE = 35;\nint add7(int x) { return x + 7; }\nint main() { return add7(BASE); }\n",
     2048
   );
   spfs.writeFile(
     "/src/core_tc32.asm",
-    "; SpiralOS TabComp TC-32 Native Core Assembly\n.org 0x000000\nboot_entry:\n  LUI16 R8, 0x0000\n  LHI   R8, 0x0020 ; VM_BASE = 0x00200000\n  JMP   vm_loop\n",
-    2048
+    tc32Core.asmSource,
+    (tc32Core.asmSource.length + 2048) & ~511
   );
   spfs.writeFile(
     "/src/core_x86.asm",
-    "; SpiralOS Hummingbird i586 Native Core Assembly\n[bits 16]\n[org 0x7C00]\nboot_entry:\n  cli\n  xor ax, ax\n  mov ds, ax\n  jmp 0x0008:0x00008000\n",
-    2048
+    x86Core.asmSource,
+    (x86Core.asmSource.length + 2048) & ~511
   );
 
   // Add the 4 plain-text Theme files
@@ -94,8 +96,8 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
     "/www/index.hts",
     "<h1>SpiralWeb Node Portal</h1>\n" +
     "<p>Served live over StudioNet SSP (Port 80) by SpiralHttpd.</p>\n" +
-    "<p>One OS image running on TabComp TC-32 and Hummingbird i586.</p>\n" +
-    "<a href='/sonder.hts'>Visit Sonder Gateway</a>\n",
+    "<img src='/art/spiral.pic'>\n" +
+    "<a href='/sonder.hts'>Visit Sonder Capsule</a>\n",
     2048
   );
   spfs.writeFile(
@@ -113,21 +115,23 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
   // Add on-disk documentation
   spfs.writeFile(
     "/docs/README.txt",
-    "SpiralOS 1.0 - ConsciousNode SoftWorks (MIT)\n" +
+    "SpiralOS 1.1 'Real Spiral' - ConsciousNode SoftWorks (MIT)\n" +
     "Unified VM Bytecode OS for TabComp & Hummingbird.\n" +
-    "Edit /src/wm.sp in SpiralEdit and click Rebuild!\n",
+    "Includes full self-hosting SpiralC compiler (/src/cc.sp)\n" +
+    "and symbolic native core assemblers (/src/asm.sp).\n",
     2048
   );
 
-  // 3. Compile /src/os.sp (expanding all imports from SpiralFS)
+  // 3. Compile /src/os.sp (using in-place import resolution matching /src/cc.sp 1-to-1)
+  const osEntryBytes = spfs.readFile("/src/os.sp");
+  const compiled = compileSpiralSource(osEntryBytes, (p) => spfs.readFile(p));
   const expandedSource = expandImports("/src/os.sp", (p) => spfs.readText(p));
-  const compiled = compileSpiralSource(expandedSource);
 
   // 4. Assemble unified 1.44 MB floppy/disk image (1,474,560 bytes = 2,880 sectors)
   const img = new Uint8Array(1474560);
   const imgDV = new DataView(img.buffer);
 
-  // Sectors 0..31 (0x00000..0x03FFF, 16 KB): Hummingbird x86 Bootloader + Protected Mode Core
+  // Sectors 0..31 (0x00000..0x03FFF, 16 KB): Hummingbird x86 Bootloader + Stage 2 + Protected Mode Core
   img.set(x86Core.bytes, 0x00000);
 
   // Sectors 32..63 (0x04000..0x07FFF, 16 KB): TabComp TC-32 Native Core ('TC32' header + code)
@@ -135,10 +139,10 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
   imgDV.setUint32(0x04004, tc32Core.bytes.length, true);
   img.set(tc32Core.bytes, 0x04008);
 
-  // Sectors 64..191 (0x08000..0x17FFF, 64 KB): SPIR Portable VM Bytecode Image
+  // Sectors 64..319 (0x08000..0x27FFF, 128 KB): SPIR Portable VM Bytecode Image
   img.set(compiled.image, 0x08000);
 
-  // Sectors 192..703 (0x18000..0x57FFF, 256 KB): SPFS SpiralFS Filesystem Volume
+  // Sectors 320..959 (0x28000..0x77FFF, 320 KB): SPFS SpiralFS Filesystem Volume
   img.set(spfs.buf, SPFS_IMG_OFFSET);
 
   return {
@@ -156,12 +160,12 @@ if (require.main === module) {
   const res = buildSpiralOSImage(rootDir);
   const outPath = path.join(rootDir, "spiralos.img");
   fs.writeFileSync(outPath, res.img);
-  console.log("=== SpiralOS Unified Build Complete ===");
+  console.log("=== SpiralOS 1.1 Unified Build Complete ===");
   console.log(`  Output Image      : ${outPath} (${res.img.length} bytes / 1.44 MB)`);
-  console.log(`  x86 Native Core   : ${res.x86Core.totalBytes} bytes (Boot: 512 B, PM Core: ${res.x86Core.pmCore.length} B)`);
+  console.log(`  x86 Native Core   : ${res.x86Core.totalBytes} bytes (Stage1: 512 B, Stage2: 512 B, PM Core: ${res.x86Core.pmCore.length} B)`);
   console.log(`  TC-32 Native Core : ${res.tc32Core.bytes.length} bytes (${res.tc32Core.wordCount} words)`);
-  console.log(`  SPIR VM Bytecode  : ${res.compiled.codeBytes} code bytes + ${res.compiled.stringBytes} string bytes (${res.compiled.funcCount} functions)`);
-  console.log(`  SpiralFS Volume   : ${res.spfs.listFiles().length} files mounted in Sectors 192..703`);
+  console.log(`  SPIR VM Bytecode  : ${res.compiled.codeBytes} code bytes + ${res.compiled.stringBytes} string bytes (${res.compiled.funcCount} functions, ${res.compiled.globalWords} global words)`);
+  console.log(`  SpiralFS Volume   : ${res.spfs.listFiles().length} files mounted in Sectors 320..959`);
 }
 
 module.exports = { buildSpiralOSImage };

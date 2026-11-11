@@ -1,29 +1,32 @@
 // ============================================================================
-// SpiralOS — StudioNet Protocol Stack & Services (/src/net.sp)
+// SpiralOS 1.1 — StudioNet Protocol Stack & Services (/src/net.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 //
 // Implements:
+//   - Hardware presence check (g_has_snet): skips I/O when no StudioNet NIC
 //   - 16-byte StudioNet Wire Header ([dst:16][src:16][proto:8][flags:8]
 //     [sport:16][dport:16][seq:16][ack:16][len:16])
 //   - SNS (Proto 1): Name resolution ("tabcomp.local", "hummingbird.local", "sonder.gw")
-//   - SDP (Proto 2): Connectionless datagrams (Ping port 7, Chat port 4200)
+//   - SDP (Proto 2): Connectionless datagrams (Ping port 7, Chat port 4200,
+//     Multiplayer Snake state sync port 4400)
 //   - SSP (Proto 3): Reliable sequenced/ACK stream layer (File Transfer port 4300,
 //     SpiralHttpd Tiny Web Server & SpiralWeb Browser port 80)
 // ============================================================================
 
-const PROTO_SNS = 1;
-const PROTO_SDP = 2;
-const PROTO_SSP = 3;
+const PROTO_SNS  = 1;
+const PROTO_SDP  = 2;
+const PROTO_SSP  = 3;
 
-const FLAG_SYN  = 1;
-const FLAG_ACK  = 2;
-const FLAG_PSH  = 4;
-const FLAG_FIN  = 8;
+const FLAG_SYN   = 1;
+const FLAG_ACK   = 2;
+const FLAG_PSH   = 4;
+const FLAG_FIN   = 8;
 
-const PORT_ECHO = 7;
-const PORT_HTTP = 80;
-const PORT_CHAT = 4200;
-const PORT_FTX  = 4300;
+const PORT_ECHO  = 7;
+const PORT_HTTP  = 80;
+const PORT_CHAT  = 4200;
+const PORT_FTX   = 4300;
+const PORT_SNAKE = 4400;
 
 const NET_TX_BUF      = 0x048000;
 const NET_RX_BUF      = 0x048400;
@@ -40,6 +43,15 @@ int g_ftx_rx_count;
 int g_httpd_hits;
 int g_web_status;
 
+// Multiplayer Snake peer state synchronized over StudioNet SDP port 4400
+int g_peer_snake_active;
+int g_peer_snake_x;
+int g_peer_snake_y;
+int g_peer_snake_dx;
+int g_peer_snake_dy;
+int g_peer_snake_score;
+int g_peer_snake_pkts;
+
 void net_init() {
   g_net_tx_pkts = 0;
   g_net_rx_pkts = 0;
@@ -49,11 +61,17 @@ void net_init() {
   g_ftx_rx_count = 0;
   g_httpd_hits = 0;
   g_web_status = 0;
+  g_peer_snake_active = 0;
+  g_peer_snake_x = 4;
+  g_peer_snake_y = 2;
+  g_peer_snake_dx = 1;
+  g_peer_snake_dy = 0;
+  g_peer_snake_score = 0;
+  g_peer_snake_pkts = 0;
   hal_memset(CHAT_LOG_BUF, 0, 256);
   hal_memset(WEB_PAGE_BUF, 0, 2048);
   hal_memset(FTX_LAST_FILE, 0, 64);
 
-  // Load default local web page into WEB_PAGE_BUF
   int widx = fs_find("/www/index.hts");
   if (widx >= 0) {
     int wlen = fs_entry_size(widx);
@@ -74,6 +92,7 @@ int sns_resolve(int host_str) {
 }
 
 int net_send_frame(int dst_node, int proto, int flags, int sport, int dport, int seq, int ack, int payload_ptr, int payload_len) {
+  if (g_has_snet == 0) return 0;
   if (payload_len > 480) payload_len = 480;
   w16(NET_TX_BUF + 0, dst_node);
   w16(NET_TX_BUF + 2, g_local_node_id);
@@ -93,7 +112,6 @@ int net_send_frame(int dst_node, int proto, int flags, int sport, int dport, int
 }
 
 void chat_append_line(int prefix_str, int msg_str) {
-  // Shift lines 0..2 up if full
   int slot = g_chat_count;
   if (slot >= 4) {
     hal_memcpy(CHAT_LOG_BUF, CHAT_LOG_BUF + 64, 192);
@@ -120,6 +138,17 @@ int net_send_chat(int dst_node, int msg_str) {
   return net_send_frame(dst_node, PROTO_SDP, FLAG_PSH, PORT_CHAT, PORT_CHAT, g_net_seq++, 0, msg_str, mlen + 1);
 }
 
+int net_send_snake_state(int hx, int hy, int dx, int dy, int score) {
+  int pbuf = 0x049B80;
+  w8(pbuf + 0, hx & 0xFF);
+  w8(pbuf + 1, hy & 0xFF);
+  w8(pbuf + 2, (dx + 2) & 0xFF);
+  w8(pbuf + 3, (dy + 2) & 0xFF);
+  w32(pbuf + 4, score);
+  int peer = sns_resolve("peer");
+  return net_send_frame(peer, PROTO_SDP, FLAG_PSH, PORT_SNAKE, PORT_SNAKE, g_net_seq++, 0, pbuf, 8);
+}
+
 int net_send_file(int dst_node, int path_str) {
   int fidx = fs_find(path_str);
   if (fidx < 0) return -1;
@@ -127,7 +156,6 @@ int net_send_file(int dst_node, int path_str) {
   int fsize = fs_entry_size(fidx);
   if (fsize > 440) fsize = 440;
 
-  // Build SSP file transfer payload at 0x049C00: [path:32B][data:fsize]
   int pbuf = 0x049C00;
   hal_memset(pbuf, 0, 480);
   int nlen = hal_strlen(path_str);
@@ -148,13 +176,14 @@ int net_http_get(int dst_node, int url_path_str) {
   int ulen = hal_strlen(url_path_str);
   if (ulen > 60) ulen = 60;
   hal_memcpy(pbuf + 4, url_path_str, ulen);
-  g_web_status = 1; // loading
+  g_web_status = 1;
   int seq = g_net_seq;
   g_net_seq = g_net_seq + 1;
   return net_send_frame(dst_node, PROTO_SSP, FLAG_SYN | FLAG_PSH, 49152, PORT_HTTP, seq, 0, pbuf, 5 + ulen);
 }
 
 void net_poll() {
+  if (g_has_snet == 0) return;
   int guard = 0;
   while (guard < 8) {
     int n = hal_net_recv(NET_RX_BUF, 512);
@@ -186,7 +215,18 @@ void net_poll() {
       }
     }
 
-    // 2. SSP File Transfer on PORT_FTX
+    // 2. SDP Multiplayer Snake state on PORT_SNAKE
+    if (proto == PROTO_SDP && dport == PORT_SNAKE && plen >= 8) {
+      g_peer_snake_active = 1;
+      g_peer_snake_x = r8(payload + 0);
+      g_peer_snake_y = r8(payload + 1);
+      g_peer_snake_dx = r8(payload + 2) - 2;
+      g_peer_snake_dy = r8(payload + 3) - 2;
+      g_peer_snake_score = r32(payload + 4);
+      g_peer_snake_pkts = g_peer_snake_pkts + 1;
+    }
+
+    // 3. SSP File Transfer on PORT_FTX
     if (proto == PROTO_SSP && dport == PORT_FTX && (flags & FLAG_PSH) != 0 && plen >= 32) {
       int fname_ptr = payload;
       int fdata_ptr = payload + 32;
@@ -195,11 +235,10 @@ void net_poll() {
       hal_memset(FTX_LAST_FILE, 0, 64);
       hal_memcpy(FTX_LAST_FILE, fname_ptr, 31);
       g_ftx_rx_count = g_ftx_rx_count + 1;
-      // Send SSP ACK back to sender!
       net_send_frame(src_node, PROTO_SSP, FLAG_ACK, PORT_FTX, sport, g_net_seq++, seq + 1, "OK", 2);
     }
 
-    // 3. SSP Tiny HTTP Server (SpiralHttpd on PORT_HTTP)
+    // 4. SSP Tiny HTTP Server (SpiralHttpd on PORT_HTTP)
     if (proto == PROTO_SSP && dport == PORT_HTTP && (flags & FLAG_PSH) != 0) {
       g_httpd_hits = g_httpd_hits + 1;
       int req_path = "/www/index.hts";
@@ -216,13 +255,13 @@ void net_poll() {
       }
     }
 
-    // 4. SSP HTTP Response to SpiralWeb Browser (sport == PORT_HTTP)
+    // 5. SSP HTTP Response to SpiralWeb Browser (sport == PORT_HTTP)
     if (proto == PROTO_SSP && sport == PORT_HTTP && (flags & FLAG_PSH) != 0 && plen > 0) {
       hal_memset(WEB_PAGE_BUF, 0, 2048);
       int clen = plen;
       if (clen > 1023) clen = 1023;
       hal_memcpy(WEB_PAGE_BUF, payload, clen);
-      g_web_status = 2; // loaded
+      g_web_status = 2;
     }
   }
 }

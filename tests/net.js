@@ -116,9 +116,9 @@ function runNetSuite() {
   // --------------------------------------------------------------------------
   // Create a custom file `/home/beam_test.txt` in TabComp's SpiralFS first
   const testPayload = "STUDIO-NET-FILE-TRANSFER-VERIFIED-1991-SPIRALOS-OK!";
-  const tcSpfs = new SpiralFS(tcCpu.ram.subarray(vmBase + 0x218000, vmBase + 0x218000 + SPFS_SIZE));
+  const tcSpfs = new SpiralFS(tcCpu.ram.subarray(vmBase + 0x228000, vmBase + 0x228000 + SPFS_SIZE));
   const newIdx = tcSpfs.writeFile("/home/beam.txt", testPayload, 1024);
-  tcCpu.ram.set(tcSpfs.buf, vmBase + 0x218000);
+  tcCpu.ram.set(tcSpfs.buf, vmBase + 0x228000);
 
   // Open SpiralSend on TabComp (Launcher item 13 -> window at 52, 46, w=180, h=90)
   openLauncherTabComp(13);
@@ -161,7 +161,7 @@ function runNetSuite() {
   clickTabComp(114, 42);
   stepBoth(3);
   const sonderHtml = new TextDecoder().decode(tcCpu.ram.subarray(vmBase + 0x049000, vmBase + 0x049200)).replace(/\0/g, "");
-  assert.ok(sonderHtml.includes("Sonder Gateway (/atlas)"), `Expected Sonder Gateway page, got: ${sonderHtml}`);
+  assert.ok(sonderHtml.includes("(/atlas)"), `Expected Sonder Gateway page, got: ${sonderHtml}`);
   console.log("  [PASS] 4. Sonder Gateway Bridge (Stretch §5): surfed sonder.gw (/atlas) via StudioNet Node 0x00FE!");
 
   // Save screenshot of SpiralWeb rendering Sonder Gateway

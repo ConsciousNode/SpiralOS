@@ -1,133 +1,166 @@
-# Spiral VM Specification (`VM.md`)
+# Spiral VM 1.1 Specification (`SPIR` Format)
 
-**Studio:** ConsciousNode SoftWorks · **Licence:** MIT · **Version:** `SpiralVM 1.0`
+**Studio:** ConsciousNode SoftWorks · **Licence:** MIT
+
+The **Spiral VM** is a portable, deterministic, stack-and-frame bytecode virtual machine designed so that a single compiled operating system image (`spiralos.img`) boots and runs identically on two completely different hardware architectures:
+
+1. **TabComp (`TC-32`)**: A 32-bit RISC fantasy workstation (`16` general-purpose registers, word-addressed memory, `320×200` 8-bpp framebuffer, custom MMIO).
+2. **Hummingbird (`i586`)**: A real-architecture x86 PC booting via 16-bit BIOS `INT 13h`, switching to 32-bit Protected Mode with paging, VBE `640×480` (`32-bpp` or `24-bpp` fallback) linear framebuffer, 8254 PIT, 8259A PIC, PS/2 keyboard & mouse, and 82077AA FDC (with a 16-bit Real-Mode BIOS `INT 13h` write thunk fallback).
+
+Every layer of SpiralOS above the hardware abstraction Core—including the preemptive task scheduler, `SpiralFS` filesystem, window manager, GUI toolkit, StudioNet protocol stack, Sonder procedural web engine, self-hosting `SpiralC` compiler (`/src/cc.sp`), and both native assemblers (`/src/asm.sp`)—is compiled to `SPIR` bytecode.
 
 ---
 
-## 1. Overview & Design Goals
+## 1. Binary Image Layout (`SPIR`, 128 KB)
 
-The **Spiral VM** is a deterministic, portable 32-bit virtual machine with a unified 4 MiB byte-addressed virtual memory space and fixed 32-bit instruction words. It is designed so that its native interpreter loop can be implemented cleanly in under 4 KB of **TabComp TC-32** RISC instructions and under 7 KB of **Intel i586** 32-bit protected-mode instructions with **100% bit-identical execution semantics**.
+In SpiralOS 1.1, the `SPIR` container was expanded from `64 KB` to **`128 KB` (`131,072` bytes, `256` floppy sectors)** with **32-bit offsets** so the full recursive-descent `SpiralC` compiler and dual-architecture native assemblers fit comfortably in memory alongside the desktop OS and applications.
 
----
-
-## 2. Virtual Memory Model (`vmRam[0x000000 .. 0x3FFFFF]`)
-
-Every SpiralVM instance operates on a flat, little-endian `4 MiB` byte array (`vmRam`), mapped at physical address `0x00200000` on both TabComp and Hummingbird:
-
-| `vmRam` Address Range | Size | Purpose |
+| Offset Range | Size | Description |
 | :--- | :--- | :--- |
-| `0x000000 .. 0x00001F` | `32 B` | **`SPIR` Image Header**: Magic `0x52495053` (`"SPIR"`), version `1`, `entry_pc`, `code_end`, `global_words`, `str_pool_base` (`0xD000`), `str_pool_len`, `checksum`. |
-| `0x000020 .. 0x00CFFF` | `52 KB` | **Executable Bytecode**: 4-byte aligned 32-bit VM instructions. |
-| `0x00D000 .. 0x00FFFF` | `12 KB` | **Read-Only String Literal Pool**: Null-terminated string constants. |
-| `0x010000 .. 0x047FFF` | `224 KB` | **Global Variables & Arrays**: Indexed by 16-bit slot (`0x010000 + slot * 4`). |
-| `0x048000 .. 0x05FFFF` | `96 KB` | **OS Buffers**: StudioNet TX/RX buffers (`0x048000`), Chat log (`0x048800`), Web buffer (`0x049000`), Shell (`0x04B000`), Paint canvas (`0x04C000`), Editor (`0x058000`). |
-| `0x0B0000 .. 0x0BFFFF` | `64 KB` | **Self-Hosting Compiler Arena (`CC_WORK_BUF`)**: Used by `/src/cc.sp` to build updated `SPIR` images in-memory. |
-| `0x0EF000 .. 0x0EF2FF` | `768 B` | **Bitmap Font (`8×8`)**: 96 ASCII glyphs (`32..127`), 8 bytes per glyph. |
-| `0x0F0000 .. 0x0FF9FF` | `64,000 B` | **Linear Framebuffer (`VRAM`)**: `320 × 200` 8-bit indexed pixels. |
-| `0x0FFA00 .. 0x0FFCFF` | `768 B` | **Palette RAM**: `256 × 3` RGB bytes (`0..255` per channel). |
-| `0x0FFD00 .. 0x0FFDFF` | `256 B` | **VM Status & Telemetry Page**: `'SPOS'` ready flag (`+0x00`), frame counter (`+0x04`), mouse X/Y/btn (`+0x08..0x10`), window count (`+0x14`), active app (`+0x18`), machine ID (`+0x1C`), VM instruction count (`+0x20`), exit code (`+0x28`), active title color (`+0x78`). |
-| `0x100000 .. 0x16FFFF` | `448 KB` | **Unified Local Frame & Evaluation Stack (`VM_FP` / `VM_SP`)**. |
-| `0x170000 .. 0x17FFFF` | `64 KB` | **Call Return Stack (`VM_CSP`)**: Stores `(saved_PC, saved_FP)` pairs (`8` bytes per frame). |
-| `0x200000 .. 0x367FFF` | `1.44 MB` | **Mounted `spiralos.img`**: Sectors `0..2879` (with `SpiralFS` at `0x218000`). |
+| `0x00000 .. 0x0001F` | `32 B` | **`SPIR` Header** (8 little-endian 32-bit words) |
+| `0x00020 .. 0x1BFFF` | `112 KB - 32 B` | **Bytecode Instruction Stream** (`codeSize` bytes; currently `89,800` bytes) |
+| `0x1C000 .. 0x1FFFF` | `16 KB` | **String Literal Pool** (null-terminated ASCII strings; currently `3,264` bytes) |
 
----
+### Header Format (`0x00000 .. 0x0001F`)
 
-## 3. VM Registers & Zero-Copy Calling Convention
-
-The VM maintains four 32-bit architectural pointers (offsets within `vmRam`):
-- **`VM_PC`**: Program counter (byte offset of next instruction in `0x000000 .. 0x00CFFF`).
-- **`VM_SP`**: Evaluation stack pointer (grows upward by `+4` bytes per push; top of stack is at `i32[VM_SP - 4]`).
-- **`VM_FP`**: Current local activation frame pointer (`local[i]` is at `i32[VM_FP + i * 4]`).
-- **`VM_CSP`**: Call return stack pointer (starts at `0x170000`, grows upward by `+8` bytes per `CALL`).
-
-### Calling Convention (`CALL`, `ENTER`, `RET`)
-1. **Caller** evaluates `k` arguments (`arg_0 .. arg_{k-1}`) onto `VM_SP`, then executes `CALL target_addr24` (`0x24`):
-   - Pushes `(VM_PC, VM_FP)` onto `VM_CSP` (`i32[VM_CSP] = VM_PC; i32[VM_CSP + 4] = VM_FP; VM_CSP += 8`).
-   - Sets `VM_PC = target_addr24`.
-2. **Callee prologue** executes `ENTER k, total_locals` (`0x25`):
-   - Sets `VM_FP = VM_SP - (k * 4)` — placing `arg_0 .. arg_{k-1}` directly in `local[0 .. k-1]` with **zero memory copies**!
-   - Sets `VM_SP = VM_FP + (total_locals * 4)`, allocating all local variables and local arrays above the parameters.
-3. **Callee epilogue** pushes the return value onto `VM_SP` and executes `RET` (`0x26`):
-   - Pops `ret_val = i32[VM_SP - 4]`.
-   - Resets `VM_SP = VM_FP`, then pushes `ret_val` (`i32[VM_SP] = ret_val; VM_SP += 4`).
-   - Pops `(VM_PC, VM_FP)` from `VM_CSP` (`VM_CSP -= 8; VM_PC = i32[VM_CSP]; VM_FP = i32[VM_CSP + 4]`).
-   - If `VM_PC < 0` (the boot sentinel `-1`), the VM halts with `exitCode = ret_val`.
-
----
-
-## 4. Instruction Set Encoding (`38 Opcodes: 0x00 .. 0x27`)
-
-Every instruction is a 32-bit little-endian word:
-- **I-Format**: `[op : 8][a : 8][imm16 : 16]` (`imm16` signed or `uimm16` unsigned)
-- **J-Format**: `[op : 8][addr24 : 24]`
-
-| Opcode | Mnemonic | Format | Operation |
+| Offset | Type | Field | Value / Meaning |
 | :--- | :--- | :--- | :--- |
-| `0x00` | `NOP` | `00 00 0000` | No operation |
-| `0x01` | `HALT` | `01 00 0000` | `exitCode = pop(); halt()` |
-| `0x02` | `PUSH_I16` | `02 00 imm16` | `push(sign_extend_16(imm16))` |
-| `0x03` | `PUSH_U16` | `03 00 uimm16` | `push(zero_extend_16(uimm16))` |
-| `0x04` | `PUSH_HI` | `04 00 uimm16` | `tos = (tos & 0xFFFF) \| (uimm16 << 16)` |
-| `0x05` | `DUP` | `05 00 0000` | `push(tos)` |
-| `0x06` | `DROP` | `06 00 0000` | `pop()` |
-| `0x07` | `SWAP` | `07 00 0000` | Swap top two stack words |
-| `0x08` | `GET_LOCAL` | `08 00 slot16` | `push(i32[VM_FP + slot16 * 4])` |
-| `0x09` | `SET_LOCAL` | `09 00 slot16` | `i32[VM_FP + slot16 * 4] = pop()` |
-| `0x0A` | `GET_GLOBAL` | `0A 00 slot16` | `push(i32[0x010000 + slot16 * 4])` |
-| `0x0B` | `SET_GLOBAL` | `0B 00 slot16` | `i32[0x010000 + slot16 * 4] = pop()` |
-| `0x0C` | `ADDR_LOCAL` | `0C 00 slot16` | `push(VM_FP + slot16 * 4)` |
-| `0x0D` | `ADDR_GLOBAL`| `0D 00 slot16` | `push(0x010000 + slot16 * 4)` |
-| `0x0E` | `LOAD8U` | `0E 00 imm16` | `addr = (pop() + imm16) & 0x3FFFFF; push(u8[addr])` |
-| `0x0F` | `LOAD8S` | `0F 00 imm16` | `addr = (pop() + imm16) & 0x3FFFFF; push(i8[addr])` |
-| `0x10` | `LOAD16U` | `10 00 imm16` | `addr = (pop() + imm16) & 0x3FFFFF; push(u16[addr])` |
-| `0x11` | `LOAD32` | `11 00 imm16` | `addr = (pop() + imm16) & 0x3FFFFF; push(i32[addr])` |
-| `0x12` | `STORE8` | `12 00 imm16` | `v = pop(); addr = (pop() + imm16) & 0x3FFFFF; u8[addr] = v & 0xFF` |
-| `0x13` | `STORE16` | `13 00 imm16` | `v = pop(); addr = (pop() + imm16) & 0x3FFFFF; u16[addr] = v & 0xFFFF` |
-| `0x14` | `STORE32` | `14 00 imm16` | `v = pop(); addr = (pop() + imm16) & 0x3FFFFF; i32[addr] = v` |
-| `0x15` | `ADD` | `15 00 0000` | `b = pop(); a = pop(); push((a + b) \| 0)` |
-| `0x16` | `SUB` | `16 00 0000` | `b = pop(); a = pop(); push((a - b) \| 0)` |
-| `0x17` | `MUL` | `17 00 0000` | `b = pop(); a = pop(); push(imul(a, b))` |
-| `0x18` | `DIV` | `18 00 0000` | `b = pop(); a = pop(); push(b == 0 ? 0 : (a / b) \| 0)` |
-| `0x19` | `MOD` | `19 00 0000` | `b = pop(); a = pop(); push(b == 0 ? 0 : (a % b) \| 0)` |
-| `0x1A` | `AND` | `1A 00 0000` | `b = pop(); a = pop(); push(a & b)` |
-| `0x1B` | `OR` | `1B 00 0000` | `b = pop(); a = pop(); push(a \| b)` |
-| `0x1C` | `XOR` | `1C 00 0000` | `b = pop(); a = pop(); push(a ^ b)` |
-| `0x1D` | `SHL` | `1D 00 0000` | `b = pop(); a = pop(); push(a << (b & 31))` |
-| `0x1E` | `SHR` | `1E 00 0000` | `b = pop(); a = pop(); push(a >>> (b & 31))` |
-| `0x1F` | `SAR` | `1F 00 0000` | `b = pop(); a = pop(); push(a >> (b & 31))` |
-| `0x20` | `CMP` | `20 00 subop` | `b = pop(); a = pop(); push(cmp(a, b, subop))` (`0:==`, `1:!=`, `2:<`, `3:<=`, `4:>`, `5:>=`, `6:u<`, `7:u>`) |
-| `0x21` | `JMP` | `21 addr24` | `VM_PC = addr24` |
-| `0x22` | `JZ` | `22 addr24` | `if (pop() == 0) VM_PC = addr24` |
-| `0x23` | `JNZ` | `23 addr24` | `if (pop() != 0) VM_PC = addr24` |
-| `0x24` | `CALL` | `24 addr24` | Save `(VM_PC, VM_FP)` to `VM_CSP`, `VM_PC = addr24` |
-| `0x25` | `ENTER` | `25 nargs locals16`| `VM_FP = VM_SP - nargs*4; VM_SP = VM_FP + locals16*4` |
-| `0x26` | `RET` | `26 00 0000` | Restore frame from `VM_CSP` and push return value |
-| `0x27` | `SYSCALL` | `27 nargs sys16` | Pop `nargs` args, invoke native Core syscall `sys16`, push result |
+| `0x00` | `u32` | `magic` | `0x52495053` (`"SPIR"` in little-endian ASCII) |
+| `0x04` | `u32` | `version` | `0x00010001` (Spiral VM v1.1 — 32-bit offsets, 128 KB segment) |
+| `0x08` | `u32` | `entryPc` | Byte offset of `main()` entry point inside the `SPIR` image |
+| `0x0C` | `u32` | `codeSize` | Total byte length of executable bytecode starting at `0x00020` |
+| `0x10` | `u32` | `dataOffset` | `0x0001C000` (`114,688` — start of string literal pool) |
+| `0x14` | `u32` | `dataSize` | Byte length of string literal pool |
+| `0x18` | `u32` | `globalWords` | Number of 32-bit global variables allocated in `0x20000..0x27FFF` |
+| `0x1C` | `u32` | `flags` | `0x00000001` (Preemptive multitasking + 128 KB `SPIR` enabled) |
 
 ---
 
-## 5. System-Call Interface (`SYSCALL 0 .. 20`)
+## 2. Unified 1 MB VM Address Space (`0x00000 .. 0xFFFFF`)
 
-| `sys16` | Name | Signature | Native Core Behavior (TC-32 & x86) |
+Both native Cores expose an identical **1 MB (`1,048,576` byte)** byte-addressable virtual memory layout to `SPIR` bytecode:
+
+| VM Byte Address | Size | Region | Description |
 | :--- | :--- | :--- | :--- |
-| `0` | `SYS_EXIT` | `sys(0, code)` | Halts VM and stores `code` at `vmRam[0x0FFD28]`. |
-| `1` | `SYS_YIELD` | `sys(1)` | Presents `vmRam[0x0F0000]` + palette `vmRam[0x0FFA00]` to display (2× VBE `640×480×32` blit on Hummingbird; tear-free `YIELD` on TabComp). |
-| `2` | `SYS_TIME_MS` | `sys(2)` | Returns elapsed virtual milliseconds. |
-| `3` | `SYS_KEY_POLL` | `sys(3)` | Pops next key event `((pressed << 16) \| (vk << 8) \| ascii)`, or `0`. |
-| `4` | `SYS_MOUSE_POLL` | `sys(4, out_ptr)` | Polls mouse X (`0..319`), Y (`0..199`), buttons (`0..7`), writes to `out_ptr`, returns `(btn << 20) \| (y << 10) \| x`. |
-| `5` | `SYS_FILL_RECT` | `sys(5, x, y, w, h, col)` | Clipped rectangle fill in `vmRam[0x0F0000]`. |
-| `6` | `SYS_DRAW_CHAR` | `sys(6, x, y, ch, fg, bg)` | Draws 8×8 glyph from `vmRam[0x0EF000]` (`bg < 0` = transparent). |
-| `7` | `SYS_DRAW_STR` | `sys(7, x, y, str_ptr, fg, bg)` | Draws null-terminated string using `SYS_DRAW_CHAR`. |
-| `8` | `SYS_MEMCPY` | `sys(8, dst, src, len)` | Fast byte copy inside `vmRam`. |
-| `9` | `SYS_MEMSET` | `sys(9, dst, val, len)` | Fast byte fill inside `vmRam`. |
-| `10` | `SYS_DISK_SYNC` | `sys(10, start_sec, count)` | Flushes 512-byte sectors from `vmRam[0x200000 + start_sec*512]` to hardware disk (8237A DMA + 82077AA FDC `WRITE DATA` on Hummingbird; VFS image sync on TabComp). |
-| `11` | `SYS_REBOOT` | `sys(11)` | Triggers hardware warm reboot from the updated disk image. |
-| `12` | `SYS_NET_SEND` | `sys(12, buf_ptr, len)` | Transmits raw StudioNet frame (`1..512 B`) via NIC hardware. |
-| `13` | `SYS_NET_RECV` | `sys(13, buf_ptr, max_len)` | Pops next received StudioNet frame into `buf_ptr`, returns byte length or `0`. |
-| `14` | `SYS_NET_INFO` | `sys(14, cmd, val)` | Queries/sets StudioNet station ID (`cmd=0/1`), TX count (`2`), RX count (`3`). |
-| `15` | `SYS_SOUND_TONE` | `sys(15, freq, ms, wave)` | Plays synth tone via `SOUND_REGS` (TabComp) or PIT Ch2 Speaker `0x42/0x61` (Hummingbird). |
-| `16` | `SYS_MACHINE_INFO` | `sys(16, query)` | Returns Machine ID (`1`=TabComp, `2`=Hummingbird), RAM size, or instruction counter. |
-| `17` | `SYS_BLIT_RECT` | `sys(17, x, y, w, h, src)` | Blits `w × h` 8-bit pixel buffer from `vmRam[src]` to `(x, y)` in VRAM. |
-| `18` | `SYS_STRCMP` | `sys(18, s1, s2)` | Returns `1` if strings at `s1` and `s2` are equal, `0` otherwise. |
-| `19` | `SYS_STRLEN` | `sys(19, s)` | Returns byte length of null-terminated string at `s`. |
-| `20` | `SYS_ITOA` | `sys(20, val, buf, base)` | Formats signed 32-bit `val` in base `10` or `16` into `buf`, returns length. |
+| `0x00000 .. 0x1FFFF` | `128 KB` | **`SPIR` Code & Strings** | Loaded from disk Sectors `64..319`. Strings reside at `0x1C000..0x1FFFF`. |
+| `0x20000 .. 0x27FFF` | `32 KB` | **Globals & BSS** | Up to `8,192` 32-bit global variables (`GLOB[i]` at `0x20000 + i*4`). |
+| `0x28000 .. 0x77FFF` | `320 KB` | **`SpiralFS` Volume** | In-memory disk image synced with Sectors `320..959` (`640` sectors, up to `64` files). |
+| `0x78000 .. 0x7FFFF` | `32 KB` | **VM Stacks & TCBs** | Task 0 evaluation/call stacks (`0x78000..0x79FFF`) + Preemptive Task 1..3 stacks (`0x7A000..0x7DFFF`) + Hardware Task Table (`0x7E000..0x7E0FF`). |
+| `0x80000 .. 0x97FFF` | `96 KB` | **Display & Font Buffers** | `0x80000..0x8F9FF`: `320×200` 8-bpp backbuffer (`64,000` B); `0x90000..0x903FF`: 256-color RGB palette; `0x91000..0x91FFF`: bitmap font glyph tables. |
+| `0x98000 .. 0x9FFFF` | `32 KB` | **Network & Audio Buffers** | StudioNet RX/TX ring buffers, SDP socket buffers, and PCM synth queues. |
+| `0xA0000 .. 0xFFFFF` | `384 KB` | **Dynamic Heap & Scratch** | Used by `SpiralC` compiler AST/symbol tables (`0xA0000..0xBFFFF`), `128 KB` self-hosted `SPIR` output buffer (`0xC0000..0xDFFFF`), native assembler buffers (`0xE0000..0xEFFFF`), and hardware status block (`0xFFD00..0xFFFFF`). |
+
+---
+
+## 3. Registers & Per-Task Preemptive State
+
+Each preemptive hardware task slot (`Task 0 .. Task 3`) maintains four 32-bit VM registers saved/restored in the Hardware Task Control Table at `0x7E000 + slot * 32`:
+
+- **`VM_PC`**: Program Counter (byte offset into `0x00000..0x1BFFF`).
+- **`VM_SP`**: Data/Evaluation Stack Pointer (word index into `0x78000..0x7DFFF`).
+- **`VM_FP`**: Frame Pointer (word index of current function's local variable base).
+- **`VM_CSP`**: Call Stack Pointer (word index storing saved `(VM_PC, VM_FP)` pairs on `CALL`).
+
+Hardware task table entry layout (`32` bytes per slot at `0x7E000 + slot * 32`):
+- `+0x00`: `active` (`1` = runnable, `0` = inactive)
+- `+0x04`: `VM_PC` (saved byte PC)
+- `+0x08`: `VM_SP` (saved word SP)
+- `+0x0C`: `VM_FP` (saved word FP)
+- `+0x10`: `VM_CSP` (saved word CSP)
+- `+0x14`: `ticks` (number of hardware timer preemptions scheduled into this slot)
+- `+0x18`: `entry_pc` (initial entry point)
+
+---
+
+## 4. Instruction Set Architecture (ISA)
+
+All instructions begin with a 1-byte opcode. Immediate operands are little-endian (`s8` = signed 8-bit, `u8` = unsigned 8-bit, `s16` = signed 16-bit, `u16` = unsigned 16-bit, `i32` = signed/unsigned 32-bit).
+
+### 4.1 Stack & Constants
+| Opcode | Mnemonic | Operands | Stack Effect | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `0x00` | `NOP` | — | `—` | No operation |
+| `0x01` | `PUSH_I32` | `imm32` | `-> imm32` | Push 32-bit signed/unsigned constant |
+| `0x02` | `PUSH_I8` | `s8` | `-> s8` | Push sign-extended 8-bit constant |
+| `0x03` | `PUSH_0` | — | `-> 0` | Push constant `0` |
+| `0x04` | `PUSH_1` | — | `-> 1` | Push constant `1` |
+| `0x05` | `DUP` | — | `a -> a, a` | Duplicate top of stack |
+| `0x06` | `DROP` | — | `a ->` | Discard top of stack |
+| `0x07` | `SWAP` | — | `a, b -> b, a` | Swap top two stack words |
+
+### 4.2 Locals & Globals
+| Opcode | Mnemonic | Operands | Stack Effect | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `0x10` | `LOAD_LOCAL` | `u8 idx` | `-> val` | Push `STACK[FP + idx]` |
+| `0x11` | `STORE_LOCAL`| `u8 idx` | `val ->` | Pop into `STACK[FP + idx]` |
+| `0x12` | `LOAD_GLOB` | `u16 idx` | `-> val` | Push 32-bit word at `0x20000 + idx * 4` |
+| `0x13` | `STORE_GLOB` | `u16 idx` | `val ->` | Pop 32-bit word into `0x20000 + idx * 4` |
+| `0x14` | `INC_LOCAL` | `u8 idx, s8 delta` | `—` | `STACK[FP + idx] += delta` in place |
+
+### 4.3 Memory Access
+| Opcode | Mnemonic | Operands | Stack Effect | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `0x20` | `LOAD8` | — | `addr -> u8` | Read unsigned byte at `VM_MEM[addr & 0xFFFFF]` |
+| `0x21` | `LOAD32` | — | `addr -> i32` | Read little-endian 32-bit word at `VM_MEM[addr & 0xFFFFC]` |
+| `0x22` | `STORE8` | — | `addr, val ->` | Write `val & 0xFF` to `VM_MEM[addr & 0xFFFFF]` |
+| `0x23` | `STORE32` | — | `addr, val ->` | Write 32-bit `val` to `VM_MEM[addr & 0xFFFFC]` |
+| `0x24` | `MEMCPY` | — | `dst, src, len ->` | Copy `len` bytes from `src` to `dst` |
+| `0x25` | `MEMSET` | — | `dst, val, len ->` | Fill `len` bytes at `dst` with `val & 0xFF` |
+
+### 4.4 Arithmetic, Bitwise & Comparisons
+| Opcode | Mnemonic | Stack Effect | Description |
+| :--- | :--- | :--- | :--- |
+| `0x30` | `ADD` | `a, b -> (a + b) \| 0` | 32-bit signed addition |
+| `0x31` | `SUB` | `a, b -> (a - b) \| 0` | 32-bit signed subtraction |
+| `0x32` | `MUL` | `a, b -> imul(a, b)` | 32-bit signed multiplication |
+| `0x33` | `DIV` | `a, b -> (b == 0 ? 0 : (a / b) \| 0)` | Safe 32-bit signed division |
+| `0x34` | `MOD` | `a, b -> (b == 0 ? 0 : (a % b) \| 0)` | Safe 32-bit signed modulo |
+| `0x35` | `NEG` | `a -> (-a) \| 0` | Two's complement negation |
+| `0x36` | `AND` | `a, b -> a & b` | Bitwise AND |
+| `0x37` | `OR` | `a, b -> a \| b` | Bitwise OR |
+| `0x38` | `XOR` | `a, b -> a ^ b` | Bitwise XOR |
+| `0x39` | `SHL` | `a, b -> a << (b & 31)` | Logical shift left |
+| `0x3A` | `SHR` | `a, b -> a >>> (b & 31)` | Logical shift right (unsigned) |
+| `0x3B` | `SAR` | `a, b -> a >> (b & 31)` | Arithmetic shift right (signed) |
+| `0x3C` | `NOT` | `a -> ~a` | Bitwise NOT |
+| `0x40` | `EQ` | `a, b -> (a == b ? 1 : 0)` | Equal |
+| `0x41` | `NE` | `a, b -> (a != b ? 1 : 0)` | Not equal |
+| `0x42` | `LT` | `a, b -> (a < b ? 1 : 0)` | Signed less than |
+| `0x43` | `GT` | `a, b -> (a > b ? 1 : 0)` | Signed greater than |
+| `0x44` | `LE` | `a, b -> (a <= b ? 1 : 0)` | Signed less than or equal |
+| `0x45` | `GE` | `a, b -> (a >= b ? 1 : 0)` | Signed greater than or equal |
+| `0x46` | `LNOT` | `a -> (a == 0 ? 1 : 0)` | Logical NOT |
+
+### 4.5 Control Flow, Calls & System Interface (32-Bit Offsets in v1.1)
+| Opcode | Mnemonic | Operands | Stack Effect | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `0x50` | `JMP` | `u32 target` | `—` | Unconditional jump to `VM_PC = target` |
+| `0x51` | `JZ` | `u32 target` | `cond ->` | Pop `cond`; if `cond == 0`, jump to `target` |
+| `0x52` | `JNZ` | `u32 target` | `cond ->` | Pop `cond`; if `cond != 0`, jump to `target` |
+| `0x53` | `CALL` | `u32 target, u8 argc, u8 locals` | `arg0..argN -> ret` | Save `(VM_PC, VM_FP)` on call stack, set `FP = SP - argc`, set `SP = FP + locals`, jump to `target` |
+| `0x54` | `RET` | — | `retVal -> retVal` | Pop return value, restore `(VM_PC, VM_FP)` from call stack, push `retVal` |
+| `0x55` | `SYSCALL` | `u8 id, u8 argc` | `arg0..argN -> ret` | Invoke native Core syscall `id` with `argc` arguments |
+| `0x56` | `YIELD` | — | `—` | Yield execution slice (triggers display present, input poll, and preemptive task switch) |
+| `0x57` | `CALL_IND`| `u8 argc, u8 locals` | `arg0..argN, target -> ret` | Indirect call to function address popped from top of stack |
+| `0x5F` | `HALT` | — | `exitCode ->` | Terminate VM execution and store `exitCode` |
+
+---
+
+## 5. System Call Interface (`SYSCALL id, argc`)
+
+| ID | Name | Signature | Description |
+| :--- | :--- | :--- | :--- |
+| `0` | `sys_debug` | `sys_debug(val)` | Write diagnostic integer to serial/host debug port |
+| `1` | `sys_present` | `sys_present()` | Blit `320×200` 8-bpp backbuffer (`0x80000`) through palette (`0x90000`) to native hardware display |
+| `2` | `sys_time_ms` | `sys_time_ms() -> ms` | Deterministic monotonic clock in milliseconds |
+| `3` | `sys_poll_key` | `sys_poll_key() -> ev` | Dequeue keyboard event (`bit 8`: down, `bits 0..7`: ASCII/keycode, `0` if none) |
+| `4` | `sys_poll_mouse` | `sys_poll_mouse(out_addr) -> packed` | Poll mouse into `(x, y, buttons)` and return `(x & 0xFFF) \| ((y & 0xFFF) << 12) \| (btn << 24)` |
+| `5` | `sys_rect_fill` | `sys_rect_fill(x, y, w, h, col)` | Hardware-accelerated clipped rectangle fill in `0x80000` |
+| `6` | `sys_draw_char` | `sys_draw_char(x, y, ch, fg, bg, font)` | Hardware-accelerated 8×8 glyph renderer using `0x91000` font bank |
+| `7` | `sys_disk_sync` | `sys_disk_sync(lba_start, count)` | Persist `SpiralFS` sectors (`0x28000`) to floppy/disk (via 82077AA FDC or BIOS `INT 13h` Real-Mode Write Thunk, plus full image sync) |
+| `8` | `sys_net_tx` | `sys_net_tx(buf_addr, len) -> ok` | Transmit frame via StudioNet virtual NIC (`0` if StudioNet card is absent) |
+| `9` | `sys_net_rx` | `sys_net_rx(buf_addr, max_len) -> len` | Receive frame from StudioNet RX ring (`0` if empty or card absent) |
+| `10` | `sys_beep` | `sys_beep(freq_hz, dur_ms)` | Trigger procedural UI synthesizer tone |
+| `11` | `sys_machine_id`| `sys_machine_id() -> id` | Return `1` on TabComp (`TC-32`), `2` on Hummingbird (`i586`) |
+| `12` | `sys_net_node` | `sys_net_node() -> addr` | Return hardware StudioNet node ID (`0x0001` on TabComp, `0x0002` on Hummingbird, `0` if no NIC) |
+| `13` | `sys_reboot` | `sys_reboot()` | Reload `SPIR` from `0x00000` and cold-restart the VM |

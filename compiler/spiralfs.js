@@ -1,11 +1,11 @@
 /**
- * SpiralOS — SpiralFS Filesystem Builder & Inspector (compiler/spiralfs.js)
+ * SpiralOS 1.1 — SpiralFS Filesystem Builder & Inspector (compiler/spiralfs.js)
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
- * Manages the 256 KB SpiralFS volume stored in Sectors 192..703 (offset 0x18000..0x57FFF)
- * of spiralos.img (mounted at vmRam[0x218000..0x257FFF] on both TabComp and Hummingbird).
+ * Manages the 320 KB SpiralFS volume stored in Sectors 320..959 (offset 0x28000..0x77FFF)
+ * of spiralos.img (mounted at vmRam[0x228000..0x277FFF] on both TabComp and Hummingbird).
  *
- * Volume Layout (relative to volume base 0x218000 in vmRam / 0x18000 in spiralos.img):
+ * Volume Layout (relative to volume base 0x228000 in vmRam / 0x28000 in spiralos.img):
  *   0x0000 .. 0x003F (64 B): Superblock
  *     0x00: Magic 0x53465053 ('SPFS')
  *     0x04: Version 1
@@ -14,20 +14,22 @@
  *   0x0040 .. 0x0FFF (63 * 64 = 4032 B): Directory Entries (each 64 bytes)
  *     0x00..0x27 (40 B): Null-terminated path (e.g. "/src/wm.sp")
  *     0x28 (i32): Flags (1 = file, 2 = dir, 0 = free)
- *     0x2C (i32): Data offset relative to volume base (0x1000 .. 0x3FFFF)
+ *     0x2C (i32): Data offset relative to volume base (0x1000 .. 0x4FFFF)
  *     0x30 (i32): File size in bytes
  *     0x34 (i32): Allocated capacity in bytes (multiple of 512)
  *     0x38 (i32): mtime / revision counter
  *     0x3C (i32): Simple additive byte checksum
- *   0x1000 .. 0x3FFFF (252 KB): File data sectors (512-byte aligned)
+ *   0x1000 .. 0x4FFFF (316 KB): File data sectors (512-byte aligned)
  */
 
 "use strict";
 
 const SPFS_MAGIC = 0x53465053; // 'SPFS'
-const SPFS_IMG_OFFSET = 192 * 512; // 0x18000 in spiralos.img
-const SPFS_VMRAM_BASE = 0x218000;  // 0x200000 + 0x18000 in vmRam
-const SPFS_SIZE = 512 * 512;       // 256 KB (512 sectors: 192..703)
+const SPFS_START_SECTOR = 320;
+const SPFS_IMG_OFFSET = SPFS_START_SECTOR * 512; // 0x28000 in spiralos.img
+const SPFS_VMRAM_BASE = 0x200000 + SPFS_IMG_OFFSET; // 0x228000 in vmRam
+const SPFS_SECTORS = 640; // 320 KB (Sectors 320..959)
+const SPFS_SIZE = SPFS_SECTORS * 512; // 0x50000 (327,680 bytes)
 const SPFS_MAX_FILES = 63;
 
 class SpiralFS {
@@ -44,7 +46,7 @@ class SpiralFS {
     this.dv.setUint32(0x00, SPFS_MAGIC, true);
     this.dv.setUint32(0x04, 1, true);
     this.dv.setUint32(0x08, SPFS_MAX_FILES, true);
-    this.dv.setUint32(0x0C, 0x1000, true); // Data starts at offset 4096 (Sector 200)
+    this.dv.setUint32(0x0C, 0x1000, true); // Data starts at offset 4096 (Sector 328)
   }
 
   _readEntryName(entryOff) {
@@ -68,7 +70,7 @@ class SpiralFS {
   _checksum(u8) {
     let sum = 0;
     for (let i = 0; i < u8.length; i++) {
-      sum = ((sum * 31) + u8[i]) | 0;
+      sum = ((Math.imul(sum, 31)) + u8[i]) | 0;
     }
     return sum;
   }
@@ -172,8 +174,10 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SpiralFS,
     SPFS_MAGIC,
+    SPFS_START_SECTOR,
     SPFS_IMG_OFFSET,
     SPFS_VMRAM_BASE,
+    SPFS_SECTORS,
     SPFS_SIZE,
     SPFS_MAX_FILES
   };

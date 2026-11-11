@@ -1,5 +1,5 @@
 // ============================================================================
-// SpiralOS — Master Desktop Compositor, Event Loop & Entry Point (/src/os.sp)
+// SpiralOS 1.1 — Master Desktop Compositor, Event Loop & Entry Point (/src/os.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 // ============================================================================
 
@@ -9,6 +9,7 @@ import "/src/gui.sp";
 import "/src/wm.sp";
 import "/src/net.sp";
 import "/src/cc.sp";
+import "/src/asm.sp";
 import "/src/apps1.sp";
 import "/src/apps2.sp";
 
@@ -83,6 +84,24 @@ void dispatch_focused_key(int ascii, int vk) {
   if (app == APP_CHAT)   app_key_chat(ascii);
 }
 
+void app_run_ticks() {
+  int now_ms = hal_time();
+  for (int i = 0; i < MAX_WINS; i++) {
+    if (win_used[i] == 1 && win_min[i] == 0) {
+      int app = win_app[i];
+      if (app >= 0 && app < 16) {
+        int iv = app_tick_interval[app];
+        if (iv > 0 && (now_ms - app_tick_last_ms[app]) >= iv) {
+          app_tick_last_ms[app] = now_ms;
+          app_tick_count[app] = app_tick_count[app] + 1;
+          if (app == APP_SNAKE)  snake_step();
+          if (app == APP_BLOCKS) blocks_step();
+        }
+      }
+    }
+  }
+}
+
 void draw_desktop_scene() {
   // 1. Top Aether Status Bar (y = 0..11)
   hal_rect(0, 0, 320, 12, thm_taskbar_bg);
@@ -95,9 +114,13 @@ void draw_desktop_scene() {
   }
   gui_button(108, 1, 36, 10, "Thm", 0);
   gui_button(148, 1, 44, 10, "Build", 0);
-  hal_str(200, 2, "SNet:OK", 10, -1);
+  if (g_has_snet == 1) {
+    hal_str(196, 2, "SNet:OK", 10, -1);
+  } else {
+    hal_str(196, 2, "no network", 12, -1);
+  }
   hal_itoa(g_uptime_frames, NUM_STR_BUF, 10);
-  hal_str(272, 2, NUM_STR_BUF, thm_taskbar_fg, -1);
+  hal_str(282, 2, NUM_STR_BUF, thm_taskbar_fg, -1);
 
   // 2. Wallpaper & Desktop Shortcut Icons
   gui_draw_wallpaper();
@@ -162,7 +185,6 @@ void draw_desktop_scene() {
 }
 
 void handle_mouse_down(int mx, int my) {
-  // 1. Check Top Bar (y < 12)
   if (my < 12) {
     if (mx >= 2 && mx < 54) {
       g_launcher_open = 1 - g_launcher_open;
@@ -179,7 +201,6 @@ void handle_mouse_down(int mx, int my) {
     return;
   }
 
-  // 2. Check Launcher Popup Menu
   if (g_launcher_open == 1) {
     g_launcher_open = 0;
     if (mx >= 2 && mx < 94 && my >= 14 && my < 168) {
@@ -190,7 +211,6 @@ void handle_mouse_down(int mx, int my) {
     }
   }
 
-  // 3. Check Bottom Taskbar (y >= 184)
   if (my >= 184) {
     int tx = 4;
     for (int k = 0; k < MAX_WINS; k++) {
@@ -206,7 +226,6 @@ void handle_mouse_down(int mx, int my) {
     return;
   }
 
-  // 4. Check Windows from front to back (reverse z-order)
   for (int zi = g_win_count - 1; zi >= 0; zi = zi - 1) {
     int wid = win_zorder[zi];
     if (wid >= 0 && win_used[wid] == 1 && win_min[wid] == 0) {
@@ -218,17 +237,14 @@ void handle_mouse_down(int mx, int my) {
         wm_focus(wid);
         int rx = mx - wx;
         int ry = my - wy;
-        // Close button [X]
         if (ry >= 2 && ry <= 12 && rx >= ww - 12 && rx < ww - 2) {
           wm_close(wid);
           return;
         }
-        // Minimize button [_]
         if (ry >= 2 && ry <= 12 && rx >= ww - 23 && rx < ww - 13) {
           win_min[wid] = 1;
           return;
         }
-        // Title bar drag
         if (ry <= 12) {
           g_drag_win = wid;
           g_drag_mode = 1;
@@ -236,20 +252,17 @@ void handle_mouse_down(int mx, int my) {
           g_drag_oy = ry;
           return;
         }
-        // Bottom-right resize grip
         if (rx >= ww - 8 && ry >= wh - 8) {
           g_drag_win = wid;
           g_drag_mode = 2;
           return;
         }
-        // Client area click
         dispatch_window_click(wid, rx, ry);
         return;
       }
     }
   }
 
-  // 5. Desktop Icons (left column x = 4..40, right column x = 276..316)
   if (mx >= 4 && mx <= 40) {
     if (my >= 16 && my < 44)  open_app_by_id(APP_FILES);
     if (my >= 46 && my < 74)  open_app_by_id(APP_EDIT);
@@ -274,7 +287,6 @@ int main() {
   apps1_init();
   apps2_init();
 
-  // Open two welcoming default windows on boot: System Monitor & SpiralSh Terminal
   open_app_by_id(APP_SYSMON);
   open_app_by_id(APP_SHELL);
 
@@ -283,15 +295,13 @@ int main() {
   g_mouse_btn = 0;
   g_prev_btn = 0;
 
-  // Signal desktop ready magic 'SPOS' (0x53504F53) at VMRAM_STATUS (0x0FFD00)
   w32(VMRAM_STATUS + 0x00, 0x53504F53);
   w32(VMRAM_STATUS + 0x1E * 4, wm_active_title_color());
 
   while (1) {
-    // 1. Poll StudioNet stack
     net_poll();
+    app_run_ticks();
 
-    // 2. Poll Mouse
     int mpack = hal_mouse(VMRAM_STATUS + 0x08);
     g_mouse_x = mpack & 0x3FF;
     g_mouse_y = (mpack >> 10) & 0x3FF;
@@ -321,7 +331,6 @@ int main() {
           win_h[g_drag_win] = nh;
         }
       } else if (g_focused_win >= 0 && win_app[g_focused_win] == APP_PAINT) {
-        // Continuous paint stroke while dragging inside Paint window
         int rx = g_mouse_x - win_x[g_focused_win];
         int ry = g_mouse_y - win_y[g_focused_win];
         app_click_paint(g_focused_win, rx, ry);
@@ -332,7 +341,6 @@ int main() {
     }
     g_prev_btn = g_mouse_btn;
 
-    // 3. Poll Keyboard (drain all queued events for instant typing response)
     while (1) {
       int kev = hal_key();
       if (kev == 0) break;
@@ -344,10 +352,8 @@ int main() {
       }
     }
 
-    // 4. Update active title color telemetry in VMRAM_STATUS + 0x78
     w32(VMRAM_STATUS + 0x78, wm_active_title_color());
 
-    // 5. Render Desktop & Yield Frame
     draw_desktop_scene();
     hal_yield();
   }

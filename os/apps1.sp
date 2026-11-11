@@ -1,5 +1,5 @@
 // ============================================================================
-// SpiralOS — Core Desktop Applications Part 1 (/src/apps1.sp)
+// SpiralOS 1.1 — Core Desktop Applications Part 1 (/src/apps1.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 //
 // Implements:
@@ -12,8 +12,9 @@
 //   7. System Monitor SpiralMon (APP_SYSMON)
 // ============================================================================
 
-const EDIT_BUF       = 0x058000; // 4 KB editor text buffer
-const SHELL_OUT_BUF  = 0x04B000; // 4 lines of 48B shell output
+const EDIT_BUF       = 0x050000; // 36 KB editor text buffer (0x050000..0x058FFF)
+const EDIT_SCRATCH   = 0x059000; // 28 KB editor splice scratch (0x059000..0x05FFFF)
+const SHELL_OUT_BUF  = 0x04B000; // 5 lines of 48B shell output
 const SHELL_IN_BUF   = 0x04B200; // 64B shell input line
 const PAINT_CANVAS   = 0x04C000; // 96 x 56 = 5376B paint canvas
 const NUM_STR_BUF    = 0x04DF00; // scratch number formatting buffer
@@ -27,11 +28,11 @@ int g_edit_dirty;
 int g_shell_in_len;
 int g_shell_lines;
 int g_paint_color;
-int g_paint_tool; // 0=brush, 1=rect, 2=fill
+int g_paint_tool;
 int g_Paint_strokes;
 int g_calc_acc;
 int g_calc_cur;
-int g_calc_op;    // 0=none, 1=+, 2=-, 3=*, 4=/
+int g_calc_op;
 int g_calc_entering;
 
 void edit_load_file(int path_str) {
@@ -39,8 +40,8 @@ void edit_load_file(int path_str) {
   if (idx < 0) return;
   g_edit_file_idx = idx;
   int sz = fs_entry_size(idx);
-  if (sz > 12000) sz = 12000;
-  hal_memset(EDIT_BUF, 0, 12288);
+  if (sz > 35000) sz = 35000;
+  hal_memset(EDIT_BUF, 0, 36000);
   hal_memcpy(EDIT_BUF, fs_entry_data_ptr(idx), sz);
   g_edit_len = sz;
   g_edit_cursor = 0;
@@ -57,7 +58,6 @@ void edit_save_current() {
   g_edit_dirty = 0;
 }
 
-// Replaces `const WM_TITLE_COLOR_OVERRIDE = <old>;` with new color in EDIT_BUF
 void edit_set_wm_title_color(int new_col) {
   int p = 0;
   while (p + 30 < g_edit_len) {
@@ -68,10 +68,10 @@ void edit_set_wm_title_color(int new_col) {
         end_pos = end_pos + 1;
       }
       int tail_len = g_edit_len - end_pos;
-      hal_memcpy(0x050000, EDIT_BUF + end_pos, tail_len);
+      hal_memcpy(EDIT_SCRATCH, EDIT_BUF + end_pos, tail_len);
       int nlen = hal_itoa(new_col, NUM_STR_BUF, 10);
       hal_memcpy(EDIT_BUF + val_pos, NUM_STR_BUF, nlen);
-      hal_memcpy(EDIT_BUF + val_pos + nlen, 0x050000, tail_len);
+      hal_memcpy(EDIT_BUF + val_pos + nlen, EDIT_SCRATCH, tail_len);
       g_edit_len = val_pos + nlen + tail_len;
       w8(EDIT_BUF + g_edit_len, 0);
       g_edit_dirty = 1;
@@ -98,12 +98,13 @@ void shell_print(int msg_str) {
 void shell_exec_cmd(int cmd_str) {
   if (hal_strcmp(cmd_str, "help") == 1) {
     shell_print("cmds: ls ps mem net cc rebuild asm");
-    shell_print("      theme ping clear ver reboot");
+    shell_print("      workers theme ping clear ver reboot");
     return;
   }
   if (hal_strcmp(cmd_str, "ver") == 1) {
-    if (g_machine_id == 1) shell_print("SpiralOS 1.0 on TabComp TC-32");
-    else shell_print("SpiralOS 1.0 on Hummingbird i586");
+    if (g_machine_id == 1) shell_print("SpiralOS 1.1 on TabComp TC-32");
+    else shell_print("SpiralOS 1.1 on Hummingbird i586");
+    shell_print(VMRAM_STATUS + 0x80);
     return;
   }
   if (hal_strcmp(cmd_str, "ls") == 1) {
@@ -120,11 +121,12 @@ void shell_exec_cmd(int cmd_str) {
     return;
   }
   if (hal_strcmp(cmd_str, "mem") == 1) {
-    shell_print("VM RAM: 4096 KB unified, SPIR: 64 KB");
+    shell_print("VM RAM: 4096 KB, SPIR: 128 KB");
     return;
   }
   if (hal_strcmp(cmd_str, "net") == 1) {
-    shell_print("StudioNet online: SNS/SDP/SSP active");
+    if (g_has_snet == 1) shell_print("StudioNet online: SNS/SDP/SSP active");
+    else shell_print("no network (StudioNet card absent)");
     return;
   }
   if (hal_strcmp(cmd_str, "ping") == 1) {
@@ -134,13 +136,19 @@ void shell_exec_cmd(int cmd_str) {
     return;
   }
   if (hal_strcmp(cmd_str, "cc") == 1 || hal_strcmp(cmd_str, "rebuild") == 1) {
-    cc_rebuild_os_image();
-    shell_print("Rebuilt SPIR OS image (Sectors 64..191)");
+    int rc = cc_rebuild_os_image();
+    if (rc > 0) shell_print("Rebuilt SPIR OS (Sectors 64..319)");
+    else shell_print(CC_ERR_MSG);
     return;
   }
   if (hal_strcmp(cmd_str, "asm") == 1) {
     asm_rebuild_native_cores();
     shell_print("Assembled TC-32 & x86 Native Cores OK");
+    return;
+  }
+  if (hal_strcmp(cmd_str, "workers") == 1) {
+    spawn_compute_workers(50000);
+    shell_print("Spawned 2 preemptive VM compute tasks");
     return;
   }
   if (hal_strcmp(cmd_str, "theme") == 1) {
@@ -169,9 +177,8 @@ void apps1_init() {
   hal_memset(SHELL_IN_BUF, 0, 64);
   g_shell_in_len = 0;
   g_shell_lines = 0;
-  shell_print("SpiralOS 1.0 ('help')");
+  shell_print("SpiralOS 1.1 ('help')");
 
-  // Initialize Paint canvas with a procedural starter pattern
   g_paint_color = 14;
   g_paint_tool = 0;
   g_Paint_strokes = 0;
@@ -180,14 +187,12 @@ void apps1_init() {
     w8(PAINT_CANVAS + (12 + (i >> 1)) * 96 + (20 + i), 11);
   }
 
-  // Initialize Calculator
   g_calc_acc = 0;
   g_calc_cur = 0;
   g_calc_op = 0;
   g_calc_entering = 1;
 }
 
-// 1. Draw & Click: File Manager
 void app_draw_files(int x, int y, int w, int h) {
   hal_rect(x + 4, y + 16, w - 8, h - 36, 16);
   int cnt = fs_count();
@@ -229,22 +234,18 @@ void app_click_files(int wid, int rx, int ry) {
   }
 }
 
-// 2. Draw & Click: Text Editor (SpiralEdit)
 void app_draw_edit(int x, int y, int w, int h) {
-  // Toolbar
   gui_button(x + 4,   y + 15, 44, 11, "wm.sp", 0);
   gui_button(x + 50,  y + 15, 52, 11, "Col196", 0);
   gui_button(x + 104, y + 15, 42, 11, "Save", g_edit_dirty);
   gui_button(x + 148, y + 15, 58, 11, "Rebuild", 0);
 
-  // Text area
   int tx = x + 4;
   int ty = y + 28;
   int tw = w - 8;
   int th = h - 32;
   hal_rect(tx, ty, tw, th, 16);
 
-  // Render visible lines from EDIT_BUF
   int max_rows = (th - 4) / 9;
   int max_cols = (tw - 6) / 8;
   int p = 0;
@@ -296,7 +297,7 @@ void app_key_edit(int ascii, int vk) {
     return;
   }
   if ((ascii >= 32 && ascii <= 126) || ascii == 13) {
-    if (g_edit_len < 12000) {
+    if (g_edit_len < 35000) {
       int ch = ascii;
       if (ch == 13) ch = 10;
       w8(EDIT_BUF + g_edit_len, ch);
@@ -307,7 +308,6 @@ void app_key_edit(int ascii, int vk) {
   }
 }
 
-// 3. Draw & Input: Terminal & Shell (SpiralSh)
 void app_draw_shell(int x, int y, int w, int h) {
   hal_rect(x + 4, y + 15, w - 8, h - 19, 0);
   int count = g_shell_lines;
@@ -343,10 +343,9 @@ void app_key_shell(int ascii, int vk) {
   }
 }
 
-// 4. Draw & Click: Self-Hosting Compiler & Build Tool (SpiralBuild)
 void app_draw_build(int x, int y, int w, int h) {
   hal_rect(x + 4, y + 15, w - 8, h - 36, 16);
-  hal_str(x + 8, y + 19, "Self-Hosting SpiralC v1.0", 14, -1);
+  hal_str(x + 8, y + 19, "Self-Hosting SpiralC v1.1", 14, -1);
   hal_str(x + 8, y + 31, "Target: SPIR Unified VM", 15, -1);
   hal_str(x + 8, y + 43, "TitleOverride:", 11, -1);
   hal_itoa(g_cc_parsed_override, NUM_STR_BUF, 10);
@@ -357,6 +356,9 @@ void app_draw_build(int x, int y, int w, int h) {
     hal_str(x + 8, y + 67, "Bytes:", 11, -1);
     hal_itoa(g_cc_last_bytes, NUM_STR_BUF, 10);
     hal_str(x + 60, y + 67, NUM_STR_BUF, 15, -1);
+  } else if (g_cc_last_status == -1) {
+    hal_str(x + 8, y + 55, CC_ERR_MSG, 12, -1);
+    hal_str(x + 8, y + 67, "Old image kept intact", 14, -1);
   } else {
     hal_str(x + 8, y + 55, "Status: Ready to compile", 7, -1);
   }
@@ -379,9 +381,7 @@ void app_click_build(int wid, int rx, int ry) {
   }
 }
 
-// 5. Draw & Click: Paint Program (SpiralPaint)
 void app_draw_paint(int x, int y, int w, int h) {
-  // 8-color swatch bar + Clear + Save buttons
   for (int c = 0; c < 8; c++) {
     int col = c + 9;
     hal_rect(x + 4 + c * 11, y + 15, 10, 10, col);
@@ -391,8 +391,6 @@ void app_draw_paint(int x, int y, int w, int h) {
   }
   gui_button(x + 94,  y + 15, 28, 11, "Clr", 0);
   gui_button(x + 124, y + 15, 34, 11, "Save", 0);
-
-  // Blit 96x56 canvas at (x + 4, y + 29)
   hal_blit(x + 4, y + 29, 96, 56, PAINT_CANVAS);
 }
 
@@ -424,7 +422,6 @@ void app_click_paint(int wid, int rx, int ry) {
   }
 }
 
-// 6. Draw & Click: Calculator (SpiralCalc)
 void calc_press_digit(int d) {
   if (g_calc_entering == 0) {
     g_calc_cur = d;
@@ -505,29 +502,36 @@ void app_key_calc(int ascii) {
   else if (ascii == 99 || ascii == 67) { g_calc_acc = 0; g_calc_cur = 0; g_calc_op = 0; g_calc_entering = 1; }
 }
 
-// 7. Draw: System Monitor (SpiralMon)
 void app_draw_sysmon(int x, int y, int w, int h) {
   hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
   if (g_machine_id == 1) hal_str(x + 8, y + 20, "CPU: TabComp TC-32", 14, -1);
   else hal_str(x + 8, y + 20, "CPU: i586 Protected", 14, -1);
 
   hal_str(x + 8, y + 32, "Tasks:", 11, -1);
-  hal_itoa(g_num_tasks, NUM_STR_BUF, 10);
+  int hw_tasks = r32(VMRAM_SCHED_HDR + 4);
+  hal_itoa(g_num_tasks + hw_tasks - 1, NUM_STR_BUF, 10);
   hal_str(x + 60, y + 32, NUM_STR_BUF, 15, -1);
+
+  hal_str(x + 92, y + 32, "Sw:", 11, -1);
+  hal_itoa(r32(VMRAM_SCHED_HDR + 16), NUM_STR_BUF, 10);
+  hal_str(x + 118, y + 32, NUM_STR_BUF, 10, -1);
 
   hal_str(x + 8, y + 44, "VM Op:", 11, -1);
   hal_itoa(hal_info(2), NUM_STR_BUF, 10);
   hal_str(x + 60, y + 44, NUM_STR_BUF, 15, -1);
 
-  hal_str(x + 8, y + 56, "NetTX:", 11, -1);
-  hal_itoa(g_net_tx_pkts, NUM_STR_BUF, 10);
-  hal_str(x + 60, y + 56, NUM_STR_BUF, 10, -1);
+  if (g_has_snet == 1) {
+    hal_str(x + 8, y + 56, "NetTX:", 11, -1);
+    hal_itoa(g_net_tx_pkts, NUM_STR_BUF, 10);
+    hal_str(x + 60, y + 56, NUM_STR_BUF, 10, -1);
 
-  hal_str(x + 104, y + 56, "RX:", 11, -1);
-  hal_itoa(g_net_rx_pkts, NUM_STR_BUF, 10);
-  hal_str(x + 130, y + 56, NUM_STR_BUF, 10, -1);
+    hal_str(x + 104, y + 56, "RX:", 11, -1);
+    hal_itoa(g_net_rx_pkts, NUM_STR_BUF, 10);
+    hal_str(x + 130, y + 56, NUM_STR_BUF, 10, -1);
+  } else {
+    hal_str(x + 8, y + 56, "Net: no network", 12, -1);
+  }
 
-  // Memory usage bar
   hal_rect(x + 8, y + 70, w - 16, 8, 8);
   hal_rect(x + 8, y + 70, (w - 16) / 3, 8, thm_accent);
 }

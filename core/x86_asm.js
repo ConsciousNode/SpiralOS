@@ -1,5 +1,5 @@
 /**
- * SpiralOS — Clean Symbolic x86 Assembler Helper (16-bit & 32-bit)
+ * SpiralOS 1.1 — Clean Symbolic x86 Assembler Helper (16-bit & 32-bit) + Listing Emitter
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  */
 
@@ -11,12 +11,33 @@ const R = {
   AL: 0,  CL: 1,  DL: 2,  BL: 3,  AH: 4,  CH: 5,  DH: 6,  BH: 7
 };
 
+const REG32_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+
 class X86Builder {
   constructor(baseAddr = 0) {
     this.baseAddr = baseAddr >>> 0;
     this.buf = [];
     this.labels = {};
     this.fixups = [];
+    this.asmLines = [];
+    this._rawHexPending = "";
+  }
+
+  _flushHex() {
+    while (this._rawHexPending.length > 0) {
+      const chunk = this._rawHexPending.slice(0, 64);
+      this._rawHexPending = this._rawHexPending.slice(64);
+      this.asmLines.push("  .hex " + chunk);
+    }
+  }
+
+  _emitHexBytes(arr) {
+    for (let i = 0; i < arr.length; i++) {
+      const b = arr[i] & 0xFF;
+      this.buf.push(b);
+      this._rawHexPending += b.toString(16).padStart(2, "0");
+    }
+    if (this._rawHexPending.length >= 64) this._flushHex();
   }
 
   pc() {
@@ -28,28 +49,30 @@ class X86Builder {
   }
 
   label(name) {
+    this._flushHex();
     this.labels[name] = this.pc();
+    this.asmLines.push(name + ":");
   }
 
   u8(v) {
-    this.buf.push(v & 0xFF);
+    this._emitHexBytes([v & 0xFF]);
   }
 
   u16(v) {
-    this.buf.push(v & 0xFF, (v >>> 8) & 0xFF);
+    this._emitHexBytes([v & 0xFF, (v >>> 8) & 0xFF]);
   }
 
   u32(v) {
-    this.buf.push(
+    this._emitHexBytes([
       v & 0xFF,
       (v >>> 8) & 0xFF,
       (v >>> 16) & 0xFF,
       (v >>> 24) & 0xFF
-    );
+    ]);
   }
 
   bytes(arr) {
-    for (let i = 0; i < arr.length; i++) this.u8(arr[i]);
+    this._emitHexBytes(arr);
   }
 
   padTo(offsetBytes, fillVal = 0) {
@@ -64,7 +87,6 @@ class X86Builder {
     this.u8(((scale & 3) << 6) | ((index & 7) << 3) | (base & 7));
   }
 
-  // [base + disp] in 32-bit mode
   memRegDisp(regField, baseReg, disp = 0) {
     if (disp === 0 && baseReg !== R.EBP) {
       this.modrm(0, regField, baseReg);
@@ -80,7 +102,6 @@ class X86Builder {
     }
   }
 
-  // [base + index * (1<<scale) + disp] in 32-bit mode
   memSib(regField, baseReg, indexReg, scale = 0, disp = 0) {
     if (disp === 0 && baseReg !== R.EBP) {
       this.modrm(0, regField, 4);
@@ -96,25 +117,55 @@ class X86Builder {
     }
   }
 
+  _pushBytesRaw(...b) {
+    for (let i = 0; i < b.length; i++) this.buf.push(b[i] & 0xFF);
+  }
+
   movRegImm32(reg, imm32) {
-    this.u8(0xB8 + (reg & 7));
-    this.u32(imm32);
+    this._flushHex();
+    const r = reg & 7;
+    const u = imm32 >>> 0;
+    this._pushBytesRaw(0xB8 + r, u & 0xFF, (u >>> 8) & 0xFF, (u >>> 16) & 0xFF, (u >>> 24) & 0xFF);
+    this.asmLines.push("  mov_ri " + REG32_NAMES[r] + ", " + (imm32 | 0));
   }
 
   movRegLabel32(reg, labelName) {
-    this.u8(0xB8 + (reg & 7));
+    this._flushHex();
+    const r = reg & 7;
+    this._pushBytesRaw(0xB8 + r);
     this.fixups.push({ pos: this.buf.length, label: labelName, type: "ABS32" });
-    this.u32(0);
+    this._pushBytesRaw(0, 0, 0, 0);
+    this.asmLines.push("  mov_rl " + REG32_NAMES[r] + ", " + labelName);
   }
 
   movRegReg32(dst, src) {
-    this.u8(0x89);
-    this.modrm(3, src, dst);
+    this._flushHex();
+    this._pushBytesRaw(0x89, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  mov_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+
+  _emitMemDispRaw(regField, baseReg, disp) {
+    const modrm = (m, r, rm) => (((m & 3) << 6) | ((r & 7) << 3) | (rm & 7));
+    if (disp === 0 && baseReg !== R.EBP) {
+      this._pushBytesRaw(modrm(0, regField, baseReg));
+      if (baseReg === R.ESP) this._pushBytesRaw(0x24);
+    } else if (disp >= -128 && disp <= 127) {
+      this._pushBytesRaw(modrm(1, regField, baseReg));
+      if (baseReg === R.ESP) this._pushBytesRaw(0x24);
+      this._pushBytesRaw(disp & 0xFF);
+    } else {
+      this._pushBytesRaw(modrm(2, regField, baseReg));
+      if (baseReg === R.ESP) this._pushBytesRaw(0x24);
+      const u = disp >>> 0;
+      this._pushBytesRaw(u & 0xFF, (u >>> 8) & 0xFF, (u >>> 16) & 0xFF, (u >>> 24) & 0xFF);
+    }
   }
 
   movRegMem32(dst, base, disp = 0) {
-    this.u8(0x8B);
-    this.memRegDisp(dst, base, disp);
+    this._flushHex();
+    this._pushBytesRaw(0x8B);
+    this._emitMemDispRaw(dst, base, disp | 0);
+    this.asmLines.push(`  mov_rm ${REG32_NAMES[dst & 7]}, ${REG32_NAMES[base & 7]}, ${disp | 0}`);
   }
 
   movRegSib32(dst, base, index, scale = 0, disp = 0) {
@@ -123,8 +174,10 @@ class X86Builder {
   }
 
   movMemReg32(base, disp, src) {
-    this.u8(0x89);
-    this.memRegDisp(src, base, disp);
+    this._flushHex();
+    this._pushBytesRaw(0x89);
+    this._emitMemDispRaw(src, base, disp | 0);
+    this.asmLines.push(`  mov_mr ${REG32_NAMES[base & 7]}, ${disp | 0}, ${REG32_NAMES[src & 7]}`);
   }
 
   movSibReg32(base, index, scale, disp, src) {
@@ -133,9 +186,12 @@ class X86Builder {
   }
 
   movMemImm32(base, disp, imm32) {
-    this.u8(0xC7);
-    this.memRegDisp(0, base, disp);
-    this.u32(imm32);
+    this._flushHex();
+    this._pushBytesRaw(0xC7);
+    this._emitMemDispRaw(0, base, disp | 0);
+    const u = imm32 >>> 0;
+    this._pushBytesRaw(u & 0xFF, (u >>> 8) & 0xFF, (u >>> 16) & 0xFF, (u >>> 24) & 0xFF);
+    this.asmLines.push(`  mov_mi ${REG32_NAMES[base & 7]}, ${disp | 0}, ${imm32 | 0}`);
   }
 
   movzxRegMem8(dst, base, disp = 0) {
@@ -174,53 +230,70 @@ class X86Builder {
     this.memSib(src16, base, index, scale, disp);
   }
 
-  addRegReg32(dst, src) { this.u8(0x01); this.modrm(3, src, dst); }
-  subRegReg32(dst, src) { this.u8(0x29); this.modrm(3, src, dst); }
-  andRegReg32(dst, src) { this.u8(0x21); this.modrm(3, src, dst); }
-  orRegReg32(dst, src)  { this.u8(0x09); this.modrm(3, src, dst); }
-  xorRegReg32(dst, src) { this.u8(0x31); this.modrm(3, src, dst); }
-  cmpRegReg32(a, b)     { this.u8(0x39); this.modrm(3, b, a); }
+  addRegReg32(dst, src) {
+    this._flushHex();
+    this._pushBytesRaw(0x01, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  add_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+  subRegReg32(dst, src) {
+    this._flushHex();
+    this._pushBytesRaw(0x29, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  sub_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+  andRegReg32(dst, src) {
+    this._flushHex();
+    this._pushBytesRaw(0x21, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  and_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+  orRegReg32(dst, src) {
+    this._flushHex();
+    this._pushBytesRaw(0x09, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  or_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+  xorRegReg32(dst, src) {
+    this._flushHex();
+    this._pushBytesRaw(0x31, 0xC0 | ((src & 7) << 3) | (dst & 7));
+    this.asmLines.push("  xor_rr " + REG32_NAMES[dst & 7] + ", " + REG32_NAMES[src & 7]);
+  }
+  cmpRegReg32(a, b) {
+    this._flushHex();
+    this._pushBytesRaw(0x39, 0xC0 | ((b & 7) << 3) | (a & 7));
+    this.asmLines.push("  cmp_rr " + REG32_NAMES[a & 7] + ", " + REG32_NAMES[b & 7]);
+  }
 
   imulRegReg32(dst, src) {
     this.u8(0x0F); this.u8(0xAF);
     this.modrm(3, dst, src);
   }
 
-  addRegImm32(reg, imm) {
-    if (imm >= -128 && imm <= 127) {
-      this.u8(0x83); this.modrm(3, 0, reg); this.u8(imm);
+  _emitAluRegImm(mnem, subop, reg, imm) {
+    this._flushHex();
+    const r = reg & 7;
+    const v = imm | 0;
+    if (v >= -128 && v <= 127) {
+      this._pushBytesRaw(0x83, 0xC0 | ((subop & 7) << 3) | r, v & 0xFF);
     } else {
-      this.u8(0x81); this.modrm(3, 0, reg); this.u32(imm);
+      const u = v >>> 0;
+      this._pushBytesRaw(0x81, 0xC0 | ((subop & 7) << 3) | r, u & 0xFF, (u >>> 8) & 0xFF, (u >>> 16) & 0xFF, (u >>> 24) & 0xFF);
     }
+    this.asmLines.push(`  ${mnem} ${REG32_NAMES[r]}, ${v}`);
   }
 
-  subRegImm32(reg, imm) {
-    if (imm >= -128 && imm <= 127) {
-      this.u8(0x83); this.modrm(3, 5, reg); this.u8(imm);
-    } else {
-      this.u8(0x81); this.modrm(3, 5, reg); this.u32(imm);
-    }
+  addRegImm32(reg, imm) { this._emitAluRegImm("add_ri", 0, reg, imm); }
+  subRegImm32(reg, imm) { this._emitAluRegImm("sub_ri", 5, reg, imm); }
+  andRegImm32(reg, imm) { this._emitAluRegImm("and_ri", 4, reg, imm); }
+  cmpRegImm32(reg, imm) { this._emitAluRegImm("cmp_ri", 7, reg, imm); }
+
+  _emitShiftRegImm(mnem, subop, reg, count) {
+    this._flushHex();
+    const r = reg & 7;
+    this._pushBytesRaw(0xC1, 0xC0 | ((subop & 7) << 3) | r, count & 0xFF);
+    this.asmLines.push(`  ${mnem} ${REG32_NAMES[r]}, ${count & 0xFF}`);
   }
 
-  andRegImm32(reg, imm) {
-    if (imm >= -128 && imm <= 127) {
-      this.u8(0x83); this.modrm(3, 4, reg); this.u8(imm);
-    } else {
-      this.u8(0x81); this.modrm(3, 4, reg); this.u32(imm);
-    }
-  }
-
-  cmpRegImm32(reg, imm) {
-    if (imm >= -128 && imm <= 127) {
-      this.u8(0x83); this.modrm(3, 7, reg); this.u8(imm);
-    } else {
-      this.u8(0x81); this.modrm(3, 7, reg); this.u32(imm);
-    }
-  }
-
-  shlRegImm(reg, count) { this.u8(0xC1); this.modrm(3, 4, reg); this.u8(count); }
-  shrRegImm(reg, count) { this.u8(0xC1); this.modrm(3, 5, reg); this.u8(count); }
-  sarRegImm(reg, count) { this.u8(0xC1); this.modrm(3, 7, reg); this.u8(count); }
+  shlRegImm(reg, count) { this._emitShiftRegImm("shl_ri", 4, reg, count); }
+  shrRegImm(reg, count) { this._emitShiftRegImm("shr_ri", 5, reg, count); }
+  sarRegImm(reg, count) { this._emitShiftRegImm("sar_ri", 7, reg, count); }
 
   shlRegCl(reg) { this.u8(0xD3); this.modrm(3, 4, reg); }
   shrRegCl(reg) { this.u8(0xD3); this.modrm(3, 5, reg); }
@@ -229,15 +302,25 @@ class X86Builder {
   negReg32(reg) { this.u8(0xF7); this.modrm(3, 3, reg); }
   divReg32(reg) { this.u8(0xF7); this.modrm(3, 6, reg); }
   idivReg32(reg){ this.u8(0xF7); this.modrm(3, 7, reg); }
-  cdq()         { this.u8(0x99); }
+  cdq()         { this._flushHex(); this._pushBytesRaw(0x99); this.asmLines.push("  cdq"); }
 
-  pushReg32(reg) { this.u8(0x50 + (reg & 7)); }
-  popReg32(reg)  { this.u8(0x58 + (reg & 7)); }
+  pushReg32(reg) {
+    this._flushHex();
+    this._pushBytesRaw(0x50 + (reg & 7));
+    this.asmLines.push("  push " + REG32_NAMES[reg & 7]);
+  }
+  popReg32(reg) {
+    this._flushHex();
+    this._pushBytesRaw(0x58 + (reg & 7));
+    this.asmLines.push("  pop " + REG32_NAMES[reg & 7]);
+  }
 
   jmpLabel(name) {
-    this.u8(0xE9);
+    this._flushHex();
+    this._pushBytesRaw(0xE9);
     this.fixups.push({ pos: this.buf.length, label: name, type: "REL32" });
-    this.u32(0);
+    this._pushBytesRaw(0, 0, 0, 0);
+    this.asmLines.push("  jmp " + name);
   }
 
   jmpReg32(reg) {
@@ -246,20 +329,29 @@ class X86Builder {
   }
 
   callLabel(name) {
-    this.u8(0xE8);
+    this._flushHex();
+    this._pushBytesRaw(0xE8);
     this.fixups.push({ pos: this.buf.length, label: name, type: "REL32" });
-    this.u32(0);
+    this._pushBytesRaw(0, 0, 0, 0);
+    this.asmLines.push("  call " + name);
   }
 
-  ret() { this.u8(0xC3); }
+  ret() {
+    this._flushHex();
+    this._pushBytesRaw(0xC3);
+    this.asmLines.push("  ret");
+  }
 
-  // Conditional jumps (32-bit near Jcc: 0F 8x rel32)
-  // cc: 0x84=JE/JZ, 0x85=JNE/JNZ, 0x8C=JL, 0x8D=JGE, 0x8E=JLE, 0x8F=JG, 0x82=JB, 0x87=JA
   jccLabel(cc, name) {
-    this.u8(0x0F);
-    this.u8(cc & 0xFF);
+    this._flushHex();
+    this._pushBytesRaw(0x0F, cc & 0xFF);
     this.fixups.push({ pos: this.buf.length, label: name, type: "REL32" });
-    this.u32(0);
+    this._pushBytesRaw(0, 0, 0, 0);
+    const jccNames = {
+      0x84: "je", 0x85: "jne", 0x8C: "jl", 0x8D: "jge",
+      0x8E: "jle", 0x8F: "jg", 0x82: "jb", 0x87: "ja"
+    };
+    this.asmLines.push("  " + (jccNames[cc & 0xFF] || "jcc") + " " + name);
   }
 
   jeLabel(name)  { this.jccLabel(0x84, name); }
@@ -271,15 +363,12 @@ class X86Builder {
   jbLabel(name)  { this.jccLabel(0x82, name); }
   jaLabel(name)  { this.jccLabel(0x87, name); }
 
-  // SETcc AL: 0F 9x C0
-  // cc: 0x94=SETE, 0x95=SETNE, 0x9C=SETL, 0x9E=SETLE, 0x9F=SETG, 0x9D=SETGE, 0x92=SETB, 0x97=SETA
   setccAl(cc) {
     this.u8(0x0F);
     this.u8(cc & 0xFF);
     this.modrm(3, 0, R.AL);
   }
 
-  // Port I/O
   inAlDx()   { this.u8(0xEC); }
   inAxDx()   { this.u8(0x66); this.u8(0xED); }
   inEaxDx()  { this.u8(0xED); }
@@ -289,22 +378,25 @@ class X86Builder {
   inAlImm8(p)  { this.u8(0xE4); this.u8(p); }
   outImm8Al(p) { this.u8(0xE6); this.u8(p); }
 
-  cld()      { this.u8(0xFC); }
-  cli()      { this.u8(0xFA); }
-  hlt()      { this.u8(0xF4); }
-  repMovsd() { this.u8(0xF3); this.u8(0xA5); }
-  repMovsb() { this.u8(0xF3); this.u8(0xA4); }
-  repStosd() { this.u8(0xF3); this.u8(0xAB); }
-  repStosb() { this.u8(0xF3); this.u8(0xAA); }
+  cld()      { this._flushHex(); this._pushBytesRaw(0xFC); this.asmLines.push("  cld"); }
+  cli()      { this._flushHex(); this._pushBytesRaw(0xFA); this.asmLines.push("  cli"); }
+  hlt()      { this._flushHex(); this._pushBytesRaw(0xF4); this.asmLines.push("  hlt"); }
+  repMovsd() { this._flushHex(); this._pushBytesRaw(0xF3, 0xA5); this.asmLines.push("  rep_movsd"); }
+  repMovsb() { this._flushHex(); this._pushBytesRaw(0xF3, 0xA4); this.asmLines.push("  rep_movsb"); }
+  repStosd() { this._flushHex(); this._pushBytesRaw(0xF3, 0xAB); this.asmLines.push("  rep_stosd"); }
+  repStosb() { this._flushHex(); this._pushBytesRaw(0xF3, 0xAA); this.asmLines.push("  rep_stosb"); }
 
   labelTable32(names) {
+    this._flushHex();
     for (const n of names) {
       this.fixups.push({ pos: this.buf.length, label: n, type: "ABS32" });
-      this.u32(0);
+      this._pushBytesRaw(0, 0, 0, 0);
+      this.asmLines.push("  .dd " + n);
     }
   }
 
   finalize() {
+    this._flushHex();
     const out = new Uint8Array(this.buf);
     const dv = new DataView(out.buffer);
     for (const f of this.fixups) {

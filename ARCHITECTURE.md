@@ -1,82 +1,68 @@
-# SpiralOS Architecture Specification (`ARCHITECTURE.md`)
+# SpiralOS 1.1 Architecture & Prior Art (`ARCHITECTURE.md`)
 
 **Studio:** ConsciousNode SoftWorks · **Licence:** MIT
 
----
+SpiralOS 1.1 ("Real Spiral") is a complete, self-hosting graphical operating system engineered from the first byte to boot and run identically from a single **1.44 MB floppy image (`spiralos.img`)** across two radically different hardware architectures:
 
-## 1. Design Philosophy & Prior Art
-
-SpiralOS solves a classic systems challenge: **how can a single, bit-identical operating system image boot, render a responsive graphical desktop, communicate over a network, and rebuild itself from source on two radically different CPU architectures (`TC-32` RISC and `i586` CISC)?**
-
-We drew directly on five historical systems and documented exactly what we took from each:
-
-1. **Inferno / Dis VM (Bell Labs, 1995)**:
-   - *What we took*: Strict separation between a small per-machine native platform layer (the **Spiral Core**, analogous to Inferno's native `emu`/kernel) and a portable, deterministic virtual machine (`SpiralVM`) above which 100% of OS services, windowing, networking, and user applications run as portable bytecode.
-2. **UCSD p-System (1977) & Smalltalk-80 (Xerox PARC, 1980)**:
-   - *What we took*: A unified, portable **bootable disk volume layout (`spiralos.img`)** containing native bootstrap tracks followed by a portable bytecode image (`SPIR`) and a contiguous block-allocated filesystem (`SpiralFS`), plus a zero-copy activation-frame calling convention (`CALL`/`ENTER`/`RET`).
-3. **Project Oberon (ETH Zürich, Wirth & Gutknecht, 1989)**:
-   - *What we took*: Single-address-space modular simplicity (`import "/src/...";`), fast in-memory compilation (`SpiralC`), tiled/overlapping reactive event loop structure, and an alternate-history 1990s workstation aesthetic (honored directly in our `/themes/oberon.thm` "ETH Ceres Paper 1990" theme).
-4. **KolibriOS / MenuetOS**:
-   - *What we took*: High-density, fast integer system-call ABI for immediate-mode window drawing, rectangle fills, bitmap text rendering, mouse/keyboard polling, and packing a complete graphical desktop + 14 applications + compiler into a single 1.44 MB floppy image.
-5. **Xinu (Comer, 1984)**:
-   - *What we took*: Transparent, layered design where every subsystem (process table, IPC, filesystem, network stack, window manager, compiler) is small enough to read and audit end-to-end with zero black boxes.
+- **TabComp (`TC-32`)**: A 32-bit RISC fantasy workstation (`320×200` 8-bpp indexed framebuffer, word-addressed RAM, custom system call & timer traps).
+- **Hummingbird (`i586`)**: A real-architecture x86 PC booting via 16-bit BIOS `INT 13h`, switching to 32-bit Protected Mode with paging, VBE `640×480` linear framebuffer (`32-bpp` and `24-bpp` fallback), 8254 PIT + 8259A PIC hardware interrupts, PS/2 controller, 82077AA FDC + 16-bit Real-Mode BIOS `INT 13h` disk write thunk, and StudioNet I/O ports (`0x500..0x518`).
 
 ---
 
-## 2. Unified Disk Image Layout (`spiralos.img` — 1.44 MB / 2,880 Sectors)
+## 1. Unified 1.44 MB Floppy Disk Map (`spiralos.img`)
 
-The exact same `1,474,560`-byte image boots unchanged on both Hummingbird (as a 1.44 MB 3.5" floppy) and TabComp (as a mounted disk/cartridge):
+A single `1,474,560`-byte (`2,880` × 512-byte sectors) disk image serves as both a standard x86 BIOS boot floppy and a TabComp bootable cartridge/disk:
 
 | Sector Range | Byte Offset | Size | Contents |
 | :--- | :--- | :--- | :--- |
-| **Sector 0** | `0x00000 .. 0x001FF` | `512 B` | **Hummingbird x86 16-Bit Real-Mode BIOS Bootloader** (`0x7C00`, FAT12 BPB, `INT 10h` VBE `0x4112` mode set, `INT 13h` loader, A20 gate, GDT, 4 MB PSE Page Directory setup, `CR0.PE \| CR0.PG` switch) |
-| **Sectors 1..31** | `0x00200 .. 0x03FFF` | `15.5 KB` | **Hummingbird x86 32-Bit Protected-Mode Core** (`0x00008000`: PS/2 keyboard & mouse driver, VBE 2× LFB blitter, 8237A DMA + 82077AA FDC sector write-back driver, StudioNet driver, PIT speaker, and native x86 SpiralVM interpreter) |
-| **Sectors 32..63** | `0x04000 .. 0x07FFF` | `16 KB` | **TabComp Native Core (`TC-32` machine code)** (`'TC32'` header + `3,600`-byte native `TC-32` binary implementing the hardware HAL and native TC-32 SpiralVM interpreter) |
-| **Sectors 64..191** | `0x08000 .. 0x17FFF` | `64 KB` | **`SPIR` Portable Boot Bytecode Image** (`32`-byte `SPIR` header + compiled SpiralVM instructions at `0x0020..0xCFFF` + string pool at `0xD000..0xFFFF`) |
-| **Sectors 192..703** | `0x18000 .. 0x57FFF` | `256 KB` | **`SPFS` SpiralFS Filesystem Volume** (`64`-byte superblock + `63 × 64 B` directory table in Sectors `192..199`, file data sectors in `200..703`) |
-| **Sectors 704..2879** | `0x58000 .. 0x167FFF` | `1,114 KB` | Free floppy sectors (available for additional user files and expansion) |
+| **Sector `0`** | `0x000000 .. 0x0001FF` | `512 B` | **x86 Stage 1 MBR Bootloader** (`0x7C00`, `0x55AA` signature) + TabComp boot header metadata (`0x01E0..0x01EF`). Loads Stage 2 (`Sector 1`) to `0x7E00`. |
+| **Sector `1`** | `0x000200 .. 0x0003FF` | `512 B` | **x86 Stage 2 Loader (`0x7E00`) & 16-Bit Real-Mode BIOS Write Thunk (`0x7F40`)**. Scans VBE mode list (`32-bpp` / `24-bpp` fallback), reads Sectors `2..31` and `64..959` via track-safe `INT 13h` (never crossing 18-sector track boundaries, 3 retries on `CF=1`), sets up GDT & Page Tables (mapping `PhysBasePtr`), and enters 32-bit Protected Mode at `0x8000`. |
+| **Sectors `2 .. 31`** | `0x000400 .. 0x007FFF` | `15 KB` | **x86 32-Bit Protected-Mode Native Core** (`7,625` bytes assembled from `/src/core_x86.asm`). Includes 8259A PIC + 8254 PIT `IRQ0` (`IDT 0x20`) preemptive scheduler, VBE `32-bpp`/`24-bpp` upscaling blitter, PS/2 keyboard & mouse driver, StudioNet driver (`0x500`), FDC + BIOS thunk persistence, and the x86 `SPIR` bytecode interpreter. |
+| **Sectors `32 .. 63`** | `0x008000 .. 0x00FFFF` | `16 KB` | **TabComp `TC-32` Native Core** (`4,360` bytes / `1,090` 32-bit words assembled from `/src/core_tc32.asm`). Includes the `TC-32` `SPIR` bytecode interpreter, timer-quantum preemptive task switcher, blitter, StudioNet MMIO bridge, and disk sync. |
+| **Sectors `64 .. 319`** | `0x010000 .. 0x02FFFF` | `128 KB` | **`SPIR` Portable OS Bytecode Image** (`89,800` code bytes + `3,264` string bytes). Loaded into VM memory `0x00000..0x1FFFF` on both machines. |
+| **Sectors `320 .. 959`**| `0x030000 .. 0x07FFFF` | `320 KB` | **`SpiralFS` Volume** (`22` files, including all `/src/*.sp` OS & compiler sources, `/src/core_x86.asm`, `/src/core_tc32.asm`, 4 `/etc/*.thm` themes, and user files). Loaded into VM memory `0x28000..0x77FFF`. |
+| **Sectors `960 .. 2879`**| `0x080000 .. 0x167FFF`| `960 KB` | Free disk sectors / scratch space. |
 
 ---
 
-## 3. Two-Layer System Architecture
+## 2. In-OS Self-Hosting Compiler (`SpiralC`, `/src/cc.sp`)
 
-```
-+-------------------------------------------------------------------------+
-|                    SPIRALOS USERLAND & APPLICATIONS                     |
-|  SpiralFiles | SpiralEdit | SpiralSh | SpiralBuild | SpiralPaint | Calc |
-|  SpiralMon   | SpiralTheme| SpiralView| Snake & Blocks | Chat/Web/Httpd |
-+-------------------------------------------------------------------------+
-|                 SPIRALOS KERNEL & SERVICES (VM Bytecode)                |
-|  Task Table & IPC (/src/kernel.sp) | Window Manager & GUI (/src/wm.sp)  |
-|  SpiralFS Driver  (/src/fs.sp)     | StudioNet Stack SNS/SDP/SSP        |
-+=========================================================================+
-|                    PORTABLE SPIRAL VM ABI (38 Opcodes)                  |
-|            4 MiB Unified Virtual Address Space (vmRam[0..4MB])          |
-+=========================================================================+
-|     TABCOMP NATIVE CORE (TC-32)    |   HUMMINGBIRD NATIVE CORE (i586)   |
-|  - 3,600 B native TC-32 binary     |  - 512 B Real-Mode BIOS Bootloader |
-|  - 320x200x8 VRAM (0x0F0000)       |  - 6,314 B 32-bit PMode Kernel+VM  |
-|  - Mouse MMIO (0x0FFD08)           |  - 4MB PSE Paging + VBE LFB 2x Blit|
-|  - StudioNet MMIO (0x0FFD40)       |  - 8042 PS/2 + 8237 DMA + 82077 FDC|
-|  - TabCompFS VFS Sector Sync       |  - StudioNet Ports 0x02A0..0x02AF  |
-+------------------------------------+------------------------------------+
-```
+In SpiralOS 1.1, the in-OS compiler is a **complete, genuine recursive-descent compiler (`1,148` lines of Spiral in `/src/cc.sp`)** with zero pattern-patching or special-cased edits:
+
+1. **Multi-File Preprocessor (`cc_build_combined_source`)**: Concatenates all 10 `/src/*.sp` modules (`kernel.sp`, `fs.sp`, `gui.sp`, `wm.sp`, `net.sp`, `cc.sp`, `asm.sp`, `apps1.sp`, `apps2.sp`, `os.sp` — over `165 KB` of source code) in RAM while recording a file-span table (`CC_FILE_START_LINE`, `CC_FILE_NAME_PTR`) so syntax errors report exact file names and local line numbers.
+2. **Lexer & 256-Bucket Hash-Indexed Symbol Tables**: Tokenizes keywords, identifiers, string literals, character constants, hex/decimal integers, and multi-character operators (`==`, `!=`, `<=`, `>=`, `&&`, `||`, `<<`, `>>`, `+=`, `-=`). Uses a 32-bit O(1) signature (`cc_name_sig`) and 256-bucket open-addressed hash chains for constants (`340+`), globals (`480+`), functions (`183`), and deduplicated string literals (`3,264` B), compiling the entire OS inside the VM in `21.4M` VM instructions (`~1.6 s` on TabComp).
+3. **Two-Pass Code Generator**:
+   - **Pass 1 (`cc_pass1`)**: Parses top-level `const`, `var` (scalars and fixed-size arrays), and `fn` declarations, assigning global slots and function indices while validating syntax.
+   - **Pass 2 (`cc_pass2`)**: Emits `SPIR` bytecode (`0x00..0x5F`) with precedence-climbing binary expressions (`cc_parse_bin`), short-circuit `&&`/`||`, `if`/`else`, `while` with nested `break`/`continue` backpatch stacks, `return`, `syscall(...)`, and `fn_addr(...)`, followed by call-target backpatching (`cc_patch_calls`).
+4. **3-Stage Bootstrap Fixed Point**:
+   - `Stage 1` (`compiler/spiralc.js` -> `SPIR`) compiles `/src/*.sp` inside the VM to produce `Stage 2`, and `Stage 2` compiles `/src/*.sp` inside the VM to produce `Stage 3`.
+   - `Stage 1`, `Stage 2`, and `Stage 3` are **100% byte-identical (`131,072 / 131,072` bytes, SHA-256 `3204b8df...`)** on both TabComp and Hummingbird.
 
 ---
 
-## 4. Boot Sequence on Each Machine
+## 3. In-OS Native Assemblers (`/src/asm.sp`)
 
-### 4.1 Hummingbird (`i586` PC)
-1. **BIOS Bootstrap (`INT 19h`)**: Loads Sector 0 of `spiralos.img` to `0000:7C00` in 16-bit Real Mode.
-2. **Real-Mode Loader (`0x7C00`)**:
-   - Prints boot indicator via `INT 10h AH=0Eh` (Milestone 1: `boot_sector`).
-   - Writes the SpiralOS boot banner to VGA text memory `0xB8000` and polls `INT 16h` (Milestone 2: `boot_menu`).
-   - Loads Sectors `1..31` (32-bit x86 Core) to physical `0x00008000` and Sectors `0..703` (`352 KB` active disk image) to conventional RAM `0x00010000..0x00067FFF` via `INT 13h AH=02h`.
-   - Switches display to VBE 3.0 Mode `0x4112` (`640×480×32` LFB at `0xE0000000`) via `INT 10h AX=4F02h`.
-   - Enables the A20 line (`Port 0x92`), builds a 4 MB PSE Page Directory at `0x00006000` (identity-mapping `0x00000000..0x03FFFFFF` and `0xE0000000..0xE07FFFFF`), enables `CR4.PSE` and `CR0.PE | CR0.PG` (Milestone 3: `protected_mode_paging`), and far-jumps to `0x0008:0x00008000`.
-3. **32-Bit Protected-Mode Core (`0x00008000`)**:
-   - Initializes 32-bit flat segments (`0x10`), enables the 8042 PS/2 auxiliary mouse (`0xA8`, `0xD4 0xF4`), copies the `352 KB` disk image from `0x00010000` to `0x00400000` (`vmRam[0x200000]`), copies the `64 KB` `SPIR` bytecode from `0x00408000` to `0x00200000` (`vmRam[0x000000]`), initializes the 8×8 font and 256-color palette, and starts the native x86 SpiralVM interpreter loop.
+SpiralOS 1.1 includes two real symbolic assemblers written in Spiral (`/src/asm.sp`) that assemble `/src/core_x86.asm` and `/src/core_tc32.asm` directly inside the VM into `0xE0000`:
 
-### 4.2 TabComp (`TC-32` Workstation)
-1. **Image Mount**: `bootSpiralDiskImage` extracts the `3,600`-byte native `TC-32` Core from Sectors `32..63` (`0x04008`) into `0x000000`, mounts `spiralos.img` at `0x00400000` (`vmRam[0x200000]`), and copies the `64 KB` `SPIR` bytecode to `0x00200000` (`vmRam[0x000000]`).
-2. **TC-32 Core Init**: Copies the 8×8 font (`0x0EF000`) and 256-color palette (`0x0FFA00`) into `vmRam`, sets `MachineID = 1` at `vmRam[0x0FFD1C]`, and starts the native `TC-32` SpiralVM interpreter loop.
+- **`asm_assemble_x86()`**: Two-pass symbolic x86 assembler supporting `.org`, `use16` / `use32` modes, symbolic labels, `db`/`dw`/`dd`, string literals (`"..."`), segment-override prefixes, ModR/M + SIB + displacement encoding, short/near relative jumps (`jcc`, `jmp`, `call`), and all real-mode/protected-mode instructions used by Stage 1, Stage 2, the BIOS Write Thunk, and the 32-bit PM Core (`8,649` bytes total, byte-identical to `core/core_x86.js`).
+- **`asm_assemble_tc32()`**: Two-pass symbolic `TC-32` RISC assembler supporting `.org`, `.equ`, symbolic labels, 32-bit instruction packing (`op[31:24] | rd[23:20] | rs1[19:16] | rs2[15:12] | imm`), `.word`, and `.ascii` string packing (`4,360` bytes / `1,090` words total, byte-identical to `core/core_tc32.js`).
+
+---
+
+## 4. Preemptive Multitasking & App Tick Architecture
+
+- **Hardware Timer Preemption**:
+  - On **Hummingbird (`i586`)**, the 8254 PIT generates `IRQ0` (`INT 0x20` via remapped 8259A PIC) and the interpreter loop also enforces a deterministic instruction quantum (`4,096` VM instructions). When the quantum expires, `core_x86` saves `(VM_PC, VM_SP, VM_FP, VM_CSP)` into the active TCB slot at `0x7E000 + slot * 32`, selects the next runnable task in round-robin order (`Task 0..3`), and restores its VM registers and private stack (`0x78000`, `0x7A000`, `0x7B000`, `0x7C000`).
+  - On **TabComp (`TC-32`)**, the native `TC-32` interpreter performs the exact same TCB context switch at `0x7E000` every quantum (`4,096` VM instructions), ensuring background worker threads (`Task 1`, `Task 2`) make concurrent progress while `Task 0` runs the desktop event loop.
+- **Real-Time App Tick API (`app_register_tick`)**:
+  - Applications register periodic callbacks via `app_register_tick(app_id, interval_ms)` (`kernel.sp`). During the desktop loop, `app_run_ticks(now)` invokes each open window's tick handler (`snake_tick()` every `180 ms`, `blocks_tick()` every `350 ms`) so **SpiralSnake** moves continuously and **SpiralBlocks** drops tetrominoes automatically while preserving manual `[Step]` controls.
+
+---
+
+## 5. Prior Art & Influences
+
+1. **Inferno / Dis VM (Bell Labs)**: Inspired the split between a tiny native Core containing a bytecode interpreter + device drivers and a 100% portable OS layer above it (`SPIR`).
+2. **Project Oberon (Wirth & Gutknecht)**: Inspired the compact single-language self-hosting compiler (`SpiralC`) where the entire OS, compiler, and desktop apps compile inside a few hundred kilobytes of RAM in under two seconds.
+3. **UCSD p-System**: Inspired the stack-and-frame bytecode encoding (`LOAD_LOCAL`, `STORE_LOCAL`, `CALL argc, locals`) and portable disk image layout shared across incompatible CPU families.
+4. **KolibriOS**: Inspired the speed, density, and immediate-response aesthetic of packing a full GUI desktop, 14+ built-in applications, theme engine, network stack, and assemblers onto a single 1.44 MB floppy disk.
+5. **Smalltalk-80**: Inspired the live inspectability of the system—editing window manager or compiler source inside SpiralEdit, recompiling in-place, and rebooting into the modified image.

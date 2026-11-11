@@ -1,13 +1,14 @@
 /**
- * SpiralOS — SpiralC Compiler (compiler/spiralc.js)
+ * SpiralOS 1.1 — SpiralC Compiler (compiler/spiralc.js)
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
  * Compiles Spiral Language (.sp) source files into a portable Spiral VM
- * bytecode image ('SPIR' format, up to 64 KB).
+ * bytecode image ('SPIR' format, up to 128 KB: 112 KB code + 16 KB strings).
  *
  * Designed in 1-to-1 algorithmic correspondence with /src/cc.sp (the in-OS
  * self-hosted compiler) so that compiling SpiralOS inside SpiralOS on either
- * TabComp or Hummingbird produces an identical SPIR bytecode image.
+ * TabComp or Hummingbird produces a byte-for-byte identical SPIR image
+ * (Stage 1 == Stage 2 == Stage 3 across both machines).
  */
 
 "use strict";
@@ -88,8 +89,8 @@ const OP_RET         = 0x26;
 const OP_SYSCALL     = 0x27;
 
 const SPIR_MAGIC     = 0x52495053; // 'SPIR'
-const SPIR_STR_BASE  = 0x00D000;   // String pool base in 64KB SPIR image (53,248 .. 65,535)
-const SPIR_MAX_SIZE  = 0x010000;   // 64 KB total SPIR image size
+const SPIR_STR_BASE  = 0x01C000;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
+const SPIR_MAX_SIZE  = 0x020000;   // 128 KB total SPIR image size
 
 function expandImports(entryPath, readFileTextFn) {
   const visited = new Set();
@@ -121,13 +122,20 @@ function expandImports(entryPath, readFileTextFn) {
   return chunks.join("\n");
 }
 
-function compileSpiralSource(sourceText) {
-  const src = new TextEncoder().encode(sourceText);
-  const srcLen = src.length;
+function compileSpiralSource(sourceText, readFileFn = null) {
+  let src = typeof sourceText === "string"
+    ? new TextEncoder().encode(sourceText)
+    : new Uint8Array(sourceText);
+  let srcLen = src.length;
   let pos = 0;
   let lineNum = 1;
+  let includeDepth = 0;
+  let parentSrc = null;
+  let parentLen = 0;
+  let parentPos = 0;
+  let parentLine = 1;
 
-  // Output 64 KB SPIR buffer
+  // Output 128 KB SPIR buffer
   const outBuf = new Uint8Array(SPIR_MAX_SIZE);
   const outDV = new DataView(outBuf.buffer);
   let codePos = 0x0020; // Bytecode starts right after 32-byte SPIR header
@@ -170,16 +178,19 @@ function compileSpiralSource(sourceText) {
   }
 
   function addStringLiteral(bytesArr) {
-    // Check if identical string already exists in pool to save space
     const len = bytesArr.length;
-    for (let p = SPIR_STR_BASE; p + len < strPos; p++) {
-      let match = true;
-      for (let k = 0; k < len; k++) {
-        if (outBuf[p + k] !== bytesArr[k]) { match = false; break; }
+    let p = SPIR_STR_BASE;
+    while (p < strPos) {
+      let slen = 0;
+      while (p + slen < strPos && outBuf[p + slen] !== 0) slen++;
+      if (slen === len) {
+        let match = true;
+        for (let k = 0; k < len; k++) {
+          if (outBuf[p + k] !== bytesArr[k]) { match = false; break; }
+        }
+        if (match) return p;
       }
-      if (match && outBuf[p + len] === 0) {
-        return p;
-      }
+      p += slen + 1;
     }
     if (strPos + len + 1 > SPIR_MAX_SIZE) {
       throw new Error(`SpiralC: String pool overflow at line ${lineNum}`);
@@ -198,7 +209,7 @@ function compileSpiralSource(sourceText) {
   let globalSlotCount = 0;
 
   const funcs = new Map(); // name -> { addr, nargs, defined }
-  const callFixups = [];   // { instAddr, name, line }
+  const callFixups = [];   // { instAddr, name, line, isFnAddr }
 
   let locals = new Map();  // name -> { slot, isByte, isArray, size }
   let localSlotCount = 0;
@@ -239,32 +250,43 @@ function compileSpiralSource(sourceText) {
   }
 
   function nextToken() {
-    while (pos < srcLen) {
-      const c = src[pos];
-      if (c === 10) { lineNum++; pos++; continue; }
-      if (c <= 32) { pos++; continue; }
-      // Line comment //
-      if (c === 47 && pos + 1 < srcLen && src[pos + 1] === 47) {
-        pos += 2;
-        while (pos < srcLen && src[pos] !== 10) pos++;
-        continue;
-      }
-      // Block comment /* ... */
-      if (c === 47 && pos + 1 < srcLen && src[pos + 1] === 42) {
-        pos += 2;
-        while (pos + 1 < srcLen && !(src[pos] === 42 && src[pos + 1] === 47)) {
-          if (src[pos] === 10) lineNum++;
-          pos++;
+    while (true) {
+      while (pos < srcLen) {
+        const c = src[pos];
+        if (c === 10) { lineNum++; pos++; continue; }
+        if (c <= 32) { pos++; continue; }
+        // Line comment //
+        if (c === 47 && pos + 1 < srcLen && src[pos + 1] === 47) {
+          pos += 2;
+          while (pos < srcLen && src[pos] !== 10) pos++;
+          continue;
         }
-        pos += 2;
-        continue;
+        // Block comment /* ... */
+        if (c === 47 && pos + 1 < srcLen && src[pos + 1] === 42) {
+          pos += 2;
+          while (pos + 1 < srcLen && !(src[pos] === 42 && src[pos + 1] === 47)) {
+            if (src[pos] === 10) lineNum++;
+            pos++;
+          }
+          pos += 2;
+          continue;
+        }
+        break;
+      }
+
+      if (pos >= srcLen) {
+        if (includeDepth > 0) {
+          src = parentSrc;
+          srcLen = parentLen;
+          pos = parentPos;
+          lineNum = parentLine;
+          includeDepth = 0;
+          continue;
+        }
+        tok = TK_EOF;
+        return;
       }
       break;
-    }
-
-    if (pos >= srcLen) {
-      tok = TK_EOF;
-      return;
     }
 
     const c = src[pos];
@@ -376,7 +398,7 @@ function compileSpiralSource(sourceText) {
     if (tok === TK_NUM) {
       const v = tokVal;
       nextToken();
-      return (v * sign) | 0;
+      return Math.imul(v, sign);
     }
     if (tok === TK_IDENT) {
       const name = tokIdent;
@@ -384,13 +406,13 @@ function compileSpiralSource(sourceText) {
       if (!consts.has(name)) {
         throw new Error(`SpiralC: Unknown constant '${name}' at line ${lineNum}`);
       }
-      return (consts.get(name) * sign) | 0;
+      return Math.imul(consts.get(name), sign);
     }
     if (tok === 40) { // '('
       nextToken();
       const v = evalConstExpr();
       expect(41);
-      return (v * sign) | 0;
+      return Math.imul(v, sign);
     }
     throw new Error(`SpiralC: Constant expression expected at line ${lineNum}`);
   }
@@ -625,7 +647,7 @@ function compileSpiralSource(sourceText) {
       const name = tokIdent;
       nextToken();
 
-      // 1. Check built-in memory & syscall intrinsics
+      // 1. Check built-in memory, syscall, and fn_addr intrinsics
       if (name === "r8" || name === "r8s" || name === "r16" || name === "r32") {
         expect(40);
         parseExpr();
@@ -661,6 +683,22 @@ function compileSpiralSource(sourceText) {
         emitOp(OP_SYSCALL, nargs, sysnum);
         return;
       }
+      if (name === "fn_addr" && tok === 40) {
+        expect(40);
+        const targetFn = tokIdent;
+        expect(TK_IDENT);
+        expect(41);
+        const fn = funcs.get(targetFn);
+        if (fn && fn.defined) {
+          emitOp(OP_PUSH_U16, 0, fn.addr & 0xFFFF);
+          emitOp(OP_PUSH_HI, 0, (fn.addr >>> 16) & 0xFFFF);
+        } else {
+          const instAddr = emitOp(OP_PUSH_U16, 0, 0);
+          emitOp(OP_PUSH_HI, 0, 0);
+          callFixups.push({ instAddr, name: targetFn, line: lineNum, isFnAddr: true });
+        }
+        return;
+      }
 
       // 2. Check compile-time constant
       if (consts.has(name)) {
@@ -687,7 +725,7 @@ function compileSpiralSource(sourceText) {
           emitJump(OP_CALL, fn.addr);
         } else {
           const instAddr = emitJump(OP_CALL, 0);
-          callFixups.push({ instAddr, name, line: lineNum });
+          callFixups.push({ instAddr, name, line: lineNum, isFnAddr: false });
         }
         return;
       }
@@ -704,7 +742,7 @@ function compileSpiralSource(sourceText) {
         if (v.isArray) {
           emitVarAddr(v);
         } else {
-          emitVarGet(v); // pointer variable holding base address!
+          emitVarGet(v);
         }
         parseExpr(); // index
         expect(93);  // ']'
@@ -713,7 +751,6 @@ function compileSpiralSource(sourceText) {
           emitOp(OP_SHL); // index * 4
         }
         emitOp(OP_ADD); // base + offset
-        // Check if assignment to array element: v[idx] = expr
         if (tok === 61) { // '='
           nextToken();
           parseExpr();
@@ -971,6 +1008,40 @@ function compileSpiralSource(sourceText) {
   // Top-level Parser
   nextToken();
   while (tok !== TK_EOF) {
+    if (tok === TK_IMPORT) {
+      nextToken();
+      if (tok !== TK_STR) {
+        throw new Error(`SpiralC syntax error at line ${lineNum}: string expected after import`);
+      }
+      let impPath = "";
+      for (let i = 0; i < tokStrBytes.length; i++) {
+        impPath += String.fromCharCode(tokStrBytes[i]);
+      }
+      nextToken();
+      if (tok !== 59) {
+        throw new Error(`SpiralC syntax error at line ${lineNum}: expected ';' after import`);
+      }
+      if (!readFileFn) {
+        nextToken();
+        continue;
+      }
+      const childBytes = readFileFn(impPath);
+      if (!childBytes) {
+        throw new Error(`SpiralC: Cannot read imported file '${impPath}' at line ${lineNum}`);
+      }
+      parentSrc = src;
+      parentLen = srcLen;
+      parentPos = pos;
+      parentLine = lineNum;
+      src = typeof childBytes === "string" ? new TextEncoder().encode(childBytes) : new Uint8Array(childBytes);
+      srcLen = src.length;
+      pos = 0;
+      lineNum = 1;
+      includeDepth = 1;
+      nextToken();
+      continue;
+    }
+
     if (tok === TK_CONST) {
       nextToken();
       if (tok === TK_INT || tok === TK_BYTE) nextToken();
@@ -1064,16 +1135,21 @@ function compileSpiralSource(sourceText) {
       continue;
     }
 
-    throw new Error(`SpiralC: Unexpected top-level token ${tok} ('${tokIdent}') at line ${lineNum}`);
+    throw new Error(`SpiralC syntax error at line ${lineNum}: unexpected top-level token ${tok} ('${tokIdent}')`);
   }
 
-  // Resolve forward function calls
+  // Resolve forward function calls and fn_addr references
   for (const fx of callFixups) {
     const fn = funcs.get(fx.name);
     if (!fn || !fn.defined) {
-      throw new Error(`SpiralC: Undefined function '${fx.name}' called at line ${fx.line}`);
+      throw new Error(`SpiralC: Undefined function '${fx.name}' referenced at line ${fx.line}`);
     }
-    patchJump(fx.instAddr, fn.addr);
+    if (fx.isFnAddr) {
+      outDV.setUint32(fx.instAddr, ((OP_PUSH_U16 << 24) | (fn.addr & 0xFFFF)) >>> 0, true);
+      outDV.setUint32(fx.instAddr + 4, ((OP_PUSH_HI << 24) | ((fn.addr >>> 16) & 0xFFFF)) >>> 0, true);
+    } else {
+      patchJump(fx.instAddr, fn.addr);
+    }
   }
 
   const mainFn = funcs.get("main");
@@ -1091,8 +1167,8 @@ function compileSpiralSource(sourceText) {
   outDV.setUint32(0x18, strPos - SPIR_STR_BASE, true);
 
   let csum = 0;
-  for (let i = 0x20; i < codePos; i++) csum = ((csum * 31) + outBuf[i]) | 0;
-  for (let i = SPIR_STR_BASE; i < strPos; i++) csum = ((csum * 31) + outBuf[i]) | 0;
+  for (let i = 0x20; i < codePos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
+  for (let i = SPIR_STR_BASE; i < strPos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
   outDV.setUint32(0x1C, csum >>> 0, true);
 
   return {

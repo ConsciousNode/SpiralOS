@@ -95,7 +95,7 @@ function runSelfHostSuite() {
   const { img } = buildSpiralOSImage(rootDir);
   const vmBase = 0x00200000;
 
-  const pristineSpirHash = sha256Hex(img.subarray(0x8000, 0x18000));
+  const pristineSpirHash = sha256Hex(img.subarray(0x8000, 0x28000));
   const pristineFullHash = sha256Hex(img);
   console.log(`  Pristine SPIR Bytecode SHA-256 : ${pristineSpirHash.slice(0, 32)}...`);
   console.log(`  Pristine 1.44MB Image SHA-256  : ${pristineFullHash.slice(0, 32)}...`);
@@ -114,7 +114,7 @@ function runSelfHostSuite() {
     sendShellCommandTabComp(tcCpu, "rebuild");
     sendShellCommandTabComp(tcCpu, "asm");
 
-    const rebuiltSpir = tcCpu.spiralDiskImage.subarray(0x8000, 0x18000);
+    const rebuiltSpir = tcCpu.spiralDiskImage.subarray(0x8000, 0x28000);
     const rebuiltSpirHash = sha256Hex(rebuiltSpir);
     assert.strictEqual(
       rebuiltSpirHash,

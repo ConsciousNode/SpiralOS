@@ -1,37 +1,40 @@
 // ============================================================================
-// SpiralOS — Kernel, HAL Wrappers, Process Scheduler & IPC (/src/kernel.sp)
-// Studio: ConsciousNode SoftWorks · Licence: MIT
+// SpiralOS 1.1 — Kernel, HAL Wrappers, Preemptive Multitasking & App Tick API
+// (/src/kernel.sp) · Studio: ConsciousNode SoftWorks · Licence: MIT
 // ============================================================================
 
-const SYS_EXIT         = 0;
-const SYS_YIELD        = 1;
-const SYS_TIME_MS      = 2;
-const SYS_KEY_POLL     = 3;
-const SYS_MOUSE_POLL   = 4;
-const SYS_FILL_RECT    = 5;
-const SYS_DRAW_CHAR    = 6;
-const SYS_DRAW_STR     = 7;
-const SYS_MEMCPY       = 8;
-const SYS_MEMSET       = 9;
-const SYS_DISK_SYNC    = 10;
-const SYS_REBOOT       = 11;
-const SYS_NET_SEND     = 12;
-const SYS_NET_RECV     = 13;
-const SYS_NET_INFO     = 14;
-const SYS_SOUND_TONE   = 15;
-const SYS_MACHINE_INFO = 16;
-const SYS_BLIT_RECT    = 17;
-const SYS_STRCMP       = 18;
-const SYS_STRLEN       = 19;
-const SYS_ITOA         = 20;
+const SYS_EXIT          = 0;
+const SYS_YIELD         = 1;
+const SYS_TIME_MS       = 2;
+const SYS_KEY_POLL      = 3;
+const SYS_MOUSE_POLL    = 4;
+const SYS_FILL_RECT     = 5;
+const SYS_DRAW_CHAR     = 6;
+const SYS_DRAW_STR      = 7;
+const SYS_MEMCPY        = 8;
+const SYS_MEMSET        = 9;
+const SYS_DISK_SYNC     = 10;
+const SYS_REBOOT        = 11;
+const SYS_NET_SEND      = 12;
+const SYS_NET_RECV      = 13;
+const SYS_NET_INFO      = 14;
+const SYS_SOUND_TONE    = 15;
+const SYS_MACHINE_INFO  = 16;
+const SYS_BLIT_RECT     = 17;
+const SYS_STRCMP        = 18;
+const SYS_STRLEN        = 19;
+const SYS_ITOA          = 20;
+const SYS_TASK_SPAWN_VM = 21;
 
-const VMRAM_VRAM       = 0x0F0000;
-const VMRAM_PALETTE    = 0x0FFA00;
-const VMRAM_STATUS     = 0x0FFD00;
-const VMRAM_IMG_BASE   = 0x200000;
-const VMRAM_SPFS_BASE  = 0x218000;
+const VMRAM_VRAM        = 0x0F0000;
+const VMRAM_PALETTE     = 0x0FFA00;
+const VMRAM_STATUS      = 0x0FFD00;
+const VMRAM_TCB_BASE    = 0x0FFE00;
+const VMRAM_SCHED_HDR   = 0x0FFF00;
+const VMRAM_IMG_BASE    = 0x200000;
+const VMRAM_SPFS_BASE   = 0x228000;
 
-// Process / Task Table (up to 16 concurrent tasks)
+// Process / Task Table (up to 16 desktop tasks + 8 hardware-preempted VM stack tasks)
 const MAX_TASKS = 16;
 int task_active[16];
 int task_app_id[16];
@@ -44,8 +47,19 @@ int g_num_tasks;
 int g_uptime_frames;
 int g_machine_id;
 int g_local_node_id;
+int g_has_snet;
 
-// HAL Wrapper Functions
+// App Tick API table (indexed by app_id 0..15)
+int app_tick_interval[16];
+int app_tick_last_ms[16];
+int app_tick_count[16];
+
+// Preemptive compute worker progress counters
+int g_worker_a_progress;
+int g_worker_b_progress;
+int g_worker_a_tid;
+int g_worker_b_tid;
+
 int hal_yield() {
   g_uptime_frames = g_uptime_frames + 1;
   return sys(1);
@@ -127,6 +141,10 @@ int hal_itoa(int val, int buf, int base) {
   return sys(20, val, buf, base);
 }
 
+int hal_task_spawn_vm(int entry_pc, int arg0) {
+  return sys(21, entry_pc, arg0);
+}
+
 void set_pal_rgb(int idx, int r, int g, int b) {
   int off = VMRAM_PALETTE + idx * 3;
   w8(off, r);
@@ -135,41 +153,89 @@ void set_pal_rgb(int idx, int r, int g, int b) {
 }
 
 void init_spiral_palette() {
-  // 16..31: Spiral Aether Twilight Slate & Indigo ramp
   for (int i = 0; i < 16; i++) {
     set_pal_rgb(16 + i, 12 + i * 7, 16 + i * 8, 34 + i * 11);
   }
-  // 48..63: Kyoto Amber Phosphor ramp
   for (int j = 0; j < 16; j++) {
     set_pal_rgb(48 + j, 22 + j * 14, 10 + j * 9, 2 + j * 2);
   }
-  // 64..79: Iridescent Violet/Magenta & Cyan Helix accents
   for (int k = 0; k < 16; k++) {
     set_pal_rgb(64 + k, 40 + k * 11, 20 + k * 8, 95 + k * 10);
   }
-  // 80..95: Neo-Taipei Emerald Jade ramp
   for (int m = 0; m < 16; m++) {
     set_pal_rgb(80 + m, 8 + m * 5, 24 + m * 13, 20 + m * 9);
   }
-  // High-visibility semantic colors
-  set_pal_rgb(196, 235, 55, 90);  // Crimson / Rose (used in Self-Host Demo!)
-  set_pal_rgb(200, 50, 210, 140); // Mint Signal
-  set_pal_rgb(208, 255, 180, 40); // Solar Gold
+  set_pal_rgb(196, 235, 55, 90);
+  set_pal_rgb(200, 50, 210, 140);
+  set_pal_rgb(208, 255, 180, 40);
+}
+
+void app_register_tick(int app_id, int interval_ms) {
+  if (app_id >= 0 && app_id < 16) {
+    app_tick_interval[app_id] = interval_ms;
+    app_tick_last_ms[app_id] = hal_time();
+  }
+}
+
+// Preemptive CPU-bound background worker A (runs on its own VM stack without calling hal_yield)
+int compute_worker_a(int max_iters) {
+  int acc = 17;
+  int i = 0;
+  while (i < max_iters) {
+    acc = (acc * 1103515245 + 12345) ^ (i * 37);
+    g_worker_a_progress = g_worker_a_progress + 1;
+    w32(VMRAM_STATUS + 0x70, g_worker_a_progress);
+    i = i + 1;
+  }
+  return acc;
+}
+
+// Preemptive CPU-bound background worker B (runs on its own VM stack without calling hal_yield)
+int compute_worker_b(int max_iters) {
+  int acc = 29;
+  int i = 0;
+  while (i < max_iters) {
+    acc = (acc * 1664525 + 1013904223) ^ (i * 73);
+    g_worker_b_progress = g_worker_b_progress + 1;
+    w32(VMRAM_STATUS + 0x74, g_worker_b_progress);
+    i = i + 1;
+  }
+  return acc;
+}
+
+void spawn_compute_workers(int max_iters) {
+  g_worker_a_progress = 0;
+  g_worker_b_progress = 0;
+  w32(VMRAM_STATUS + 0x70, 0);
+  w32(VMRAM_STATUS + 0x74, 0);
+  g_worker_a_tid = hal_task_spawn_vm(fn_addr(compute_worker_a), max_iters);
+  g_worker_b_tid = hal_task_spawn_vm(fn_addr(compute_worker_b), max_iters);
 }
 
 void kernel_init() {
   g_machine_id = hal_info(0);
-  g_local_node_id = hal_net_info(0, 0);
+  g_has_snet = hal_info(4);
+  if (g_has_snet == 1) {
+    g_local_node_id = hal_net_info(0, 0);
+  } else {
+    g_local_node_id = 0;
+  }
   g_uptime_frames = 0;
   g_num_tasks = 0;
+  g_worker_a_progress = 0;
+  g_worker_b_progress = 0;
+  g_worker_a_tid = -1;
+  g_worker_b_tid = -1;
   for (int i = 0; i < MAX_TASKS; i++) {
     task_active[i] = 0;
     task_app_id[i] = 0;
     task_win_id[i] = -1;
     task_ticks[i] = 0;
     task_msg_type[i] = 0;
+    app_tick_interval[i] = 0;
+    app_tick_last_ms[i] = 0;
+    app_tick_count[i] = 0;
   }
-  // Task 0: Kernel & Window Manager
   task_active[0] = 1;
   task_app_id[0] = 100;
   g_num_tasks = 1;

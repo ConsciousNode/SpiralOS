@@ -2739,10 +2739,21 @@ class VGADisplay {
   }
 
   getVbeModes() {
+    if (this.pc && this.pc.strictBios) {
+      return [
+        { mode: 0x0118, width: 1024, height: 768, bpp: 24, pitch: 3072 },
+        { mode: 0x0115, width: 800,  height: 600, bpp: 24, pitch: 2400 },
+        { mode: 0x0112, width: 640,  height: 480, bpp: 24, pitch: 1920 },
+        { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 },
+        { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 },
+        { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 }
+      ];
+    }
     return [
       { mode: 0x0118, width: 1024, height: 768, bpp: 32, pitch: 4096 },
       { mode: 0x0115, width: 800,  height: 600, bpp: 32, pitch: 3200 },
       { mode: 0x0112, width: 640,  height: 480, bpp: 32, pitch: 2560 },
+      { mode: 0x0142, width: 640,  height: 480, bpp: 32, pitch: 2560 },
       { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 },
       { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 },
       { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 }
@@ -3627,8 +3638,100 @@ class FDC82077AA {
 
   // ==========================================================================
   // StudioNet Virtual Network Controller + In-Memory Switch + BroadcastChannel
-  // + Sonder Procedural Internet Gateway (Stretch §5)
+  // + Sonder Deterministic Procedural Hypertext Engine (§5)
+  //
+  // Provenance: The Sonder Procedural Gateway engine below is an original
+  // deterministic procedural hypertext generator created by ConsciousNode
+  // SoftWorks for SpiralOS 1.1, inspired by early 1990s hyperCard/Gopher/WWW
+  // procedural worldbuilders. It hashes the request path with 32-bit FNV-1a,
+  // seeds a deterministic xorshift32 PRNG, selects one of 4 distinct document
+  // templates (Atlas, Chronicle, Schematic, Archive), and synthesizes
+  // interconnected hypertext pages with inline bitmap <img src=...> tags.
   // ==========================================================================
+  function generateSonderProceduralPage(rawPath) {
+    let path = (rawPath || "/index").trim();
+    if (!path.startsWith("/")) path = "/" + path;
+    // 32-bit FNV-1a hash of the normalized path
+    let h = 0x811C9DC5;
+    for (let i = 0; i < path.length; i++) {
+      h ^= path.charCodeAt(i) & 0xFF;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    let state = (h || 0x1991B007) >>> 0;
+    const nextRand = () => {
+      state ^= (state << 13) >>> 0;
+      state ^= (state >>> 17) >>> 0;
+      state ^= (state << 5) >>> 0;
+      return (state >>> 0);
+    };
+    const pick = (arr) => arr[nextRand() % arr.length];
+
+    const ADJ = ["Aether", "Helix", "Ceres", "Kyoto", "Harmonic", "Sub-Lunar", "Cobalt", "Phosphor", "Phase-Locked", "Isochronous", "Vortex", "Lattice"];
+    const NOUN = ["Resonator", "Observatory", "Chronicle", "Switchyard", "Relay", "Cartridge", "Manifold", "Synchrotron", "Telemetry", "Codex", "Archive", "Beacon"];
+    const VERB = ["stabilizes", "modulates", "transcribes", "routes", "illuminates", "synchronizes", "anchors", "Indexes"];
+    const LOC = ["Sector 7-G", "Station Oberon", "Node Zürich-88", "Bay 14", "Orbital Ring III", "Vault 0x00FE", "Sub-Net Delta", "Mount Hiei Lab"];
+    const SLUGS = ["/atlas", "/chronicle", "/schematic", "/archive", "/beacon", "/lattice", "/observatory", "/codex", "/relay", "/synchrotron"];
+
+    let templateId = h % 4;
+    if (path.startsWith("/atlas")) templateId = 0;
+    else if (path.startsWith("/chronicle")) templateId = 1;
+    else if (path.startsWith("/schematic")) templateId = 2;
+    else if (path.startsWith("/archive")) templateId = 3;
+    const codeHex = (h & 0xFFFF).toString(16).toUpperCase().padStart(4, "0");
+    const freqMHz = 10 + (nextRand() % 890);
+    const driftPpm = (nextRand() % 95) + 5;
+    const adj1 = pick(ADJ), noun1 = pick(NOUN);
+    const adj2 = pick(ADJ), noun2 = pick(NOUN);
+    const loc1 = pick(LOC), verb1 = pick(VERB);
+    let link1 = pick(SLUGS);
+    if (link1 === path) link1 = SLUGS[(h + 1) % SLUGS.length];
+    const link2 = pick(SLUGS), link3 = "/node-" + ((nextRand() % 900) + 100);
+    const imgPath = (h & 1) ? "/art/spiral.pic" : "/art/prism.pic";
+
+    if (templateId === 0) {
+      // Template 0: Aether Atlas & Topological Survey
+      return (
+        "<h1>[ATLAS] " + adj1 + " (" + path + ")</h1>\n" +
+        "<p>ID:SND-" + codeHex + " " + loc1 + " " + freqMHz + "MHz</p>\n" +
+        "<img src='" + imgPath + "'>\n" +
+        "<p>" + adj2 + " " + noun2 + " " + verb1 + " (" + driftPpm + "ppm).</p>\n" +
+        "<p><a href='" + link1 + "'>Wing</a> <a href='" + link2 + "'>Log</a> <a href='" + link3 + "'>#" + codeHex + "</a></p>"
+      );
+    } else if (templateId === 1) {
+      // Template 1: 1991 Helix Chronicle & Historical Dispatch
+      const year = 1984 + (nextRand() % 12);
+      return (
+        "<h1>[CHRONICLE " + year + "] (" + path + ")</h1>\n" +
+        "<p>Ref:CHR-" + codeHex + " @ " + loc1 + "</p>\n" +
+        "<img src='" + imgPath + "'>\n" +
+        "<p>" + adj2 + " " + noun2 + " " + verb1 + " @ " + freqMHz + "MHz.</p>\n" +
+        "<p><a href='" + link1 + "'>Dossier</a> <a href='" + link2 + "'>Notes</a> <a href='" + link3 + "'>#" + codeHex + "</a></p>"
+      );
+    } else if (templateId === 2) {
+      // Template 2: Hardware Schematic & Telemetry Matrix
+      return (
+        "<h1>[SCHEMATIC] (" + path + ")</h1>\n" +
+        "<p>HW-" + codeHex + " | " + freqMHz + "MHz | " + loc1 + "</p>\n" +
+        "<img src='" + imgPath + "'>\n" +
+        "<p>CH0=" + adj2 + " CH1=" + noun1 + " (" + driftPpm + "us)</p>\n" +
+        "<p><a href='" + link1 + "'>Spec</a> <a href='" + link2 + "'>Map</a> <a href='" + link3 + "'>#" + codeHex + "</a></p>"
+      );
+    } else {
+      // Template 3: ConsciousNode Archive & Signal Ledger
+      return (
+        "<h1>[ARCHIVE] Vault " + codeHex + " (" + path + ")</h1>\n" +
+        "<p>Locus: " + loc1 + " | " + driftPpm + "dB</p>\n" +
+        "<img src='" + imgPath + "'>\n" +
+        "<p>" + adj2 + " " + noun2 + " " + verb1 + " SPIR.</p>\n" +
+        "<p><a href='" + link1 + "'>LedgerA</a> <a href='" + link2 + "'>LedgerB</a> <a href='" + link3 + "'>#" + codeHex + "</a></p>"
+      );
+    }
+  }
+
+  if (typeof globalThis !== "undefined") {
+    globalThis.generateSonderProceduralPage = generateSonderProceduralPage;
+  }
+
   if (typeof globalThis !== "undefined" && !globalThis.__STUDIONET_SWITCH) {
     globalThis.__STUDIONET_SWITCH = {
       nics: new Set(),
@@ -3658,7 +3761,6 @@ class FDC82077AA {
         // Built-in Sonder Procedural Internet Gateway (Station 0x00FE = "sonder.gw")
         if (dstNode === 0x00FE && copy.length >= 16) {
           const proto = copy[4];
-          const flags = copy[5];
           const srcPort = copy[6] | (copy[7] << 8);
           const dstPort = copy[8] | (copy[9] << 8);
           const seqNum = copy[10] | (copy[11] << 8);
@@ -3666,13 +3768,10 @@ class FDC82077AA {
           let path = "/index";
           const m = reqPayload.match(/GET\s+([^\s\0]+)/);
           if (m) path = m[1];
-          const body =
-            "<h1>Sonder Gateway (" + path + ")</h1>" +
-            "<p>Connected via StudioNet Bridge [Node 0x00FE]</p>" +
-            "<p>Procedural capsule generated for station 0x" + srcNode.toString(16).toUpperCase() + ".</p>" +
-            "<a href='/atlas'>Atlas of Branches</a> | <a href='/chronicle'>1991 Helix Chronicle</a> | <a href='/index.hts'>Local Node</a>";
+          const body = generateSonderProceduralPage(path);
           const bodyBytes = new TextEncoder().encode(body);
-          const resp = new Uint8Array(16 + bodyBytes.length);
+          const maxBody = Math.min(480, bodyBytes.length);
+          const resp = new Uint8Array(16 + maxBody);
           resp[0] = srcNode & 0xFF; resp[1] = (srcNode >> 8) & 0xFF;
           resp[2] = 0xFE; resp[3] = 0x00;
           resp[4] = proto;
@@ -3681,8 +3780,8 @@ class FDC82077AA {
           resp[8] = srcPort & 0xFF; resp[9] = (srcPort >> 8) & 0xFF;
           resp[10] = 1; resp[11] = 0;
           resp[12] = (seqNum + 1) & 0xFF; resp[13] = ((seqNum + 1) >> 8) & 0xFF;
-          resp[14] = bodyBytes.length & 0xFF; resp[15] = (bodyBytes.length >> 8) & 0xFF;
-          resp.set(bodyBytes, 16);
+          resp[14] = maxBody & 0xFF; resp[15] = (maxBody >> 8) & 0xFF;
+          resp.set(bodyBytes.subarray(0, maxBody), 16);
           srcNic._enqueueRx(resp);
         }
       }
@@ -3873,6 +3972,8 @@ class HummingbirdPC {
     this.ramSize = this.ramSizeMB * 1024 * 1024;
     this.cpuFreqHz = Math.max(1000000, options.cpuFreqHz || 100000000);
     this.deterministic = options.deterministic !== undefined ? Boolean(options.deterministic) : true;
+    this.strictBios = Boolean(options.strictBios);
+    this.vbeLfbPhysBase = (this.strictBios ? 0xFD000000 : 0xE0000000) >>> 0;
     this.onMilestone = options.onMilestone || null;
     this.onDebugChar = options.onDebugChar || null;
 
@@ -4399,15 +4500,15 @@ class HummingbirdPC {
       this.ram[addr + 0x1C] = 0; // BankSize
       this.ram[addr + 0x1D] = 1; // NumberOfImagePages
       this.ram[addr + 0x1E] = 1; // Reserved
-      if (info.bpp === 32) {
+      if (info.bpp === 32 || info.bpp === 24) {
         this.ram[addr + 0x1F] = 8;  // RedMaskSize
         this.ram[addr + 0x20] = 16; // RedFieldPosition
         this.ram[addr + 0x21] = 8;  // GreenMaskSize
         this.ram[addr + 0x22] = 8;  // GreenFieldPosition
         this.ram[addr + 0x23] = 8;  // BlueMaskSize
         this.ram[addr + 0x24] = 0;  // BlueFieldPosition
-        this.ram[addr + 0x25] = 8;  // RsvedMaskSize
-        this.ram[addr + 0x26] = 24; // RsvedFieldPosition
+        this.ram[addr + 0x25] = info.bpp === 32 ? 8 : 0;
+        this.ram[addr + 0x26] = info.bpp === 32 ? 24 : 0;
       } else {
         this.ram[addr + 0x1F] = 5;
         this.ram[addr + 0x20] = 11;
@@ -4419,7 +4520,7 @@ class HummingbirdPC {
         this.ram[addr + 0x26] = 0;
       }
       this.ram[addr + 0x27] = 0x02; // DirectColorModeInfo
-      this.ramView.setUint32(addr + 0x28, 0xE0000000, true); // PhysBasePtr (LFB)
+      this.ramView.setUint32(addr + 0x28, this.vbeLfbPhysBase >>> 0, true); // PhysBasePtr (LFB)
       // VBE 3.0 linear fields
       this.ramView.setUint16(addr + 0x32, info.pitch, true); // LinbytesPerScanLine
       this.ram[addr + 0x34] = 1;
@@ -4573,8 +4674,14 @@ class HummingbirdPC {
         const byteCount = count * 512;
         const memAddr = (esBase + bx) >>> 0;
 
-        if (lba < 0 || sect === 0) {
+        if (lba < 0 || sect === 0 || sect > secPerTrk) {
           cpu.setReg8(REG_EAX + 4, 0x04); // Sector not found
+          this.setStackCF(1);
+          return;
+        }
+        if (this.strictBios && ((sect - 1) + count > secPerTrk)) {
+          cpu.setReg8(REG_EAX + 4, 0x09); // Cross-track / DMA boundary error in strict BIOS mode!
+          cpu.setReg8(REG_EAX, 0);
           this.setStackCF(1);
           return;
         }
@@ -5082,8 +5189,8 @@ class HummingbirdPC {
     if (physAddr < this.ramSize) {
       return this.ram[physAddr];
     }
-    if (physAddr >= 0xE0000000 && physAddr < 0xE0000000 + this.vga.vbeLfbSize) {
-      return this.vga.vbeLfb[physAddr - 0xE0000000];
+    if (physAddr >= this.vbeLfbPhysBase && physAddr < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      return this.vga.vbeLfb[(physAddr - this.vbeLfbPhysBase) >>> 0];
     }
     return 0xFF;
   }
@@ -5101,8 +5208,8 @@ class HummingbirdPC {
       this.cpu.pageWriteVersion[physAddr >>> 6]++;
       return;
     }
-    if (physAddr >= 0xE0000000 && physAddr < 0xE0000000 + this.vga.vbeLfbSize) {
-      this.vga.vbeLfb[physAddr - 0xE0000000] = val & 0xFF;
+    if (physAddr >= this.vbeLfbPhysBase && physAddr < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      this.vga.vbeLfb[(physAddr - this.vbeLfbPhysBase) >>> 0] = val & 0xFF;
     }
   }
 
@@ -5114,8 +5221,8 @@ class HummingbirdPC {
     if (physAddr + 1 < this.ramSize) {
       return this.ram[physAddr] | (this.ram[physAddr + 1] << 8);
     }
-    if (physAddr >= 0xE0000000 && physAddr + 1 < 0xE0000000 + this.vga.vbeLfbSize) {
-      const off = physAddr - 0xE0000000;
+    if (physAddr >= this.vbeLfbPhysBase && physAddr + 1 < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      const off = (physAddr - this.vbeLfbPhysBase) >>> 0;
       return this.vga.vbeLfb[off] | (this.vga.vbeLfb[off + 1] << 8);
     }
     return this.physRead8(physAddr) | (this.physRead8((physAddr + 1) >>> 0) << 8);
@@ -5134,8 +5241,8 @@ class HummingbirdPC {
       this.cpu.pageWriteVersion[(physAddr + 1) >>> 6]++;
       return;
     }
-    if (physAddr >= 0xE0000000 && physAddr + 1 < 0xE0000000 + this.vga.vbeLfbSize) {
-      const off = physAddr - 0xE0000000;
+    if (physAddr >= this.vbeLfbPhysBase && physAddr + 1 < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      const off = (physAddr - this.vbeLfbPhysBase) >>> 0;
       this.vga.vbeLfb[off] = val & 0xFF;
       this.vga.vbeLfb[off + 1] = (val >>> 8) & 0xFF;
       return;
@@ -5158,8 +5265,8 @@ class HummingbirdPC {
         (this.ram[physAddr + 3] << 24)
       ) >>> 0;
     }
-    if (physAddr >= 0xE0000000 && physAddr + 3 < 0xE0000000 + this.vga.vbeLfbSize) {
-      const off = physAddr - 0xE0000000;
+    if (physAddr >= this.vbeLfbPhysBase && physAddr + 3 < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      const off = (physAddr - this.vbeLfbPhysBase) >>> 0;
       if ((off & 3) === 0) return this.vga.vbeLfb32[off >>> 2] >>> 0;
       return (
         this.vga.vbeLfb[off] |
@@ -5196,8 +5303,8 @@ class HummingbirdPC {
       }
       return;
     }
-    if (physAddr >= 0xE0000000 && physAddr + 3 < 0xE0000000 + this.vga.vbeLfbSize) {
-      const off = physAddr - 0xE0000000;
+    if (physAddr >= this.vbeLfbPhysBase && physAddr + 3 < (this.vbeLfbPhysBase + this.vga.vbeLfbSize) >>> 0) {
+      const off = (physAddr - this.vbeLfbPhysBase) >>> 0;
       if ((off & 3) === 0) {
         this.vga.vbeLfb32[off >>> 2] = val | 0;
       } else {
@@ -5308,6 +5415,7 @@ class HummingbirdPC {
       case 0x2A4: case 0x2A5: case 0x2A6: case 0x2A7:
       case 0x2A8: case 0x2A9: case 0x2AA: case 0x2AB:
       case 0x2AC: case 0x2AD: case 0x2AE: case 0x2AF:
+        if (this.strictBios) return 0xFF;
         return this.snet.portRead(port);
 
       // 82077AA Floppy Disk Controller (0x3F0..0x3F5, 0x3F7)
@@ -5318,6 +5426,7 @@ class HummingbirdPC {
       case 0x3F4:
       case 0x3F5:
       case 0x3F7:
+        if (this.strictBios) return 0xFF;
         return this.fdc.portRead(port);
 
       // Serial COM1..COM4 (LSR = 0x60 transmitter empty so debug serial never hangs)
@@ -5443,13 +5552,13 @@ class HummingbirdPC {
       case 0x3F4:
       case 0x3F5:
       case 0x3F7:
-        this.fdc.portWrite(port, val);
+        if (!this.strictBios) this.fdc.portWrite(port, val);
         return;
       case 0x2A0: case 0x2A1: case 0x2A2: case 0x2A3:
       case 0x2A4: case 0x2A5: case 0x2A6: case 0x2A7:
       case 0x2A8: case 0x2A9: case 0x2AA: case 0x2AB:
       case 0x2AC: case 0x2AD: case 0x2AE: case 0x2AF:
-        this.snet.portWrite(port, val);
+        if (!this.strictBios) this.snet.portWrite(port, val);
         return;
       case 0x3F8: case 0x3F9: case 0x3FA: case 0x3FB: case 0x3FC: case 0x3FD: case 0x3FE:
       case 0x2F8: case 0x2F9: case 0x2FA: case 0x2FB: case 0x2FC: case 0x2FD: case 0x2FE:
@@ -5959,7 +6068,7 @@ class X86CPU {
       let flags = 1;
       if (this.pc.a20Enabled) {
         if (physPage < this.ramSize && (!isWrite || physPage < 0xE0000 || physPage >= 0x100000)) flags = 3;
-        else if (physPage >= 0xE0000000 && physPage < (0xE0000000 + this.vbeLfbSize) >>> 0) flags = 5;
+        else if (physPage >= this.pc.vbeLfbPhysBase && physPage < (this.pc.vbeLfbPhysBase + this.vbeLfbSize) >>> 0) flags = 5;
       }
       if (this.tlbDirtyMask[page] === 0) {
         this.tlbDirtyMask[page] = 1;
@@ -6005,7 +6114,7 @@ class X86CPU {
     let flags = 1;
     if (this.pc.a20Enabled) {
       if (physPage < this.ramSize && (!isWrite || physPage < 0xE0000 || physPage >= 0x100000)) flags = 3;
-      else if (physPage >= 0xE0000000 && physPage < (0xE0000000 + this.vbeLfbSize) >>> 0) flags = 5;
+      else if (physPage >= this.pc.vbeLfbPhysBase && physPage < (this.pc.vbeLfbPhysBase + this.vbeLfbSize) >>> 0) flags = 5;
     }
     if (this.tlbDirtyMask[page] === 0) {
       this.tlbDirtyMask[page] = 1;
@@ -11271,6 +11380,7 @@ if (typeof globalThis !== 'undefined') {
   globalThis.DMA8237 = DMA8237;
   globalThis.FDC82077AA = FDC82077AA;
   globalThis.StudioNetNIC = StudioNetNIC;
+  globalThis.generateSonderProceduralPage = generateSonderProceduralPage;
 }
 
 // Browser-only UI initialization

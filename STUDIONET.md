@@ -1,84 +1,70 @@
-# StudioNet Virtual Network & Protocol Specification (`STUDIONET.md`)
+# StudioNet & Sonder Engine Specification (`STUDIONET.md`)
 
-**Studio:** ConsciousNode SoftWorks · **Licence:** MIT · **Version:** `StudioNet 1.0`
+**Studio:** ConsciousNode SoftWorks · **Licence:** MIT
 
----
-
-## 1. Overview
-
-**StudioNet** is a zero-dependency virtual local area network device (`StudioNetNIC`) added to both **Hummingbird** and **TabComp**, paired with a complete portable network stack (`/src/net.sp`) inside SpiralOS.
-
-- **Browser Backend**: Uses the browser's native `BroadcastChannel("studionet-v1")` for real-time tab-to-tab packet switching across separate browser tabs (`tabcomp.html` ↔ `hummingbird.html` ↔ `index.html`), plus an in-page virtual switch (`globalThis.__STUDIONET_SWITCH`) for dual-machine operation inside the Spiral Build Station.
-- **Headless Node.js Backend**: Uses `globalThis.__STUDIONET_SWITCH` for deterministic, zero-latency cross-machine packet routing in `tests/net.js`.
-- **Sonder Procedural Internet Bridge (Stretch §5)**: Station `0x00FE` (`"sonder.gw"`) acts as a built-in gateway that responds to StudioNet HTTP/SSP requests with procedural hypertext capsules.
+**StudioNet** is SpiralOS's zero-dependency virtual local area network device and protocol stack, connecting **TabComp (`0x0001`)**, **Hummingbird (`0x0002`)**, and the **Sonder Procedural Web Gateway (`0x00FE`)** across both single-page dual-station mode (`index.html`) and cross-tab `BroadcastChannel('studionet_v1')` links.
 
 ---
 
-## 2. Hardware Device Interfaces
+## 1. Hardware Interface
 
-### 2.1 Hummingbird i586 PC Interface (`I/O Ports 0x02A0 .. 0x02AF`, `IRQ 10`)
+### 1.1 Hummingbird (`i586`) I/O Port Interface (`0x500 .. 0x518`)
+Added to `HummingbirdPC` as an emulated I/O device with **hardware presence detection**:
 
-| Port | Width | Access | Register Name | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `0x02A0` | 16-bit | R | `SNET_MAGIC` | Identification word `0x4E53` (`'SN'`). |
-| `0x02A2` | 8-bit | R | `SNET_STATUS` | Bit 0 (`0x01`): `RX_READY` (≥1 frame queued); Bit 2 (`0x04`): `LINK_UP`; Bit 3 (`0x08`): `IRQ_ENABLED`. |
-| `0x02A2` | 8-bit | W | `SNET_CMD` | `0x01` (`CMD_TX_SEND`): DMA transmit `SNET_LEN` bytes from `SNET_DMA_ADDR`.<br>`0x02` (`CMD_RX_POP`): DMA copy head RX frame to `SNET_DMA_ADDR` & pop.<br>`0x03` (`CMD_RESET`): Clear queues.<br>`0x04` / `0x05`: Enable / disable `IRQ 10` on RX arrival. |
-| `0x02A4` | 16-bit | R/W | `SNET_NODE_ID` | 16-bit station address (default `0x0201` on Hummingbird). |
-| `0x02A6` | 16-bit | R/W | `SNET_LEN` | Write: sets TX frame byte length (`1..512`). Read: returns byte length of popped/head RX frame. |
-| `0x02A8` | 32-bit | R/W | `SNET_DMA_ADDR`| 32-bit physical memory address in Hummingbird RAM for zero-copy DMA TX/RX. |
-| `0x02AC` | 8-bit | R/W | `SNET_PIO_FIFO`| Byte-by-byte PIO fallback data port. |
-| `0x02AD` | 8-bit | R | `SNET_TX_CNT` | Low 8 bits of transmitted frame counter. |
-| `0x02AE` | 16-bit | R | `SNET_RX_CNT` | 16-bit received frame counter. |
-
-### 2.2 TabComp TC-32 Interface (`MMIO 0x0FFD40 .. 0x0FFD7F` + `SYS 32..34`)
-
-| MMIO Address | Width | Register Name | Description |
+| I/O Port | Width | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `0x0FFD40` | 32-bit | `SNET_MAGIC` | Reads `0x534E4554` (`'SNET'`). |
-| `0x0FFD44` | 32-bit | `SNET_STATUS` | Bit 0: `RX_READY`, Bit 2: `LINK_UP`. |
-| `0x0FFD48` | 32-bit | `SNET_CMD` | Write `1` = TX send from `SNET_DMA_ADDR`; Write `2` = RX pop to `SNET_DMA_ADDR`; Write `3` = reset. |
-| `0x0FFD4C` | 32-bit | `SNET_NODE_ID` | Station address (default `0x0101` on TabComp). |
-| `0x0FFD50` | 32-bit | `SNET_LEN` | TX frame length or received frame length (`0..512`). |
-| `0x0FFD54` | 32-bit | `SNET_DMA_ADDR`| 24-bit physical RAM address in TabComp memory. |
-| `0x0FFD58` | 32-bit | `SNET_TX_CNT` | Total transmitted frames. |
-| `0x0FFD5C` | 32-bit | `SNET_RX_CNT` | Total received frames. |
+| `0x500` | `8/32-bit` | Read/Write | **Status / Control Register**: Returns `0xA5` (`bit 7 = 1` present magic, `bit 0 = RX ready`) when a StudioNet NIC is installed. On machines without StudioNet (e.g. QEMU or `strictBios: { noStudioNet: true }`), reading `0x500` returns `0xFF` (`0x00` in strict unconnected buses). The x86 Core checks `(inb(0x500) & 0xFE) == 0xA4` before touching any FIFO registers, preventing bogus RX reads on bare metal. |
+| `0x504` | `32-bit` | Read | **Node ID**: `0x0002` (Hummingbird station address). |
+| `0x508` | `32-bit` | Read/Write | **TX Length / Trigger**: Writing frame byte length (`1..512`) transmits the TX buffer onto the StudioNet bus. |
+| `0x50C` | `32-bit` | Read/Write | **RX Length / Pop**: Reading returns pending RX frame byte length (`0` if empty); writing `1` pops the current RX frame. |
+| `0x510` | `8-bit` | Write | **TX FIFO Byte Port**: Appends a byte to the outbound frame buffer. |
+| `0x514` | `8-bit` | Read | **RX FIFO Byte Port**: Reads the next byte from the current inbound frame. |
+
+### 1.2 TabComp (`TC-32`) System Trap Interface
+- `SYS 40` (`sys_net_tx(buf_addr, len)`): Copies `len` bytes from `VM_MEM[buf_addr]` and broadcasts the frame over `BroadcastChannel('studionet_v1')` and `window._studioNetLocalHook`.
+- `SYS 41` (`sys_net_rx(buf_addr, max_len)`): Dequeues the next frame from `netRxQueue` into `VM_MEM[buf_addr]` and returns its byte length (`0` if empty).
+- `SYS 42` (`sys_net_node()`): Returns `0x0001` (TabComp station address).
 
 ---
 
-## 3. Wire Frame Format & Protocol Stack (`/src/net.sp`)
+## 2. Wire Frame Format & Protocol Stack (`/src/net.sp`)
 
-Every StudioNet frame (`16 .. 512` bytes) begins with a 16-byte little-endian header:
+Every StudioNet frame has a **12-byte header** followed by up to `500` bytes of payload:
 
-```
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|          dst_node (16)        |          src_node (16)        |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|   proto (8)   |   flags (8)   |           sport (16)          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|           dport (16)          |            seq (16)           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|            ack (16)           |        payload_len (16)       |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                     payload (0 .. 496 bytes)                  |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-```
+| Byte Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| `0x00 .. 0x01` | `u16 LE` | `dst_node` | Destination node (`0x0001` TabComp, `0x0002` Hummingbird, `0x00FE` Sonder Gateway, `0xFFFF` Broadcast) |
+| `0x02 .. 0x03` | `u16 LE` | `src_node` | Source node (`0x0001` or `0x0002`) |
+| `0x04` | `u8` | `proto` | Protocol ID (`1`=`ECHO_REQ`, `2`=`ECHO_REP`, `3`=`SDP` Datagram, `4`=`SHP` Hypertext, `5`=`SFP` File Transfer) |
+| `0x05` | `u8` | `ttl` | Time-to-live (`16` default) |
+| `0x06 .. 0x07` | `u16 LE` | `seq` | Monotonic packet sequence number |
+| `0x08 .. 0x09` | `u16 LE` | `len` | Payload length in bytes |
+| `0x0A .. 0x0B` | `u16 LE` | `checksum` | 16-bit XOR/additive frame checksum (`net_checksum`) |
 
-### 3.1 Addressing & StudioNet Name Service (`SNS`, `proto = 1`)
-- `0x0101`: `"tabcomp.local"` (TabComp station)
-- `0x0201`: `"hummingbird.local"` (Hummingbird i586 station)
-- `0x00FE`: `"sonder.gw"` (Sonder Procedural Internet Gateway)
-- `0xFFFF`: `"broadcast"` (All stations on bus)
+### Supported Protocols
+1. **`PROTO_ECHO_REQ` (`1`) / `PROTO_ECHO_REP` (`2`)**: Hardware/OS ping with round-trip latency tracking.
+2. **`PROTO_SDP` (`3`, Studio Datagram Protocol)**: Port-addressed UDP-style datagrams (`dst_port u16`, `src_port u16`, payload):
+   - Port `900`: **SpiralChat** real-time peer-to-peer messaging between TabComp and Hummingbird.
+   - Port `4400`: **Multiplayer SpiralSnake** (`net_send_snake_state`) — live dual-snake arena synchronization (`head_x`, `head_y`, `dir`, `score`) between TabComp and Hummingbird.
+3. **`PROTO_SHP` (`4`, Studio Hypertext Protocol)**: Request/response hypertext transport serving both local `/www/*.shm` pages and procedural Sonder pages from `sonder.gw` (`0x00FE`).
+4. **`PROTO_SFP` (`5`, Studio File Protocol)**: Cross-machine file push (`net_send_file`), writing received files directly into `/home/` on the remote machine's `SpiralFS`.
 
-### 3.2 StudioNet Datagram Protocol (`SDP`, `proto = 2`)
-Connectionless port-addressed datagrams:
-- **Port `7` (`PORT_ECHO`)**: Diagnostic echo/ping service.
-- **Port `4200` (`PORT_CHAT`)**: Used by **`SpiralChat`** and the `ping` shell command to exchange live text messages between TabComp and Hummingbird.
+---
 
-### 3.3 StudioNet Stream Protocol (`SSP`, `proto = 3`)
-Reliable sequenced (`seq`) and acknowledged (`ack`, `FLAG_SYN = 0x01`, `FLAG_ACK = 0x02`, `FLAG_PSH = 0x04`, `FLAG_FIN = 0x08`) stream layer:
-- **Port `4300` (`PORT_FTX` — `SpiralSend` File Transfer)**:
-  Encapsulates `[filename : 32B][file_payload : 0..440B]` with `FLAG_SYN | FLAG_PSH`. The receiving SpiralOS kernel writes the file directly into its `SpiralFS` volume, syncs the sectors to disk, and replies with a `FLAG_ACK` frame (`ack = seq + 1`).
-- **Port `80` (`PORT_HTTP` — `SpiralHttpd` Tiny Server & `SpiralWeb` Browser)**:
-  `SpiralWeb` sends `GET /index.hts` (or `GET /atlas` to `0x00FE`) over SSP to `PORT_HTTP`. The remote `SpiralHttpd` daemon serves the hypertext document from its local `SpiralFS` (`/www/index.hts`) in an `ACK | PSH` response, which `SpiralWeb` parses and renders (`<h1>`, `<p>`, `<a href='...'>`).
+## 3. Deterministic Seeded Sonder Engine (`sonder.gw`, `/src/net.sp`)
+
+In SpiralOS 1.1, **Sonder** is no longer a static JS string template. Both the in-OS network stack (`net_generate_sonder_into` in `/src/net.sp`) and the virtual gateway (`0x00FE`) run a **deterministic seeded procedural page generator**:
+
+- **Seed Derivation (`net_hash_str`)**: Computes a 32-bit FNV-1a-style hash (`seed`) from the requested URL (`sonder://...` or `http://...`), mixed with a linear congruential step (`sonder_rng(seed)`).
+- **Provenance Stamp**: Every generated document begins with an explicit provenance comment:
+  ```html
+  <!-- sonder: seed=0x........ template=ATLAS -->
+  ```
+- **Four Procedural Archetypes (`tmpl = seed & 3`)**:
+  1. **`ATLAS` (`tmpl == 0`)**: Cartographic Sector Survey with procedurally generated coordinates, resonance indices, inline procedural emblem (`<img src='emblem:N'>`), and 3 deterministic cross-links (`<a href='sonder://...'>`).
+  2. **`CHRONICLE` (`tmpl == 1`)**: Temporal Relay Log with procedural epoch timestamps, relay narrative paragraphs, inline waveform graphic (`<img src='wave:N'>`), and cross-links.
+  3. **`SCHEMATIC` (`tmpl == 2`)**: Subsystem Blueprint (`TC-32` / `i586` register & bus matrices), inline circuit diagram (`<img src='circuit:N'>`), and diagnostic links.
+  4. **`ARCHIVE` (`tmpl == 3`)**: Deep Storage Vault Index with artifact catalog records, inline crest graphic (`<img src='crest:N'>`), and vault links.
+- **SpiralWeb Browser Capabilities (`/src/apps1.sp`)**:
+  - Parses and renders `<h1>`, `<p>`, `<hr>`, `<!-- ... -->` provenance comments, inline procedural `<img src='...'>` graphics (`emblem`, `wave`, `circuit`, `crest`), and clickable `<a href='...'>` links.
+  - Clicking any rendered link pushes the current URL onto a **4-level `[Back]` history stack** (`WEB_HIST_BUF`, `WEB_HIST_SP`) and fetches the target page.
