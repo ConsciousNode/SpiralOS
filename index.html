@@ -18926,6 +18926,9 @@ if (typeof globalThis !== "undefined") {
   });
 
   // One-Click Export TabComp Cartridge (.html)
+  // AUDIT FIX (Kehai, 2026-11-10): the closing tags were written as '<" + "/script>' inside
+  // single-quoted strings, which emitted that text literally, so neither script element closed
+  // and the exported cartridge was a blank canvas. Split as '<' + '/script>' instead.
   document.getElementById("btn-dl-tabcomp").addEventListener("click", function() {
     if (!currentBuild) compileAndBootAll();
     const imgB64 = u8ToB64(currentBuild.img);
@@ -18934,7 +18937,7 @@ if (typeof globalThis !== "undefined") {
       '<style>body{margin:0;background:#080b14;color:#eef3ff;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}canvas{width:640px;height:400px;image-rendering:pixelated;border:2px solid #00e5ff}</style></head>' +
       '<body><h3>SpiralOS 1.1 "Real Spiral" — Bootable TabComp Cartridge (ConsciousNode SoftWorks)</h3>' +
       '<canvas id="tc-screen" width="320" height="200" tabindex="0"></canvas>' +
-      '<script id="spiral-img-b64" type="text/plain">' + imgB64 + '<" + "/script>' +
+      '<script id="spiral-img-b64" type="text/plain">' + imgB64 + '<' + '/script>' +
       '<script>' + document.getElementById("spiral-station-core").textContent +
       '\n(function(){const b64=document.getElementById("spiral-img-b64").textContent;const bin=atob(b64);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);' +
       'const c=document.getElementById("tc-screen"),ctx=c.getContext("2d"),id=ctx.createImageData(320,200);const cpu=new globalThis.TabCompCPU(new globalThis.TabCompFS());globalThis.initHardwareMemory(cpu);globalThis.bootSpiralDiskImage(cpu,u8);' +
@@ -18943,7 +18946,7 @@ if (typeof globalThis !== "undefined") {
       'c.addEventListener("mouseup",function(e){const r=c.getBoundingClientRect();cpu.setMouseState(((e.clientX-r.left)/r.width)*320,((e.clientY-r.top)/r.height)*200,0)});' +
       'window.addEventListener("keydown",function(e){let a=e.key.length===1?e.key.charCodeAt(0):(e.key==="Enter"?13:(e.key==="Backspace"?8:0));cpu.pushKeyEvent(1,e.keyCode&255,a,0)});' +
       'window.addEventListener("keyup",function(e){let a=e.key.length===1?e.key.charCodeAt(0):0;cpu.pushKeyEvent(0,e.keyCode&255,a,0)});' +
-      'function loop(){cpu.stepBatch(60000);globalThis.renderFramebufferToCanvas(cpu,ctx,id);requestAnimationFrame(loop)}requestAnimationFrame(loop);})();<" + "/script></body></html>';
+      'function loop(){cpu.stepBatch(60000);globalThis.renderFramebufferToCanvas(cpu,ctx,id);requestAnimationFrame(loop)}requestAnimationFrame(loop);})();<' + '/script></body></html>';
     const blob = new Blob([cartHtml], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

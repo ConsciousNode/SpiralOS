@@ -62,6 +62,10 @@ Kham's first physical try with the fixed image fell through to GRUB, and the bui
    - **Fix:** the GDT moved into stage 2 at `0x7F00`, and the geometry defaults moved to `0x190`. The partition table is now all zeros, the standard layout for a floppy image (FAT12 BPB plus `55AA`).
    - **Re-verified:** all three QEMU boot modes and the USB save probe still pass.
 
+5. **The TabComp cartridge export produced a blank page** (Kham's report from 1.0). The export handler wrote each closing tag as `'<" + "/script>'` inside single-quoted strings, so the text `<" + "/script>` went into the file literally, neither script element closed, and nothing ran.
+   - **Fix:** split as `'<' + '/script>'`.
+   - **Verified:** the exported `spiralos-tabcomp-cartridge.html` boots SpiralOS on TabComp by itself in headless Chromium (`screenshots/audit-1.1-cartridge-boots.png`).
+
 `tests/qemu.js` now boots the image three ways (floppy, IDE hard disk, USB stick via xHCI), and each must reach the 640×480 desktop.
 
 ## Packaging
