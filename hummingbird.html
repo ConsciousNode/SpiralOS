@@ -4679,6 +4679,14 @@ class HummingbirdPC {
           this.setStackCF(1);
           return;
         }
+        // AUDIT FIX (Kehai, 2026-11-10): real floppy DMA cannot cross a 64 KB physical boundary;
+        // SeaBIOS and real PCs fail such reads with status 09h. Strict mode now models that too.
+        if (this.strictBios && ((memAddr & 0xFFFF) + byteCount > 0x10000)) {
+          cpu.setReg8(REG_EAX + 4, 0x09); // DMA boundary error
+          cpu.setReg8(REG_EAX, 0);
+          this.setStackCF(1);
+          return;
+        }
         if (this.strictBios && ((sect - 1) + count > secPerTrk)) {
           cpu.setReg8(REG_EAX + 4, 0x09); // Cross-track / DMA boundary error in strict BIOS mode!
           cpu.setReg8(REG_EAX, 0);

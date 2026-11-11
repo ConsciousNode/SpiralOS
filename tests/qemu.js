@@ -52,14 +52,26 @@ try { if (fs.existsSync(ppmPath)) fs.unlinkSync(ppmPath); } catch (_) {}
 const cmd = `${qemuBin} -fda "${IMG_PATH}" -boot a -m 32M -vga std -display none -monitor stdio`;
 const monitorScript = 'cont\n';
 console.log(`  [INFO] Launching: ${cmd}`);
-const proc = spawnSync('sh', ['-c', `(sleep 2; echo "screendump ${ppmPath}"; sleep 1; echo "quit") | ${cmd}`], {
-  timeout: 10000,
+// AUDIT FIX (Kehai, 2026-11-10): the delivered check passed on ANY screendump, including the
+// 720x400 text console of a loader that had halted with 'E'. Now QEMU gets time to boot, and
+// the test only passes if the guest reached the 640x480 VBE desktop with non-blank pixels.
+const proc = spawnSync('sh', ['-c', `(sleep 25; echo "screendump ${ppmPath}"; sleep 1; echo "quit") | ${cmd}`], {
+  timeout: 60000,
   encoding: 'utf8'
 });
 
 if (fs.existsSync(ppmPath)) {
   const buf = fs.readFileSync(ppmPath);
-  console.log(`  [PASS] QEMU booted spiralos.img and captured framebuffer (${buf.length} bytes at ${ppmPath}).`);
+  const header = buf.slice(0, 32).toString('latin1').split(/\s+/);
+  const w = parseInt(header[1], 10), h = parseInt(header[2], 10);
+  const dataStart = buf.length - w * h * 3;
+  let lit = 0;
+  for (let i = dataStart; i < buf.length; i += 3) if (buf[i] | buf[i + 1] | buf[i + 2]) lit++;
+  if (w !== 640 || h !== 480 || lit < 50000) {
+    console.log(`  [FAIL] QEMU did not reach the VBE desktop: framebuffer ${w}x${h}, ${lit} lit pixels (text mode means the loader halted).`);
+    process.exit(1);
+  }
+  console.log(`  [PASS] QEMU real-BIOS boot reached the 640x480 desktop (${lit} lit pixels, ${ppmPath}).`);
 } else {
   console.log(`  [WARN] QEMU finished without screendump (${proc.stderr || proc.stdout || 'no output'}).`);
 }

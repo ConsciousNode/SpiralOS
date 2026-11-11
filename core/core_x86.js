@@ -276,6 +276,18 @@ function buildStage2Loader(pmBiosWriteRetAddr) {
   put(0x39, 0xE8);                   // cmp ax, bp
   put(0x76, 0x02);                   // jbe +2
   put(0x89, 0xE8);                   // mov ax, bp
+  // AUDIT FIX (Kehai, 2026-11-10): never let one INT 13h transfer cross a 64 KB physical
+  // boundary. Floppy DMA can't, and real BIOSes (SeaBIOS/QEMU, real PCs) fail the read with
+  // status 09h, which printed 'E' and halted. Clamp to sectors left before the boundary:
+  // bx = 128 - ((es & 0x0FFF) >> 5)
+  put(0x89, 0xFB);                   // mov bx, di (segment)
+  put(0x81, 0xE3); put16(0x0FFF);    // and bx, 0x0FFF
+  put(0xC1, 0xEB, 0x05);             // shr bx, 5
+  put(0xF7, 0xDB);                   // neg bx
+  put(0x81, 0xC3); put16(128);       // add bx, 128
+  put(0x39, 0xD8);                   // cmp ax, bx
+  put(0x76, 0x02);                   // jbe +2
+  put(0x89, 0xD8);                   // mov ax, bx
   put(0xA3); put16(0x7DF8);          // mov [0x7DF8], ax (chunk count)
 
   // Retry loop (3 attempts)
@@ -308,6 +320,7 @@ function buildStage2Loader(pmBiosWriteRetAddr) {
 
   b[jzDonePos] = (p - (jzDonePos + 1)) & 0xFF;
   put(0xC3);                         // ret
+  if (p > 0x0140) throw new Error(`Stage 2 loader overflows into the BIOS write thunk (${p} > 0x140)`);
 
   // --------------------------------------------------------------------------
   // Offset 0x0140 (phys 0x7F40): Real-Mode BIOS INT 13h AH=03h Write Thunk
