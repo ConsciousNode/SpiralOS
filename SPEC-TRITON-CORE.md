@@ -12,7 +12,7 @@ Build the instrument. Do not predict or rank results anywhere in code, docs or U
 
 ## Attached
 
-- **SpiralOS 1.2** (`spiralos/`): `VM.md` (the contract), `ARCHITECTURE.md`, `HARDWARE.md`, `STUDIONET.md`, `LANGUAGE.md`, `spiralos.img`, `core/` (the TC-32 and x86 Cores; read them as the reference for Core behavior), `compiler/`, `os/`, `tools/`, `tests/`, and `tabcomp.html` / `hummingbird.html` (the two existing machines, used by `tests/harness.js`).
+- **SpiralOS 1.2.1** (`spiralos/`): `VM.md` (the contract), `ARCHITECTURE.md`, `HARDWARE.md`, `STUDIONET.md`, `LANGUAGE.md`, `spiralos.img`, `core/` (the TC-32 and x86 Cores; read them as the reference for Core behavior), `compiler/`, `os/`, `tools/`, `tests/`, and `tabcomp.html` / `hummingbird.html` (the two existing machines, used by `tests/harness.js`).
 - **Triton 3.1** (`triton/`): `triton3.html` (the machine), `ISA-3.md`, `AUDIT-3.1.md`, `tests/t3-common.js`.
 - **Do not modify** `triton3.html`'s machine code, the `SPIR` bytecode, the two existing Cores, or the existing SpiralOS tests.
 
@@ -45,8 +45,8 @@ Build the instrument. Do not predict or rank results anywhere in code, docs or U
 
 ### C2. The disk image
 
-- Produce **`spiralos.img` 1.3**: the 1.2 image with the Triton Core added in a free region (sectors `960..` are free; document the exact range in `ARCHITECTURE.md`'s disk map).
-  - The x86 boot sectors, the TC-32 Core, the `SPIR` image and the `SpiralFS` volume stay **byte-identical**. A test checks their hashes against 1.2.
+- Produce **`spiralos.img` 1.3**: the 1.2.1 image with the Triton Core added in a free region (sectors `960..` are free; document the exact range in `ARCHITECTURE.md`'s disk map).
+  - The x86 boot sectors, the TC-32 Core, the `SPIR` image and the `SpiralFS` volume stay **byte-identical**. A test checks their hashes against 1.2.1.
   - The 1.3 image still boots on TabComp and Hummingbird: the existing boot tests pass unmodified.
 - Triton reads the image one byte per tryte, packed into 729-tryte sectors. Document the mapping.
 
@@ -64,7 +64,7 @@ Build the instrument. Do not predict or rank results anywhere in code, docs or U
 5. **Apps and the file system.** A subset of the SpiralOS app tests (shell, editor save, file list) passes on Triton. A file written on Triton persists across a Triton reboot from the same disk.
 6. **Self-hosting (stretch).** SpiralC inside SpiralOS on Triton recompiles an OS source file. The output matches the same compile on Hummingbird. If it's too slow or doesn't fit, report the measured speed and stop; don't fake it.
 7. **Preemption.** Two Spiral tasks both make progress under Triton timer preemption. A task looping forever doesn't freeze the desktop.
-8. **Image integrity.** The 1.2 regions of the 1.3 image are byte-identical, and the existing boot tests pass on TabComp and Hummingbird.
+8. **Image integrity.** The 1.2.1 regions of the 1.3 image are byte-identical, and the existing boot tests pass on TabComp and Hummingbird.
 9. **Positive controls.** A Core build option `noWrap32` (additions don't wrap) must fail test 2. A build option that swaps two palette mapping entries must fail test 4's framebuffer check. A build option that makes one shift use count mod 64 instead of the reference behavior must fail test 2.
 10. **Speed** (measured, not required): Spiral bytecode instructions per second on Triton's WASM core, boot time to desktop in virtual steps, and the ratio to the other Cores. Report the numbers; don't tune them up.
 11. **Static scan** and **real browser** (Playwright or Selenium; `SKIPPED: <reason>` if neither is available, and a skip is never a pass).
