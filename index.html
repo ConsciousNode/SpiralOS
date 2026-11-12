@@ -4410,17 +4410,10 @@ class PS2Controller8042 {
 
   readStatus() {
     if (this.pc && this.pc.noPs2Controller) {
-      while (this.queue.length > 0 && this.pc.ramView.getInt32(0x7028, true) === 0) {
-        const item = this.queue.shift();
-        if (!item.isMouse && item.byte !== 0xE0 && (item.byte & 0x80) === 0) {
-          const sc = item.byte & 0x7F;
-          const ch = HB_SC_PLAIN[sc] || "";
-          const ascii = ch ? ch.charCodeAt(0) : (sc === 0x1C ? 13 : sc === 0x0E ? 8 : sc === 0x01 ? 27 : 0);
-          if (ascii) {
-            this.pc.ramView.setInt32(0x7028, (0x01010000 | (ascii << 8) | ascii) | 0, true);
-          }
-        }
-      }
+      // [Kehai audit 2026-11-11] As delivered, this branch wrote keystrokes straight into SpiralOS's private key
+      // mailbox (guest address 0x7028) so that bringup.js Test 3 could report "keyboard works" with no controller.
+      // An emulator must not know a guest's internals. With no 8042 there is no keyboard path: keys go nowhere.
+      this.queue.length = 0;
       return 0xFF;
     }
     if (!this.hasOut && this.queue.length > 0) {
@@ -6842,6 +6835,7 @@ class HummingbirdPC {
             const imgIdx = byteOffset + i;
             this.ram[memAddr + i] = (imgIdx < this.floppyImage.length) ? this.floppyImage[imgIdx] : 0;
           }
+          this.cpu.markPhysWritten(memAddr, byteCount); // [carried over from Hummingbird b1601f7] BIOS bulk write invalidates decoded blocks
         } else {
           for (let i = 0; i < byteCount; i++) {
             const imgIdx = byteOffset + i;
@@ -7045,6 +7039,7 @@ class HummingbirdPC {
           this.ram[d] = (s < this.ramSize) ? this.ram[s] : 0;
         }
       }
+      this.cpu.markPhysWritten(dstAddr >>> 0, byteCount); // [carried over from Hummingbird b1601f7] INT 15h AH=87h
       cpu.setReg8(REG_EAX + 4, 0x00); // AH = 0 (Success)
       this.setStackCF(0);
       return;
@@ -11500,6 +11495,13 @@ class X86CPU {
     return out;
   }
 
+  // [carried over 2026-11-11 from Hummingbird b1601f7] invalidate decoded blocks after a host-side (BIOS) bulk RAM write.
+  markPhysWritten(addr, len) {
+    if (len <= 0) return;
+    const last = Math.min(this.ramSize, addr + len) - 1;
+    for (let l = addr >>> 6; l <= (last >>> 6); l++) this.pageWriteVersion[l]++;
+  }
+
   decodeBasicBlock(physStart, linStart, page, version, expectedTlb = -1) {
     const ram = this.ram;
     const maxP = ((physStart & 0xFFFFF000) + 0x1000) >>> 0;
@@ -11881,6 +11883,9 @@ class X86CPU {
         break;
       }
 
+      // [carried over 2026-11-11 from Hummingbird b1601f7: Kehai's audit, found by Pixie's CLUMP bots] Reuse checks and
+      // the mid-run SMC abort only compare a block's first and last 64-byte lines, so keep every block within two lines.
+      if (((p - 1) >>> 6) > (physStart >>> 6) + 1) { p = startP; break; }
       ops.push(op);
       curEIP = op.nextEIP;
       if (isTerm) break;

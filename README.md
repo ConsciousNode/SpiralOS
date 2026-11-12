@@ -5,6 +5,8 @@
 
 ---
 
+> **1.2 (2026-11-11):** bare-metal bring-up patch, audited ([`AUDIT-1.2.md`](AUDIT-1.2.md)). Shell and app text stay inside their windows. The PS/2 mouse init does the full 8042 handshake with timeouts. The framebuffer pitch comes from VBE. Every bring-up test fails on 1.1 and passes on 1.2, including against emulated slow controllers, mice that need a reset, and padded scanlines.
+
 ## 1. Overview
 
 **SpiralOS** is a complete, graphical, self-hosting desktop operating system designed from the first byte to boot and run unchanged from a **single unified 1.44 MB disk image (`spiralos.img`, `1,474,560` bytes)** on two completely different hardware platforms:
