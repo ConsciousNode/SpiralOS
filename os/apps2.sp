@@ -12,6 +12,7 @@
 //   14. StudioNet Web Browser SpiralWeb (APP_BROWSER) — Links, History & Inline Images
 // ============================================================================
 
+// from spiralos/os/apps2.sp:15-135
 const CHAT_IN_BUF   = 0x04BD00;
 const WEB_HIST_BUF  = 0x04A000; // 8 entries * 64B: [node:4][url:60]
 const WEB_CUR_URL   = 0x04A200; // 64B current URL path
@@ -121,7 +122,7 @@ void apps2_init() {
   app_register_tick(APP_BLOCKS, 120);
 
   g_chat_in_len = 0;
-  hal_memset(CHAT_IN_BUF, 0, 64);
+  hal_memset(CHAT_IN_BUF, 0, 128);
   g_ftx_sel_idx = 0;
 
   g_web_hist_cnt = 0;
@@ -133,17 +134,20 @@ void apps2_init() {
   hal_memcpy(WEB_CUR_URL, "/www/index.hts", 14);
 }
 
+// from spiralos/os/apps2.sp:136-566 (modified for 1.2 F1: clip text, inputs, and rects to window bounds)
 // 8. Settings & Theme Editor (SpiralTheme)
 void app_draw_theme(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
-  hal_str(x + 8, y + 20, "Select Plain-Text Theme:", 14, -1);
-  gui_button(x + 8,  y + 32, 68, 13, "1:Aether", g_current_theme_idx == 0);
-  gui_button(x + 80, y + 32, 68, 13, "2:Amber",  g_current_theme_idx == 1);
-  gui_button(x + 8,  y + 48, 68, 13, "3:Oberon", g_current_theme_idx == 2);
-  gui_button(x + 80, y + 48, 68, 13, "4:Jade",   g_current_theme_idx == 3);
+  if (h > 20 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
+  }
+  gui_win_str(x, y, w, h, x + 8, y + 20, "Select Plain-Text Theme:", 14, -1);
+  gui_win_btn(x, y, w, h, x + 8,  y + 32, 68, 13, "1:Aether", g_current_theme_idx == 0);
+  gui_win_btn(x, y, w, h, x + 80, y + 32, 68, 13, "2:Amber",  g_current_theme_idx == 1);
+  gui_win_btn(x, y, w, h, x + 8,  y + 48, 68, 13, "3:Oberon", g_current_theme_idx == 2);
+  gui_win_btn(x, y, w, h, x + 80, y + 48, 68, 13, "4:Jade",   g_current_theme_idx == 3);
 
-  gui_button(x + 8,  y + 66, 68, 13, "TitleCol+", 0);
-  gui_button(x + 80, y + 66, 68, 13, "WallStyle", 0);
+  gui_win_btn(x, y, w, h, x + 8,  y + 66, 68, 13, "TitleCol+", 0);
+  gui_win_btn(x, y, w, h, x + 80, y + 66, 68, 13, "WallStyle", 0);
 }
 
 void app_click_theme(int wid, int rx, int ry) {
@@ -161,16 +165,20 @@ void app_click_theme(int wid, int rx, int ry) {
 
 // 9. Image Viewer (SpiralView)
 void app_draw_viewer(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 34, 0);
+  if (h > 34 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 34, 0);
+  }
+  int max_bw = w - 12;
+  int max_bh = h - 36;
   if (g_viewer_idx == 0) {
     int f0 = fs_find("/art/spiral.pic");
-    if (f0 >= 0) hal_blit(x + 8, y + 18, 96, 56, fs_entry_data_ptr(f0));
-    else hal_blit(x + 8, y + 18, 96, 56, PAINT_CANVAS);
+    if (f0 >= 0) gui_blit_clipped(x + 8, y + 18, 96, 56, max_bw, max_bh, fs_entry_data_ptr(f0));
+    else gui_blit_clipped(x + 8, y + 18, 96, 56, max_bw, max_bh, PAINT_CANVAS);
   } else {
-    hal_blit(x + 8, y + 18, 96, 56, PAINT_CANVAS);
+    gui_blit_clipped(x + 8, y + 18, 96, 56, max_bw, max_bh, PAINT_CANVAS);
   }
-  gui_button(x + 4,  y + h - 15, 52, 12, "NextPic", 0);
-  gui_button(x + 60, y + h - 15, 52, 12, "Canvas", 0);
+  gui_win_btn(x, y, w, h, x + 4,  y + h - 15, 52, 12, "NextPic", 0);
+  gui_win_btn(x, y, w, h, x + 60, y + h - 15, 52, 12, "Canvas", 0);
 }
 
 void app_click_viewer(int wid, int rx, int ry) {
@@ -204,9 +212,17 @@ void snake_step() {
 }
 
 void app_draw_snake(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, 144, 80, 0);
+  int pw = w - 8;
+  if (pw > 144) pw = 144;
+  int ph = h - 20;
+  if (ph > 80) ph = 80;
+  if (pw > 0 && ph > 0) {
+    hal_rect(x + 4, y + 16, pw, ph, 0);
+  }
   // Draw food
-  hal_rect(x + 4 + g_snake_fx * 8, y + 16 + g_snake_fy * 8, 7, 7, 12);
+  if ((g_snake_fx + 1) * 8 <= pw && (g_snake_fy + 1) * 8 <= ph) {
+    hal_rect(x + 4 + g_snake_fx * 8, y + 16 + g_snake_fy * 8, 7, 7, 12);
+  }
   // Draw peer snake if active over StudioNet
   if (g_peer_snake_active == 1) {
     for (int k = 0; k < 3; k++) {
@@ -214,24 +230,28 @@ void app_draw_snake(int x, int y, int w, int h) {
       int py = (g_peer_snake_y - k * g_peer_snake_dy + 10) % 10;
       int pcol = 11;
       if (k == 0) pcol = 13;
-      hal_rect(x + 4 + px * 8, y + 16 + py * 8, 7, 7, pcol);
+      if ((px + 1) * 8 <= pw && (py + 1) * 8 <= ph) {
+        hal_rect(x + 4 + px * 8, y + 16 + py * 8, 7, 7, pcol);
+      }
     }
   }
   // Draw local snake
   for (int i = 0; i < g_snake_len; i++) {
     int col = 10;
     if (i == 0) col = 14;
-    hal_rect(x + 4 + snake_x[i] * 8, y + 16 + snake_y[i] * 8, 7, 7, col);
+    if ((snake_x[i] + 1) * 8 <= pw && (snake_y[i] + 1) * 8 <= ph) {
+      hal_rect(x + 4 + snake_x[i] * 8, y + 16 + snake_y[i] * 8, 7, 7, col);
+    }
   }
-  hal_str(x + 4, y + 98, "Sc:", 11, -1);
+  gui_win_str(x, y, w, h, x + 4, y + 98, "Sc:", 11, -1);
   hal_itoa(g_snake_score, NUM_STR_BUF, 10);
-  hal_str(x + 28, y + 98, NUM_STR_BUF, 15, -1);
+  gui_win_str(x, y, w, h, x + 28, y + 98, NUM_STR_BUF, 15, -1);
   if (g_peer_snake_active == 1) {
-    hal_str(x + 54, y + 98, "P2:", 13, -1);
+    gui_win_str(x, y, w, h, x + 54, y + 98, "P2:", 13, -1);
     hal_itoa(g_peer_snake_score, NUM_STR_BUF, 10);
-    hal_str(x + 78, y + 98, NUM_STR_BUF, 11, -1);
+    gui_win_str(x, y, w, h, x + 78, y + 98, NUM_STR_BUF, 11, -1);
   }
-  gui_button(x + 96, y + 96, 52, 11, "Step", 0);
+  gui_win_btn(x, y, w, h, x + 96, y + 96, 52, 11, "Step", 0);
 }
 
 void app_key_snake(int ascii, int vk) {
@@ -266,20 +286,28 @@ void blocks_step() {
 }
 
 void app_draw_blocks(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, 64, 80, 0);
+  int pw = w - 8;
+  if (pw > 64) pw = 64;
+  int ph = h - 20;
+  if (ph > 80) ph = 80;
+  if (pw > 0 && ph > 0) {
+    hal_rect(x + 4, y + 16, pw, ph, 0);
+  }
   for (int r = 0; r < 10; r++) {
     for (int c = 0; c < 8; c++) {
       int cell = blocks_grid[r * 8 + c];
-      if (cell != 0) {
+      if (cell != 0 && (c + 1) * 8 <= pw && (r + 1) * 8 <= ph) {
         hal_rect(x + 4 + c * 8, y + 16 + r * 8, 7, 7, cell);
       }
     }
   }
-  hal_rect(x + 4 + g_blk_px * 8, y + 16 + g_blk_py * 8, 7, 7, 14);
-  hal_str(x + 72, y + 20, "Score:", 11, -1);
+  if ((g_blk_px + 1) * 8 <= pw && (g_blk_py + 1) * 8 <= ph) {
+    hal_rect(x + 4 + g_blk_px * 8, y + 16 + g_blk_py * 8, 7, 7, 14);
+  }
+  gui_win_str(x, y, w, h, x + 72, y + 20, "Score:", 11, -1);
   hal_itoa(g_blk_score, NUM_STR_BUF, 10);
-  hal_str(x + 72, y + 32, NUM_STR_BUF, 15, -1);
-  gui_button(x + 72, y + 50, 44, 12, "Drop", 0);
+  gui_win_str(x, y, w, h, x + 72, y + 32, NUM_STR_BUF, 15, -1);
+  gui_win_btn(x, y, w, h, x + 72, y + 50, 44, 12, "Drop", 0);
 }
 
 void app_key_blocks(int ascii, int vk) {
@@ -294,15 +322,36 @@ void app_click_blocks(int wid, int rx, int ry) {
 
 // 12. StudioNet Chat (SpiralChat)
 void app_draw_chat(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 36, 0);
+  if (h > 36 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 36, 0);
+  }
   int lines = g_chat_count;
   if (lines > 4) lines = 4;
+  int max_rows = (h - 38) / 11;
+  if (lines > max_rows) lines = max_rows;
+  int max_cols = (w - 12) / 8;
   for (int i = 0; i < lines; i++) {
-    hal_str(x + 6, y + 18 + i * 11, CHAT_LOG_BUF + i * 64, 11, -1);
+    if (max_cols > 0) {
+      gui_str_clip(x + 6, y + 18 + i * 11, CHAT_LOG_BUF + i * 64, max_cols, 11, -1);
+    }
   }
-  hal_rect(x + 4, y + h - 17, w - 52, 13, 16);
-  hal_str(x + 6, y + h - 15, CHAT_IN_BUF, 15, -1);
-  gui_button(x + w - 44, y + h - 17, 40, 13, "Send", 0);
+  int ibw = w - 52;
+  if (ibw > 8 && h >= 32) {
+    hal_rect(x + 4, y + h - 17, ibw, 13, 16);
+    int in_cols = (ibw - 4) / 8;
+    if (in_cols > 0) {
+      int in_start = 0;
+      int vis_len = g_chat_in_len;
+      if (vis_len > in_cols) {
+        in_start = vis_len - in_cols;
+        vis_len = in_cols;
+      }
+      if (vis_len > 0) {
+        gui_str_clip(x + 6, y + h - 15, CHAT_IN_BUF + in_start, vis_len, 15, -1);
+      }
+    }
+  }
+  gui_win_btn(x, y, w, h, x + w - 44, y + h - 17, 40, 13, "Send", 0);
 }
 
 void app_click_chat(int wid, int rx, int ry) {
@@ -313,7 +362,7 @@ void app_click_chat(int wid, int rx, int ry) {
     if (g_chat_in_len > 0) {
       net_send_chat(peer, CHAT_IN_BUF);
       g_chat_in_len = 0;
-      hal_memset(CHAT_IN_BUF, 0, 64);
+      hal_memset(CHAT_IN_BUF, 0, 128);
     } else {
       net_send_chat(peer, "Hello across StudioNet!");
     }
@@ -326,7 +375,7 @@ void app_key_chat(int ascii) {
     if (g_chat_in_len > 0) {
       net_send_chat(peer, CHAT_IN_BUF);
       g_chat_in_len = 0;
-      hal_memset(CHAT_IN_BUF, 0, 64);
+      hal_memset(CHAT_IN_BUF, 0, 128);
     }
     return;
   }
@@ -335,7 +384,7 @@ void app_key_chat(int ascii) {
     w8(CHAT_IN_BUF + g_chat_in_len, 0);
     return;
   }
-  if (ascii >= 32 && ascii <= 126 && g_chat_in_len < 28) {
+  if (ascii >= 32 && ascii <= 126 && g_chat_in_len < 96) {
     w8(CHAT_IN_BUF + g_chat_in_len, ascii);
     g_chat_in_len = g_chat_in_len + 1;
     w8(CHAT_IN_BUF + g_chat_in_len, 0);
@@ -344,22 +393,25 @@ void app_key_chat(int ascii) {
 
 // 13. StudioNet File Transfer (SpiralSend)
 void app_draw_transfer(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 36, 16);
-  hal_str(x + 8, y + 20, "SSP Reliable File Beam", 14, -1);
+  if (h > 36 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 36, 16);
+  }
+  int t_limit = h - 18;
+  gui_win_str(x, y, w, t_limit, x + 8, y + 20, "SSP Reliable File Beam", 14, -1);
   int fidx = fs_nth_index(g_ftx_sel_idx);
   if (fidx >= 0) {
-    hal_str(x + 8, y + 32, "File:", 11, -1);
-    hal_str(x + 50, y + 32, fs_entry_ptr(fidx), 15, -1);
+    gui_win_str(x, y, w, t_limit, x + 8, y + 32, "File:", 11, -1);
+    gui_win_str(x, y, w, t_limit, x + 50, y + 32, fs_entry_ptr(fidx), 15, -1);
   }
-  hal_str(x + 8, y + 44, "RX Files:", 11, -1);
+  gui_win_str(x, y, w, t_limit, x + 8, y + 44, "RX Files:", 11, -1);
   hal_itoa(g_ftx_rx_count, NUM_STR_BUF, 10);
-  hal_str(x + 84, y + 44, NUM_STR_BUF, 10, -1);
+  gui_win_str(x, y, w, t_limit, x + 84, y + 44, NUM_STR_BUF, 10, -1);
   if (r8(FTX_LAST_FILE) != 0) {
-    hal_str(x + 8, y + 56, "Last:", 11, -1);
-    hal_str(x + 50, y + 56, FTX_LAST_FILE, 15, -1);
+    gui_win_str(x, y, w, t_limit, x + 8, y + 56, "Last:", 11, -1);
+    gui_win_str(x, y, w, t_limit, x + 50, y + 56, FTX_LAST_FILE, 15, -1);
   }
-  gui_button(x + 4,  y + h - 17, 54, 13, "NextFile", 0);
-  gui_button(x + 62, y + h - 17, 74, 13, "BeamToPeer", 0);
+  gui_win_btn(x, y, w, h, x + 4,  y + h - 17, 54, 13, "NextFile", 0);
+  gui_win_btn(x, y, w, h, x + 62, y + h - 17, 74, 13, "BeamToPeer", 0);
 }
 
 void app_click_transfer(int wid, int rx, int ry) {
@@ -378,10 +430,11 @@ void app_click_transfer(int wid, int rx, int ry) {
 }
 
 // 14. StudioNet Web Browser (SpiralWeb: Clickable Links, Back History & Inline Images)
-void web_draw_inline_img(int x, int y, int src_str) {
+void web_draw_inline_img(int x, int y, int max_w, int max_h, int src_str) {
+  if (max_w <= 0 || max_h <= 0) return;
   int fidx = fs_find(src_str);
   if (fidx >= 0 && fs_entry_size(fidx) >= 96 * 16) {
-    hal_blit(x, y, 96, 16, fs_entry_data_ptr(fidx));
+    gui_blit_clipped(x, y, 96, 16, max_w, max_h, fs_entry_data_ptr(fidx));
     return;
   }
   int seed = 5381;
@@ -390,12 +443,16 @@ void web_draw_inline_img(int x, int y, int src_str) {
     seed = ((seed << 5) + seed) ^ r8(src_str + i);
     i = i + 1;
   }
-  hal_rect(x, y, 64, 14, 0);
+  int rw = 64;
+  if (rw > max_w) rw = max_w;
+  int rh = 14;
+  if (rh > max_h) rh = max_h;
+  hal_rect(x, y, rw, rh, 0);
   for (int row = 0; row < 12; row++) {
     for (int col = 0; col < 15; col++) {
       seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
       int c = 9 + ((seed >> 8) % 6);
-      if (((seed >> 4) & 3) != 0) {
+      if (((seed >> 4) & 3) != 0 && 2 + col * 4 + 3 <= rw && 1 + row + 1 <= rh) {
         hal_rect(x + 2 + col * 4, y + 1 + row, 3, 1, c);
       }
     }
@@ -403,11 +460,12 @@ void web_draw_inline_img(int x, int y, int src_str) {
 }
 
 void app_draw_browser(int x, int y, int w, int h) {
-  gui_button(x + 4,   y + 15, 52, 11, "PeerWeb", 0);
-  gui_button(x + 58,  y + 15, 60, 11, "SonderGW", 0);
-  gui_button(x + 120, y + 15, 48, 11, "Local", 0);
-  gui_button(x + 170, y + 15, 58, 11, "Back", g_web_hist_cnt > 0);
+  gui_win_btn(x, y, w, h, x + 4,   y + 15, 52, 11, "PeerWeb", 0);
+  gui_win_btn(x, y, w, h, x + 58,  y + 15, 60, 11, "SonderGW", 0);
+  gui_win_btn(x, y, w, h, x + 120, y + 15, 48, 11, "Local", 0);
+  gui_win_btn(x, y, w, h, x + 170, y + 15, 58, 11, "Back", g_web_hist_cnt > 0);
 
+  if (h <= 32 || w <= 8) return;
   hal_rect(x + 4, y + 28, w - 8, h - 32, 16);
   g_web_link_cnt = 0;
   g_web_img_drawn = 0;
@@ -418,7 +476,7 @@ void app_draw_browser(int x, int y, int w, int h) {
   int col = 15;
   int in_link = 0;
 
-  while (r8(WEB_PAGE_BUF + p) != 0 && ry < y + h - 10) {
+  while (r8(WEB_PAGE_BUF + p) != 0 && ry <= y + h - 12) {
     if (r8(WEB_PAGE_BUF + p) == 60) {
       if (match_prefix(WEB_PAGE_BUF + p, "<h1>") > 0) {
         col = 14; p = p + 4; cx = x + 8; continue;
@@ -452,9 +510,11 @@ void app_draw_browser(int x, int y, int w, int h) {
         }
         if (r8(WEB_PAGE_BUF + p) == 62) p = p + 1;
         if (cx > x + 8) { ry = ry + 9; cx = x + 8; }
-        web_draw_inline_img(cx, ry, WEB_IMG_SRC);
-        g_web_img_drawn = g_web_img_drawn + 1;
-        w32(VMRAM_STATUS + 0x68, g_web_img_drawn);
+        if (ry + 16 <= y + h - 4) {
+          web_draw_inline_img(cx, ry, x + w - 4 - cx, y + h - 4 - ry, WEB_IMG_SRC);
+          g_web_img_drawn = g_web_img_drawn + 1;
+          w32(VMRAM_STATUS + 0x68, g_web_img_drawn);
+        }
         ry = ry + 16;
         cx = x + 8;
         continue;
@@ -494,9 +554,12 @@ void app_draw_browser(int x, int y, int w, int h) {
           int ry0 = r32(lslot + 4);
           int rx1 = cx - x;
           if (rx1 <= rx0) rx1 = rx0 + 32;
+          if (rx1 > w - 6) rx1 = w - 6;
           w32(lslot + 8, rx1);
           w32(lslot + 12, (ry - y) + 9);
-          hal_rect(x + rx0, y + ry0 + 8, rx1 - rx0, 1, 11);
+          if (rx1 > rx0 && y + ry0 + 8 < y + h - 4) {
+            hal_rect(x + rx0, y + ry0 + 8, rx1 - rx0, 1, 11);
+          }
           g_web_link_cnt = g_web_link_cnt + 1;
         }
         in_link = 0;
@@ -515,14 +578,18 @@ void app_draw_browser(int x, int y, int w, int h) {
         cx = x + 8;
       }
     } else if (ch >= 32) {
-      if (cx + 8 < x + w - 6) {
-        hal_char(cx, ry, ch, col, -1);
+      if (cx + 8 <= x + w - 4) {
+        if (ry + 8 <= y + h - 4) {
+          hal_char(cx, ry, ch, col, -1);
+        }
         cx = cx + 8;
       } else {
         ry = ry + 9;
         cx = x + 8;
-        hal_char(cx, ry, ch, col, -1);
-        cx = cx + 8;
+        if (ry + 8 <= y + h - 4 && cx + 8 <= x + w - 4) {
+          hal_char(cx, ry, ch, col, -1);
+          cx = cx + 8;
+        }
       }
     }
     p = p + 1;

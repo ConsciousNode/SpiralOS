@@ -10,6 +10,7 @@
 
 const WM_TITLE_COLOR_OVERRIDE = 0;
 
+// from spiralos/os/wm.sp:13-166
 const MAX_WINS = 12;
 const APP_FILES    = 1;
 const APP_EDIT     = 2;
@@ -164,9 +165,13 @@ void wm_draw_window_frame(int wid, int is_focused) {
     hal_rect(x + 4, y + 5, 2, 5, thm_accent);
   }
 
-  // Title text
-  hal_str(x + 8, y + 4, win_title[wid], thm_title_text, -1);
+  // 1.2 F1: Clip title text to the space before the minimize/close buttons
+  int t_cols = (w - 30) / 8;
+  if (t_cols > 0) {
+    gui_str_clip(x + 8, y + 4, win_title[wid], t_cols, thm_title_text, -1);
+  }
 
+  // from spiralos/os/wm.sp:170-180
   // Minimize button [_] at x + w - 22
   gui_bevel_rect(x + w - 22, y + 3, 9, 9, thm_btn_face, thm_btn_hi, thm_btn_sh);
   hal_rect(x + w - 20, y + 9, 5, 2, thm_title_text);

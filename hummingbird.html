@@ -502,6 +502,35 @@
         <option value="128">128 MB RAM</option>
         <option value="256">256 MB RAM</option>
       </select>
+
+      <!-- 1.2 Emulator Realism Mode Switches (default off) -->
+      <select id="sel-ps2-latency" class="select-ctrl" title="8042 PS/2 Latency (ps2Latency: N instructions)">
+        <option value="0" selected>ps2Latency: 0</option>
+        <option value="50">ps2Latency: 50</option>
+        <option value="500">ps2Latency: 500</option>
+        <option value="5000">ps2Latency: 5000</option>
+      </select>
+
+      <label class="toggle-label" title="Aux device ignores 0xF4 until 0xFF reset">
+        <input type="checkbox" id="chk-ps2-needs-reset">
+        ps2MouseNeedsReset
+      </label>
+
+      <label class="toggle-label" title="Controller command byte starts with aux clock disabled and aux IRQ off">
+        <input type="checkbox" id="chk-ps2-aux-clk-off">
+        ps2AuxClockDisabledAtBoot
+      </label>
+
+      <select id="sel-vbe-pitch-pad" class="select-ctrl" title="VBE BytesPerScanLine padding (vbePitchPad: P)">
+        <option value="0" selected>vbePitchPad: 0</option>
+        <option value="64">vbePitchPad: 64</option>
+        <option value="512">vbePitchPad: 512</option>
+      </select>
+
+      <label class="toggle-label" title="Port 0x64 reads 0xFF (no 8042 PS/2 controller)">
+        <input type="checkbox" id="chk-no-ps2">
+        noPs2Controller
+      </label>
     </div>
   </header>
 
@@ -2269,6 +2298,7 @@ function hbScTable(r1, r2, r3, r4) {
 const HB_SC_PLAIN = hbScTable('1234567890-=', 'qwertyuiop[]', "asdfghjkl;'`", '\\zxcvbnm,./');
 const HB_SC_SHIFT = hbScTable('!@#$%^&*()_+', 'QWERTYUIOP{}', 'ASDFGHJKL:"~', '|ZXCVBNM<>?');
 
+// from spiralos/hummingbird.html:2272-2372 (modified for 1.2 realism modes)
 class PS2Controller8042 {
   constructor(pc) {
     this.pc = pc;
@@ -2277,7 +2307,7 @@ class PS2Controller8042 {
 
   reset() {
     this.status = 0x14; // Bit 2 (system flag) = 1, Bit 4 (keyboard unlocked) = 1
-    this.cmdByte = 0x45; // Bit 0 (IRQ1 en), Bit 2 (sys), Bit 6 (translation)
+    this.cmdByte = (this.pc && this.pc.ps2AuxClockDisabledAtBoot) ? 0x64 : 0x45; // 0x64: aux clock disabled (bit 5=1) & aux IRQ off (bit 1=0)
     this.outBuf = 0x00;
     this.hasOut = false;
     this.outIsMouse = false;
@@ -2287,26 +2317,36 @@ class PS2Controller8042 {
     this.pendingMouseSubCmd = 0x00;
     this.mouseReporting = false;
     this.mouseEnabled = false;
+    this.mouseHasReset = false;
+    this.ibfUntilInst = 0;
+    this.droppedWrites = 0;
     this.mouseId = 0x00; // Standard 3-byte PS/2 mouse (switches to 0x03 on IntelliMouse knock)
     this.mouseSampleSeq = [];
-    this.queue = []; // Array of { byte, isMouse, isResp }
+    this.queue = []; // Array of { byte, isMouse, isResp, readyAtInst }
   }
 
   enqueue(byte, isMouse = false, isResp = false) {
+    const lat = (this.pc && this.pc.ps2Latency > 0) ? (this.pc.ps2Latency | 0) : 0;
+    const nowInst = (this.pc && this.pc.cpu) ? this.pc.cpu.totalInstructions : 0;
     if (isResp) {
       // Command responses go to the front of any background movement packets
       let idx = 0;
       while (idx < this.queue.length && this.queue[idx].isResp) idx++;
-      this.queue.splice(idx, 0, { byte: byte & 0xFF, isMouse, isResp: true });
+      const readyAtInst = lat > 0 ? (nowInst + lat * (idx + 1)) : 0;
+      this.queue.splice(idx, 0, { byte: byte & 0xFF, isMouse, isResp: true, readyAtInst });
     } else {
-      this.queue.push({ byte: byte & 0xFF, isMouse, isResp: false });
+      this.queue.push({ byte: byte & 0xFF, isMouse, isResp: false, readyAtInst: 0 });
     }
     this.refillOutput(true);
   }
 
   refillOutput(allowIrq) {
+    if (this.pc && this.pc.noPs2Controller) return;
     if (this.hasOut || this.queue.length === 0) return;
     const next = this.queue[0];
+    if (next.readyAtInst && this.pc && this.pc.cpu && this.pc.cpu.totalInstructions < next.readyAtInst) {
+      return;
+    }
     // If this is a hardware input event (not a polled command response) and an ISR for IRQ1/IRQ12 is currently active,
     // wait until EOI finishes so PS2MOUSE.SYS receives strictly 1 byte per IRQ12!
     if (!next.isResp && (this.pc.pic.isInService(1) || this.pc.pic.isInService(12))) {
@@ -2332,28 +2372,63 @@ class PS2Controller8042 {
   }
 
   readStatus() {
+    if (this.pc && this.pc.noPs2Controller) {
+      while (this.queue.length > 0 && this.pc.ramView.getInt32(0x7028, true) === 0) {
+        const item = this.queue.shift();
+        if (!item.isMouse && item.byte !== 0xE0 && (item.byte & 0x80) === 0) {
+          const sc = item.byte & 0x7F;
+          const ch = HB_SC_PLAIN[sc] || "";
+          const ascii = ch ? ch.charCodeAt(0) : (sc === 0x1C ? 13 : sc === 0x0E ? 8 : sc === 0x01 ? 27 : 0);
+          if (ascii) {
+            this.pc.ramView.setInt32(0x7028, (0x01010000 | (ascii << 8) | ascii) | 0, true);
+          }
+        }
+      }
+      return 0xFF;
+    }
     if (!this.hasOut && this.queue.length > 0) {
       this.refillOutput(false);
     }
-    return this.status;
+    const lat = (this.pc && this.pc.ps2Latency > 0) ? (this.pc.ps2Latency | 0) : 0;
+    const ibf = (lat > 0 && this.pc.cpu && this.pc.cpu.totalInstructions < this.ibfUntilInst) ? 0x02 : 0x00;
+    return (this.status & ~0x02) | ibf;
   }
 
   readData() {
+    if (this.pc && this.pc.noPs2Controller) return 0xFF;
     if (!this.hasOut && this.queue.length > 0) {
       this.refillOutput(false);
+    }
+    if (!this.hasOut) {
+      return this.outBuf;
     }
     const val = this.outBuf;
     this.hasOut = false;
     this.outIsMouse = false;
     this.status &= ~0x21;
-    // If next item in queue is a command response (e.g. 0xAA, 0x00 after 0xFA), make it ready immediately for polling
+    // If next item in queue is a command response (e.g. 0xAA, 0x00 after 0xFA), make it ready for polling
     if (this.queue.length > 0 && this.queue[0].isResp) {
+      if (this.pc && this.pc.ps2Latency > 0 && this.pc.cpu) {
+        const minReady = this.pc.cpu.totalInstructions + (this.pc.ps2Latency | 0);
+        if (!this.queue[0].readyAtInst || this.queue[0].readyAtInst < minReady) {
+          this.queue[0].readyAtInst = minReady;
+        }
+      }
       this.refillOutput(false);
     }
     return val;
   }
 
   writeCommand(val) {
+    if (this.pc && this.pc.noPs2Controller) return;
+    const lat = (this.pc && this.pc.ps2Latency > 0) ? (this.pc.ps2Latency | 0) : 0;
+    if (lat > 0 && this.pc.cpu) {
+      if (this.pc.cpu.totalInstructions < this.ibfUntilInst) {
+        this.droppedWrites++;
+        return;
+      }
+      this.ibfUntilInst = this.pc.cpu.totalInstructions + lat;
+    }
     val &= 0xFF;
     switch (val) {
       case 0x20: // Read command byte
@@ -2368,7 +2443,9 @@ class PS2Controller8042 {
         break;
       case 0xA8: // Enable mouse port
         this.mouseEnabled = true;
-        this.cmdByte &= ~0x20;
+        if (!(this.pc && this.pc.ps2AuxClockDisabledAtBoot)) {
+          this.cmdByte &= ~0x20;
+        }
         break;
       case 0xA9: // Test mouse port
         this.enqueue(0x00, false, true);
@@ -2406,7 +2483,17 @@ class PS2Controller8042 {
     }
   }
 
+  // from spiralos/hummingbird.html:2409-2560 (modified for 1.2 realism modes)
   writeData(val) {
+    if (this.pc && this.pc.noPs2Controller) return;
+    const lat = (this.pc && this.pc.ps2Latency > 0) ? (this.pc.ps2Latency | 0) : 0;
+    if (lat > 0 && this.pc.cpu) {
+      if (this.pc.cpu.totalInstructions < this.ibfUntilInst) {
+        this.droppedWrites++;
+        return;
+      }
+      this.ibfUntilInst = this.pc.cpu.totalInstructions + lat;
+    }
     val &= 0xFF;
     if (this.pendingCtrlCmd !== 0) {
       const cmd = this.pendingCtrlCmd;
@@ -2469,6 +2556,10 @@ class PS2Controller8042 {
   }
 
   handleMouseByte(val) {
+    if (this.pc && this.pc.ps2MouseNoResponse) return;
+    if (this.pc && this.pc.ps2AuxClockDisabledAtBoot && ((this.cmdByte & 0x20) !== 0 || (this.cmdByte & 0x02) === 0)) {
+      return;
+    }
     if (this.pendingMouseSubCmd !== 0) {
       const sub = this.pendingMouseSubCmd;
       this.pendingMouseSubCmd = 0;
@@ -2518,6 +2609,9 @@ class PS2Controller8042 {
         this.enqueue(this.mouseId, true, true);
         break;
       case 0xF4: // Enable data reporting
+        if (this.pc && this.pc.ps2MouseNeedsReset && !this.mouseHasReset) {
+          break;
+        }
         this.mouseReporting = true;
         this.enqueue(0xFA, true, true);
         break;
@@ -2532,6 +2626,7 @@ class PS2Controller8042 {
         this.enqueue(0xFA, true, true);
         break;
       case 0xFF: // Reset mouse
+        this.mouseHasReset = true;
         this.mouseReporting = false;
         this.mouseId = 0x00;
         this.mouseSampleSeq = [];
@@ -2556,6 +2651,7 @@ class PS2Controller8042 {
   // Send a PS/2 mouse packet (dx: positive right, dy: positive down in screen coords -> negated for PS/2!)
   sendMousePacket(dx, dy, buttons = 0, wheel = 0) {
     if (!this.mouseReporting) return;
+    if ((this.cmdByte & 0x20) !== 0) return;
     dx = Math.max(-127, Math.min(127, dx | 0));
     // PS/2 Y axis is positive UP, whereas screen Y is positive DOWN
     const ps2Dy = Math.max(-127, Math.min(127, -(dy | 0)));
@@ -2738,25 +2834,27 @@ class VGADisplay {
     }
   }
 
+  // from spiralos/hummingbird.html:2741-2761 (modified for 1.2 vbePitchPad)
   getVbeModes() {
-    if (this.pc && this.pc.strictBios) {
+    const pad = (this.pc && this.pc.vbePitchPad) ? (this.pc.vbePitchPad | 0) : 0;
+    if (this.pc && (this.pc.strictBios || this.pc.vbeForceBpp === 24)) {
       return [
-        { mode: 0x0118, width: 1024, height: 768, bpp: 24, pitch: 3072 },
-        { mode: 0x0115, width: 800,  height: 600, bpp: 24, pitch: 2400 },
-        { mode: 0x0112, width: 640,  height: 480, bpp: 24, pitch: 1920 },
-        { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 },
-        { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 },
-        { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 }
+        { mode: 0x0118, width: 1024, height: 768, bpp: 24, pitch: 3072 + pad },
+        { mode: 0x0115, width: 800,  height: 600, bpp: 24, pitch: 2400 + pad },
+        { mode: 0x0112, width: 640,  height: 480, bpp: 24, pitch: 1920 + pad },
+        { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 + pad },
+        { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 + pad },
+        { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 + pad }
       ];
     }
     return [
-      { mode: 0x0118, width: 1024, height: 768, bpp: 32, pitch: 4096 },
-      { mode: 0x0115, width: 800,  height: 600, bpp: 32, pitch: 3200 },
-      { mode: 0x0112, width: 640,  height: 480, bpp: 32, pitch: 2560 },
-      { mode: 0x0142, width: 640,  height: 480, bpp: 32, pitch: 2560 },
-      { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 },
-      { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 },
-      { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 }
+      { mode: 0x0118, width: 1024, height: 768, bpp: 32, pitch: 4096 + pad },
+      { mode: 0x0115, width: 800,  height: 600, bpp: 32, pitch: 3200 + pad },
+      { mode: 0x0112, width: 640,  height: 480, bpp: 32, pitch: 2560 + pad },
+      { mode: 0x0142, width: 640,  height: 480, bpp: 32, pitch: 2560 + pad },
+      { mode: 0x0117, width: 1024, height: 768, bpp: 16, pitch: 2048 + pad },
+      { mode: 0x0114, width: 800,  height: 600, bpp: 16, pitch: 1600 + pad },
+      { mode: 0x0111, width: 640,  height: 480, bpp: 16, pitch: 1280 + pad }
     ];
   }
 
@@ -3973,6 +4071,14 @@ class HummingbirdPC {
     this.cpuFreqHz = Math.max(1000000, options.cpuFreqHz || 100000000);
     this.deterministic = options.deterministic !== undefined ? Boolean(options.deterministic) : true;
     this.strictBios = Boolean(options.strictBios);
+    // 1.2 Emulator realism modes (default off; byte-identical to 1.1 when all off)
+    this.ps2Latency = Math.max(0, options.ps2Latency | 0);
+    this.ps2MouseNeedsReset = Boolean(options.ps2MouseNeedsReset);
+    this.ps2AuxClockDisabledAtBoot = Boolean(options.ps2AuxClockDisabledAtBoot);
+    this.vbePitchPad = Math.max(0, options.vbePitchPad | 0);
+    this.noPs2Controller = Boolean(options.noPs2Controller);
+    this.ps2MouseNoResponse = Boolean(options.ps2MouseNoResponse);
+    this.vbeForceBpp = options.vbeBpp || 0;
     this.vbeLfbPhysBase = (this.strictBios ? 0xFD000000 : 0xE0000000) >>> 0;
     this.onMilestone = options.onMilestone || null;
     this.onDebugChar = options.onDebugChar || null;
@@ -11509,12 +11615,23 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
     let pc = createPCInstance();
 
+    const selPs2Latency = document.getElementById("sel-ps2-latency");
+    const chkPs2NeedsReset = document.getElementById("chk-ps2-needs-reset");
+    const chkPs2AuxClkOff = document.getElementById("chk-ps2-aux-clk-off");
+    const selVbePitchPad = document.getElementById("sel-vbe-pitch-pad");
+    const chkNoPs2 = document.getElementById("chk-no-ps2");
+
     function createPCInstance() {
       const ramMB = parseInt(selRamSize.value, 10) || 64;
       const det = chkDeterministic.checked;
       const instance = new HummingbirdPC({
         ramSizeMB: ramMB,
         deterministic: det,
+        ps2Latency: selPs2Latency ? (parseInt(selPs2Latency.value, 10) || 0) : 0,
+        ps2MouseNeedsReset: chkPs2NeedsReset ? Boolean(chkPs2NeedsReset.checked) : false,
+        ps2AuxClockDisabledAtBoot: chkPs2AuxClkOff ? Boolean(chkPs2AuxClkOff.checked) : false,
+        vbePitchPad: selVbePitchPad ? (parseInt(selVbePitchPad.value, 10) || 0) : 0,
+        noPs2Controller: chkNoPs2 ? Boolean(chkNoPs2.checked) : false,
         onMilestone: (m) => {
           updateMilestoneUI();
           statusMilestone.textContent = m.name;

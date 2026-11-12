@@ -12,12 +12,14 @@
 //   7. System Monitor SpiralMon (APP_SYSMON)
 // ============================================================================
 
+// from spiralos/os/apps1.sp:15-82
 const EDIT_BUF       = 0x050000; // 36 KB editor text buffer (0x050000..0x058FFF)
 const EDIT_SCRATCH   = 0x059000; // 28 KB editor splice scratch (0x059000..0x05FFFF)
-const SHELL_OUT_BUF  = 0x04B000; // 5 lines of 48B shell output
-const SHELL_IN_BUF   = 0x04B200; // 64B shell input line
+const SHELL_OUT_BUF  = 0x04B000; // 5 lines of 48B shell output (legacy status mirror)
+const SHELL_IN_BUF   = 0x04B200; // 128B shell input line
 const PAINT_CANVAS   = 0x04C000; // 96 x 56 = 5376B paint canvas
 const NUM_STR_BUF    = 0x04DF00; // scratch number formatting buffer
+const SHELL_HIST_BUF = 0x04E000; // 32 lines of 96B full-width shell scrollback buffer
 
 int g_fm_selected;
 int g_edit_file_idx;
@@ -27,6 +29,7 @@ int g_edit_scroll;
 int g_edit_dirty;
 int g_shell_in_len;
 int g_shell_lines;
+int g_shell_hist_cnt;
 int g_paint_color;
 int g_paint_tool;
 int g_Paint_strokes;
@@ -81,6 +84,7 @@ void edit_set_wm_title_color(int new_col) {
   }
 }
 
+// from spiralos/os/apps1.sp:84-96 (modified for 1.2 F1: store full lines in SHELL_HIST_BUF)
 void shell_print(int msg_str) {
   int slot = g_shell_lines;
   if (slot >= 5) {
@@ -93,8 +97,22 @@ void shell_print(int msg_str) {
   if (mlen > 46) mlen = 46;
   hal_memcpy(dst, msg_str, mlen);
   g_shell_lines = g_shell_lines + 1;
+
+  int hslot = g_shell_hist_cnt;
+  if (hslot >= 32) {
+    hal_memcpy(SHELL_HIST_BUF, SHELL_HIST_BUF + 96, 31 * 96);
+    hslot = 31;
+  } else {
+    g_shell_hist_cnt = g_shell_hist_cnt + 1;
+  }
+  int hdst = SHELL_HIST_BUF + hslot * 96;
+  hal_memset(hdst, 0, 96);
+  int hlen = hal_strlen(msg_str);
+  if (hlen > 92) hlen = 92;
+  hal_memcpy(hdst, msg_str, hlen);
 }
 
+// from spiralos/os/apps1.sp:98-194 (modified for 1.2 F1: clear scrollback on clear)
 void shell_exec_cmd(int cmd_str) {
   if (hal_strcmp(cmd_str, "help") == 1) {
     shell_print("cmds: ls ps mem net cc rebuild asm");
@@ -158,7 +176,15 @@ void shell_exec_cmd(int cmd_str) {
   }
   if (hal_strcmp(cmd_str, "clear") == 1) {
     hal_memset(SHELL_OUT_BUF, 0, 5 * 48);
+    hal_memset(SHELL_HIST_BUF, 0, 32 * 96);
     g_shell_lines = 0;
+    g_shell_hist_cnt = 0;
+    return;
+  }
+  if (hal_strcmp(cmd_str, "lines") == 1) {
+    for (int li = 0; li < 30; li++) {
+      shell_print("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH");
+    }
     return;
   }
   if (hal_strcmp(cmd_str, "reboot") == 1) {
@@ -174,9 +200,11 @@ void apps1_init() {
   edit_load_file("/src/wm.sp");
 
   hal_memset(SHELL_OUT_BUF, 0, 5 * 48);
-  hal_memset(SHELL_IN_BUF, 0, 64);
+  hal_memset(SHELL_HIST_BUF, 0, 32 * 96);
+  hal_memset(SHELL_IN_BUF, 0, 128);
   g_shell_in_len = 0;
   g_shell_lines = 0;
+  g_shell_hist_cnt = 0;
   shell_print("SpiralOS 1.1 ('help')");
 
   g_paint_color = 14;
@@ -193,23 +221,34 @@ void apps1_init() {
   g_calc_entering = 1;
 }
 
+// from spiralos/os/apps1.sp:196-310 (modified for 1.2 F1: clip filenames, sizes, and buttons)
 void app_draw_files(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 36, 16);
+  if (h > 36 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 36, 16);
+  }
   int cnt = fs_count();
   int max_show = (h - 42) / 10;
+  int name_cols = (w - 54) / 8;
+  if (w < 116) {
+    name_cols = (w - 16) / 8;
+  }
   for (int i = 0; i < cnt && i < max_show; i++) {
     int fidx = fs_nth_index(i);
     int ry = y + 18 + i * 10;
     if (i == g_fm_selected) {
       hal_rect(x + 5, ry - 1, w - 10, 9, thm_title_active);
     }
-    hal_str(x + 8, ry, fs_entry_ptr(fidx), 15, -1);
-    hal_itoa(fs_entry_size(fidx), NUM_STR_BUF, 10);
-    hal_str(x + w - 44, ry, NUM_STR_BUF, 11, -1);
+    if (name_cols > 0) {
+      gui_str_clip(x + 8, ry, fs_entry_ptr(fidx), name_cols, 15, -1);
+    }
+    if (w >= 116) {
+      hal_itoa(fs_entry_size(fidx), NUM_STR_BUF, 10);
+      gui_str_clip(x + w - 44, ry, NUM_STR_BUF, 5, 11, -1);
+    }
   }
-  gui_button(x + 4,  y + h - 16, 42, 12, "Edit", 0);
-  gui_button(x + 50, y + h - 16, 42, 12, "+New", 0);
-  gui_button(x + 96, y + h - 16, 40, 12, "Del", 0);
+  gui_win_btn(x, y, w, h, x + 4,  y + h - 16, 42, 12, "Edit", 0);
+  gui_win_btn(x, y, w, h, x + 50, y + h - 16, 42, 12, "+New", 0);
+  gui_win_btn(x, y, w, h, x + 96, y + h - 16, 40, 12, "Del", 0);
 }
 
 void app_click_files(int wid, int rx, int ry) {
@@ -235,15 +274,16 @@ void app_click_files(int wid, int rx, int ry) {
 }
 
 void app_draw_edit(int x, int y, int w, int h) {
-  gui_button(x + 4,   y + 15, 44, 11, "wm.sp", 0);
-  gui_button(x + 50,  y + 15, 52, 11, "Col196", 0);
-  gui_button(x + 104, y + 15, 42, 11, "Save", g_edit_dirty);
-  gui_button(x + 148, y + 15, 58, 11, "Rebuild", 0);
+  gui_win_btn(x, y, w, h, x + 4,   y + 15, 44, 11, "wm.sp", 0);
+  gui_win_btn(x, y, w, h, x + 50,  y + 15, 52, 11, "Col196", 0);
+  gui_win_btn(x, y, w, h, x + 104, y + 15, 42, 11, "Save", g_edit_dirty);
+  gui_win_btn(x, y, w, h, x + 148, y + 15, 58, 11, "Rebuild", 0);
 
   int tx = x + 4;
   int ty = y + 28;
   int tw = w - 8;
   int th = h - 32;
+  if (tw <= 4 || th <= 4) return;
   hal_rect(tx, ty, tw, th, 16);
 
   int max_rows = (th - 4) / 9;
@@ -308,25 +348,81 @@ void app_key_edit(int ascii, int vk) {
   }
 }
 
+// 1.2 F1: Soft-wrap shell output lines to inner width, recompute on resize,
+// scroll so newest wrapped lines and prompt are always visible, and scroll
+// the input line horizontally when longer than the inner width.
 void app_draw_shell(int x, int y, int w, int h) {
+  if (w <= 12 || h <= 24) return;
   hal_rect(x + 4, y + 15, w - 8, h - 19, 0);
-  int count = g_shell_lines;
-  if (count > 5) count = 5;
-  for (int i = 0; i < count; i++) {
-    hal_str(x + 6, y + 18 + i * 10, SHELL_OUT_BUF + i * 48, 10, -1);
+  int max_cols = (w - 10) / 8;
+  int max_rows = (h - 20) / 10;
+  if (max_cols < 1 || max_rows < 1) return;
+
+  int avail_out = max_rows - 1;
+  int total_wrapped = 0;
+  for (int i = 0; i < g_shell_hist_cnt; i++) {
+    int lptr = SHELL_HIST_BUF + i * 96;
+    int slen = hal_strlen(lptr);
+    int wrows = 1;
+    if (slen > 0) {
+      wrows = (slen + max_cols - 1) / max_cols;
+    }
+    total_wrapped = total_wrapped + wrows;
   }
-  int py = y + 18 + count * 10;
-  hal_str(x + 6, py, "$ ", 14, -1);
-  hal_str(x + 22, py, SHELL_IN_BUF, 15, -1);
-  hal_rect(x + 22 + g_shell_in_len * 8, py + 7, 6, 2, 14);
+
+  int skip_rows = 0;
+  if (total_wrapped > avail_out) {
+    skip_rows = total_wrapped - avail_out;
+  }
+
+  int cur_wrow = 0;
+  int drawn_rows = 0;
+  for (int j = 0; j < g_shell_hist_cnt; j++) {
+    int lptr2 = SHELL_HIST_BUF + j * 96;
+    int slen2 = hal_strlen(lptr2);
+    int wrows2 = 1;
+    if (slen2 > 0) {
+      wrows2 = (slen2 + max_cols - 1) / max_cols;
+    }
+    for (int r = 0; r < wrows2; r++) {
+      if (cur_wrow >= skip_rows && drawn_rows < avail_out) {
+        int ry = y + 18 + drawn_rows * 10;
+        int start_c = r * max_cols;
+        int rem_c = slen2 - start_c;
+        if (rem_c > max_cols) rem_c = max_cols;
+        if (rem_c > 0) {
+          gui_str_clip(x + 6, ry, lptr2 + start_c, rem_c, 10, -1);
+        }
+        drawn_rows = drawn_rows + 1;
+      }
+      cur_wrow = cur_wrow + 1;
+    }
+  }
+
+  int py = y + 18 + drawn_rows * 10;
+  gui_str_clip(x + 6, py, "$ ", max_cols, 14, -1);
+  if (max_cols >= 3) {
+    int in_cols = max_cols - 3;
+    int in_start = 0;
+    int vis_len = g_shell_in_len;
+    if (vis_len > in_cols) {
+      in_start = vis_len - in_cols;
+      vis_len = in_cols;
+    }
+    if (vis_len > 0) {
+      gui_str_clip(x + 22, py, SHELL_IN_BUF + in_start, vis_len, 15, -1);
+    }
+    hal_rect(x + 22 + vis_len * 8, py + 7, 6, 2, 14);
+  }
 }
 
+// from spiralos/os/apps1.sp:324-538 (modified for 1.2 F1: 120-char shell input & window clipping)
 void app_key_shell(int ascii, int vk) {
   if (ascii == 13) {
     w8(SHELL_IN_BUF + g_shell_in_len, 0);
     shell_exec_cmd(SHELL_IN_BUF);
     g_shell_in_len = 0;
-    hal_memset(SHELL_IN_BUF, 0, 64);
+    hal_memset(SHELL_IN_BUF, 0, 128);
     return;
   }
   if (ascii == 8) {
@@ -336,7 +432,7 @@ void app_key_shell(int ascii, int vk) {
     }
     return;
   }
-  if (ascii >= 32 && ascii <= 126 && g_shell_in_len < 36) {
+  if (ascii >= 32 && ascii <= 126 && g_shell_in_len < 120) {
     w8(SHELL_IN_BUF + g_shell_in_len, ascii);
     g_shell_in_len = g_shell_in_len + 1;
     w8(SHELL_IN_BUF + g_shell_in_len, 0);
@@ -344,28 +440,31 @@ void app_key_shell(int ascii, int vk) {
 }
 
 void app_draw_build(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 15, w - 8, h - 36, 16);
-  hal_str(x + 8, y + 19, "Self-Hosting SpiralC v1.1", 14, -1);
-  hal_str(x + 8, y + 31, "Target: SPIR Unified VM", 15, -1);
-  hal_str(x + 8, y + 43, "TitleOverride:", 11, -1);
+  if (h > 36 && w > 8) {
+    hal_rect(x + 4, y + 15, w - 8, h - 36, 16);
+  }
+  int b_limit = h - 18;
+  gui_win_str(x, y, w, b_limit, x + 8, y + 19, "Self-Hosting SpiralC v1.1", 14, -1);
+  gui_win_str(x, y, w, b_limit, x + 8, y + 31, "Target: SPIR Unified VM", 15, -1);
+  gui_win_str(x, y, w, b_limit, x + 8, y + 43, "TitleOverride:", 11, -1);
   hal_itoa(g_cc_parsed_override, NUM_STR_BUF, 10);
-  hal_str(x + 124, y + 43, NUM_STR_BUF, 15, -1);
+  gui_win_str(x, y, w, b_limit, x + 124, y + 43, NUM_STR_BUF, 15, -1);
 
   if (g_cc_last_status == 1) {
-    hal_str(x + 8, y + 55, "Status: IMAGE REBUILT OK", 10, -1);
-    hal_str(x + 8, y + 67, "Bytes:", 11, -1);
+    gui_win_str(x, y, w, b_limit, x + 8, y + 55, "Status: IMAGE REBUILT OK", 10, -1);
+    gui_win_str(x, y, w, b_limit, x + 8, y + 67, "Bytes:", 11, -1);
     hal_itoa(g_cc_last_bytes, NUM_STR_BUF, 10);
-    hal_str(x + 60, y + 67, NUM_STR_BUF, 15, -1);
+    gui_win_str(x, y, w, b_limit, x + 60, y + 67, NUM_STR_BUF, 15, -1);
   } else if (g_cc_last_status == -1) {
-    hal_str(x + 8, y + 55, CC_ERR_MSG, 12, -1);
-    hal_str(x + 8, y + 67, "Old image kept intact", 14, -1);
+    gui_win_str(x, y, w, b_limit, x + 8, y + 55, CC_ERR_MSG, 12, -1);
+    gui_win_str(x, y, w, b_limit, x + 8, y + 67, "Old image kept intact", 14, -1);
   } else {
-    hal_str(x + 8, y + 55, "Status: Ready to compile", 7, -1);
+    gui_win_str(x, y, w, b_limit, x + 8, y + 55, "Status: Ready to compile", 7, -1);
   }
 
-  gui_button(x + 4,   y + h - 17, 64, 13, "Compile", 0);
-  gui_button(x + 72,  y + h - 17, 62, 13, "AsmCore", 0);
-  gui_button(x + 138, y + h - 17, 60, 13, "Reboot", 0);
+  gui_win_btn(x, y, w, h, x + 4,   y + h - 17, 64, 13, "Compile", 0);
+  gui_win_btn(x, y, w, h, x + 72,  y + h - 17, 62, 13, "AsmCore", 0);
+  gui_win_btn(x, y, w, h, x + 138, y + h - 17, 60, 13, "Reboot", 0);
 }
 
 void app_click_build(int wid, int rx, int ry) {
@@ -381,17 +480,34 @@ void app_click_build(int wid, int rx, int ry) {
   }
 }
 
+void gui_blit_clipped(int dx, int dy, int bw, int bh, int max_w, int max_h, int src) {
+  if (max_w <= 0 || max_h <= 0) return;
+  if (max_w >= bw && max_h >= bh) {
+    hal_blit(dx, dy, bw, bh, src);
+    return;
+  }
+  int cw = bw;
+  if (cw > max_w) cw = max_w;
+  int ch = bh;
+  if (ch > max_h) ch = max_h;
+  for (int r = 0; r < ch; r++) {
+    hal_blit(dx, dy + r, cw, 1, src + r * bw);
+  }
+}
+
 void app_draw_paint(int x, int y, int w, int h) {
   for (int c = 0; c < 8; c++) {
     int col = c + 9;
-    hal_rect(x + 4 + c * 11, y + 15, 10, 10, col);
-    if (g_paint_color == col) {
-      hal_rect(x + 4 + c * 11, y + 25, 10, 2, 15);
+    if (4 + c * 11 + 10 <= w - 4 && 27 <= h - 4) {
+      hal_rect(x + 4 + c * 11, y + 15, 10, 10, col);
+      if (g_paint_color == col) {
+        hal_rect(x + 4 + c * 11, y + 25, 10, 2, 15);
+      }
     }
   }
-  gui_button(x + 94,  y + 15, 28, 11, "Clr", 0);
-  gui_button(x + 124, y + 15, 34, 11, "Save", 0);
-  hal_blit(x + 4, y + 29, 96, 56, PAINT_CANVAS);
+  gui_win_btn(x, y, w, h, x + 94,  y + 15, 28, 11, "Clr", 0);
+  gui_win_btn(x, y, w, h, x + 124, y + 15, 34, 11, "Save", 0);
+  gui_blit_clipped(x + 4, y + 29, 96, 56, w - 8, h - 33, PAINT_CANVAS);
 }
 
 void app_click_paint(int wid, int rx, int ry) {
@@ -449,29 +565,31 @@ void calc_eval_op(int next_op) {
 }
 
 void app_draw_calc(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, 14, 16);
-  hal_itoa(g_calc_cur, NUM_STR_BUF, 10);
-  hal_str(x + 8, y + 19, NUM_STR_BUF, 14, -1);
+  if (h >= 34 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, 14, 16);
+    hal_itoa(g_calc_cur, NUM_STR_BUF, 10);
+    gui_win_str(x, y, w, h, x + 8, y + 19, NUM_STR_BUF, 14, -1);
+  }
 
-  gui_button(x + 4,  y + 33, 24, 13, "7", 0);
-  gui_button(x + 30, y + 33, 24, 13, "8", 0);
-  gui_button(x + 56, y + 33, 24, 13, "9", 0);
-  gui_button(x + 82, y + 33, 24, 13, "+", g_calc_op == 1);
+  gui_win_btn(x, y, w, h, x + 4,  y + 33, 24, 13, "7", 0);
+  gui_win_btn(x, y, w, h, x + 30, y + 33, 24, 13, "8", 0);
+  gui_win_btn(x, y, w, h, x + 56, y + 33, 24, 13, "9", 0);
+  gui_win_btn(x, y, w, h, x + 82, y + 33, 24, 13, "+", g_calc_op == 1);
 
-  gui_button(x + 4,  y + 48, 24, 13, "4", 0);
-  gui_button(x + 30, y + 48, 24, 13, "5", 0);
-  gui_button(x + 56, y + 48, 24, 13, "6", 0);
-  gui_button(x + 82, y + 48, 24, 13, "-", g_calc_op == 2);
+  gui_win_btn(x, y, w, h, x + 4,  y + 48, 24, 13, "4", 0);
+  gui_win_btn(x, y, w, h, x + 30, y + 48, 24, 13, "5", 0);
+  gui_win_btn(x, y, w, h, x + 56, y + 48, 24, 13, "6", 0);
+  gui_win_btn(x, y, w, h, x + 82, y + 48, 24, 13, "-", g_calc_op == 2);
 
-  gui_button(x + 4,  y + 63, 24, 13, "1", 0);
-  gui_button(x + 30, y + 63, 24, 13, "2", 0);
-  gui_button(x + 56, y + 63, 24, 13, "3", 0);
-  gui_button(x + 82, y + 63, 24, 13, "*", g_calc_op == 3);
+  gui_win_btn(x, y, w, h, x + 4,  y + 63, 24, 13, "1", 0);
+  gui_win_btn(x, y, w, h, x + 30, y + 63, 24, 13, "2", 0);
+  gui_win_btn(x, y, w, h, x + 56, y + 63, 24, 13, "3", 0);
+  gui_win_btn(x, y, w, h, x + 82, y + 63, 24, 13, "*", g_calc_op == 3);
 
-  gui_button(x + 4,  y + 78, 24, 13, "C", 0);
-  gui_button(x + 30, y + 78, 24, 13, "0", 0);
-  gui_button(x + 56, y + 78, 24, 13, "=", 0);
-  gui_button(x + 82, y + 78, 24, 13, "/", g_calc_op == 4);
+  gui_win_btn(x, y, w, h, x + 4,  y + 78, 24, 13, "C", 0);
+  gui_win_btn(x, y, w, h, x + 30, y + 78, 24, 13, "0", 0);
+  gui_win_btn(x, y, w, h, x + 56, y + 78, 24, 13, "=", 0);
+  gui_win_btn(x, y, w, h, x + 82, y + 78, 24, 13, "/", g_calc_op == 4);
 }
 
 void app_click_calc(int wid, int rx, int ry) {
@@ -503,35 +621,39 @@ void app_key_calc(int ascii) {
 }
 
 void app_draw_sysmon(int x, int y, int w, int h) {
-  hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
-  if (g_machine_id == 1) hal_str(x + 8, y + 20, "CPU: TabComp TC-32", 14, -1);
-  else hal_str(x + 8, y + 20, "CPU: i586 Protected", 14, -1);
+  if (h > 20 && w > 8) {
+    hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
+  }
+  if (g_machine_id == 1) gui_win_str(x, y, w, h, x + 8, y + 20, "CPU: TabComp TC-32", 14, -1);
+  else gui_win_str(x, y, w, h, x + 8, y + 20, "CPU: i586 Protected", 14, -1);
 
-  hal_str(x + 8, y + 32, "Tasks:", 11, -1);
+  gui_win_str(x, y, w, h, x + 8, y + 32, "Tasks:", 11, -1);
   int hw_tasks = r32(VMRAM_SCHED_HDR + 4);
   hal_itoa(g_num_tasks + hw_tasks - 1, NUM_STR_BUF, 10);
-  hal_str(x + 60, y + 32, NUM_STR_BUF, 15, -1);
+  gui_win_str(x, y, w, h, x + 60, y + 32, NUM_STR_BUF, 15, -1);
 
-  hal_str(x + 92, y + 32, "Sw:", 11, -1);
+  gui_win_str(x, y, w, h, x + 92, y + 32, "Sw:", 11, -1);
   hal_itoa(r32(VMRAM_SCHED_HDR + 16), NUM_STR_BUF, 10);
-  hal_str(x + 118, y + 32, NUM_STR_BUF, 10, -1);
+  gui_win_str(x, y, w, h, x + 118, y + 32, NUM_STR_BUF, 10, -1);
 
-  hal_str(x + 8, y + 44, "VM Op:", 11, -1);
+  gui_win_str(x, y, w, h, x + 8, y + 44, "VM Op:", 11, -1);
   hal_itoa(hal_info(2), NUM_STR_BUF, 10);
-  hal_str(x + 60, y + 44, NUM_STR_BUF, 15, -1);
+  gui_win_str(x, y, w, h, x + 60, y + 44, NUM_STR_BUF, 15, -1);
 
   if (g_has_snet == 1) {
-    hal_str(x + 8, y + 56, "NetTX:", 11, -1);
+    gui_win_str(x, y, w, h, x + 8, y + 56, "NetTX:", 11, -1);
     hal_itoa(g_net_tx_pkts, NUM_STR_BUF, 10);
-    hal_str(x + 60, y + 56, NUM_STR_BUF, 10, -1);
+    gui_win_str(x, y, w, h, x + 60, y + 56, NUM_STR_BUF, 10, -1);
 
-    hal_str(x + 104, y + 56, "RX:", 11, -1);
+    gui_win_str(x, y, w, h, x + 104, y + 56, "RX:", 11, -1);
     hal_itoa(g_net_rx_pkts, NUM_STR_BUF, 10);
-    hal_str(x + 130, y + 56, NUM_STR_BUF, 10, -1);
+    gui_win_str(x, y, w, h, x + 130, y + 56, NUM_STR_BUF, 10, -1);
   } else {
-    hal_str(x + 8, y + 56, "Net: no network", 12, -1);
+    gui_win_str(x, y, w, h, x + 8, y + 56, "Net: no network", 12, -1);
   }
 
-  hal_rect(x + 8, y + 70, w - 16, 8, 8);
-  hal_rect(x + 8, y + 70, (w - 16) / 3, 8, thm_accent);
+  if (h >= 82 && w > 16) {
+    hal_rect(x + 8, y + 70, w - 16, 8, 8);
+    hal_rect(x + 8, y + 70, (w - 16) / 3, 8, thm_accent);
+  }
 }

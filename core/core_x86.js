@@ -503,15 +503,154 @@ function buildProtectedModeCore() {
   x.u8(0x8E); x.u8(0xE8); // mov gs, ax
   x.movRegImm32(R.ESP, 0x00098000);
 
-  // Detect PS/2 controller (port 0x64 != 0xFF) and enable auxiliary mouse
+  // 1.2 F2: Proper 8042 PS/2 mouse init handshake (replacing spiralos/core/core_x86.js:506-515)
   x.inAlImm8(0x64);
   x.andRegImm32(R.EAX, 0xFF);
   x.cmpRegImm32(R.EAX, 0xFF);
   x.jeLabel("skip_ps2_init");
-  x.movRegImm32(R.EAX, 0xA8); x.outImm8Al(0x64);
-  x.movRegImm32(R.EAX, 0xD4); x.outImm8Al(0x64);
-  x.movRegImm32(R.EAX, 0xF4); x.outImm8Al(0x60);
+
+  // 4. Flush any stale output bytes first (bounded to 64 reads)
+  x.movRegImm32(R.ECX, 64);
+  x.label("ps2_flush_lp");
+  x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 1);
+  x.jeLabel("ps2_flush_done");
   x.inAlImm8(0x60);
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("ps2_flush_lp");
+  x.label("ps2_flush_done");
+
+  // Enable auxiliary port (0xA8)
+  x.movRegImm32(R.EBX, 0xA8);
+  x.callLabel("ps2_out_64");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+
+  // 5. Read controller command byte (0x20), set aux-enable bits & clear aux-clock-disable bit, write back (0x60)
+  x.movRegImm32(R.EBX, 0x20);
+  x.callLabel("ps2_out_64");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.callLabel("ps2_in_60");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.orRegImm32(R.EAX, 0x03);
+  x.andRegImm32(R.EAX, 0xCF);
+  x.movRegReg32(R.ESI, R.EAX);
+
+  x.movRegImm32(R.EBX, 0x60);
+  x.callLabel("ps2_out_64");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.movRegReg32(R.EBX, R.ESI);
+  x.callLabel("ps2_out_60");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+
+  // 6. Reset the mouse (0xD4, 0xFF). Expect 0xFA then 0xAA, then optionally ID byte 0x00.
+  x.movRegImm32(R.ESI, 0xFF);
+  x.callLabel("ps2_mouse_cmd");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.callLabel("ps2_in_60");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.cmpRegImm32(R.EAX, 0xAA);
+  x.jneLabel("skip_ps2_init");
+  // Optional mouse ID byte (0x00): wait with bounded timeout, ignore if absent
+  x.callLabel("ps2_in_60");
+
+  // 7. Set defaults (0xF6), then enable streaming (0xF4), checking for 0xFA ACK each time.
+  x.movRegImm32(R.ESI, 0xF6);
+  x.callLabel("ps2_mouse_cmd");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+
+  x.movRegImm32(R.ESI, 0xF4);
+  x.callLabel("ps2_mouse_cmd");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("skip_ps2_init");
+  x.jmpLabel("skip_ps2_init");
+
+  // Helper: wait for IBF clear (status bit 1 == 0) then write BL to 0x64
+  x.label("ps2_out_64");
+  x.movRegImm32(R.ECX, 16384);
+  x.label("ps2_ibf64_lp");
+  x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("ps2_io_fail");
+  x.andRegImm32(R.EAX, 2);
+  x.jeLabel("ps2_ibf64_ok");
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("ps2_ibf64_lp");
+  x.jmpLabel("ps2_io_fail");
+  x.label("ps2_ibf64_ok");
+  x.movRegReg32(R.EAX, R.EBX);
+  x.outImm8Al(0x64);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.ret();
+
+  // Helper: wait for IBF clear (status bit 1 == 0) then write BL to 0x60
+  x.label("ps2_out_60");
+  x.movRegImm32(R.ECX, 16384);
+  x.label("ps2_ibf60_lp");
+  x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("ps2_io_fail");
+  x.andRegImm32(R.EAX, 2);
+  x.jeLabel("ps2_ibf60_ok");
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("ps2_ibf60_lp");
+  x.jmpLabel("ps2_io_fail");
+  x.label("ps2_ibf60_ok");
+  x.movRegReg32(R.EAX, R.EBX);
+  x.outImm8Al(0x60);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.ret();
+
+  // Helper: wait for OBF set (status bit 0 == 1) then read 0x60 into EAX
+  x.label("ps2_in_60");
+  x.movRegImm32(R.ECX, 16384);
+  x.label("ps2_obf_lp");
+  x.inAlImm8(0x64);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xFF);
+  x.jeLabel("ps2_io_fail");
+  x.andRegImm32(R.EAX, 1);
+  x.jneLabel("ps2_obf_ok");
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("ps2_obf_lp");
+  x.label("ps2_io_fail");
+  x.movRegImm32(R.EDX, 1);
+  x.ret();
+  x.label("ps2_obf_ok");
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAlImm8(0x60);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.ret();
+
+  // Helper: send 0xD4 to 0x64, ESI to 0x60, read ACK from 0x60 and verify 0xFA
+  x.label("ps2_mouse_cmd");
+  x.movRegImm32(R.EBX, 0xD4);
+  x.callLabel("ps2_out_64");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("ps2_mcmd_ret");
+  x.movRegReg32(R.EBX, R.ESI);
+  x.callLabel("ps2_out_60");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("ps2_mcmd_ret");
+  x.callLabel("ps2_in_60");
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("ps2_mcmd_ret");
+  x.cmpRegImm32(R.EAX, 0xFA);
+  x.jeLabel("ps2_mcmd_ret");
+  x.movRegImm32(R.EDX, 1);
+  x.label("ps2_mcmd_ret");
+  x.ret();
+
   x.label("skip_ps2_init");
 
   // Detect StudioNet presence (port 0x02A0 == 0x4E53 'SN')
@@ -1297,17 +1436,37 @@ function buildProtectedModeCore() {
   x.subRegImm32(R.ECX, 1);
   x.jneLabel("pal_lut_loop");
 
-  // Check VBE BitsPerPixel at 0x00005019 (24 vs 32)
+  // 1.2 F3: Read BytesPerScanLine (u16 at 0x00005010 from VBE ModeInfoBlock)
+  // (replacing spiralos/core/core_x86.js:1300-1361)
+  x.pushReg32(R.EBP);
   x.xorRegReg32(R.EBX, R.EBX);
+  x.u8(0x0F); x.u8(0xB7); x.memRegDisp(R.ECX, R.EBX, 0x5010); // movzx ecx, word [ebx + 0x5010]
+  x.cmpRegImm32(R.ECX, 0);
+  x.jneLabel("vbe_pitch_ok");
+  x.movRegImm32(R.ECX, 2560);
+  x.label("vbe_pitch_ok");
+  x.movMemReg32(R.EBX, 0x7800, R.ECX); // store pitch at [0x7800]
+
+  // Compute y=40 vertical centering offset: EDI = 0xE0000000 + 40 * pitch
+  x.movRegReg32(R.EDI, R.ECX);
+  x.shlRegImm(R.EDI, 5);
+  x.movRegReg32(R.EAX, R.ECX);
+  x.shlRegImm(R.EAX, 3);
+  x.addRegReg32(R.EDI, R.EAX);
+  x.addRegImm32(R.EDI, 0xE0000000);
+
+  // Check VBE BitsPerPixel at 0x00005019 (24 vs 32)
   x.movzxRegMem8(R.EAX, R.EBX, 0x5019);
   x.cmpRegImm32(R.EAX, 24);
   x.jeLabel("blit_24bpp");
 
-  // 32-bpp Blitter (pitch = 2560, y=40 offset = 0xE0019000)
+  // 32-bpp Blitter using dynamic VBE pitch from [0x7800]
   x.movRegImm32(R.ESI, 0x002F0000);
-  x.movRegImm32(R.EDI, 0xE0019000);
   x.movRegImm32(R.EDX, 200);
   x.label("blit_y_loop");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EBP, R.EBX, 0x7800);
+  x.addRegReg32(R.EBP, R.EDI); // EBP = EDI + pitch (odd scanline)
   x.movRegImm32(R.ECX, 320);
   x.label("blit_x_loop");
   x.movzxRegMem8(R.EAX, R.ESI, 0);
@@ -1315,23 +1474,30 @@ function buildProtectedModeCore() {
   x.movRegSib32(R.EAX, R.EBX, R.EAX, 2, 0x7400);
   x.movMemReg32(R.EDI, 0, R.EAX);
   x.movMemReg32(R.EDI, 4, R.EAX);
-  x.movMemReg32(R.EDI, 2560, R.EAX);
-  x.movMemReg32(R.EDI, 2564, R.EAX);
+  x.movMemReg32(R.EBP, 0, R.EAX);
+  x.movMemReg32(R.EBP, 4, R.EAX);
   x.addRegImm32(R.ESI, 1);
   x.addRegImm32(R.EDI, 8);
+  x.addRegImm32(R.EBP, 8);
   x.subRegImm32(R.ECX, 1);
   x.jneLabel("blit_x_loop");
-  x.addRegImm32(R.EDI, 2560);
+  x.subRegImm32(R.EDI, 2560);
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EAX, R.EBX, 0x7800);
+  x.addRegReg32(R.EDI, R.EAX);
+  x.addRegReg32(R.EDI, R.EAX); // advance EDI by 2 * pitch
   x.subRegImm32(R.EDX, 1);
   x.jneLabel("blit_y_loop");
   x.jmpLabel("blit_done");
 
-  // 24-bpp Blitter (pitch = 1920, y=40 offset = 0xE0000000 + 40*1920 = 0xE0012C00)
+  // 24-bpp Blitter using dynamic VBE pitch from [0x7800]
   x.label("blit_24bpp");
   x.movRegImm32(R.ESI, 0x002F0000);
-  x.movRegImm32(R.EDI, 0xE0012C00);
   x.movRegImm32(R.EDX, 200);
   x.label("blit24_y_loop");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EBP, R.EBX, 0x7800);
+  x.addRegReg32(R.EBP, R.EDI); // EBP = EDI + pitch (odd scanline)
   x.movRegImm32(R.ECX, 320);
   x.label("blit24_x_loop");
   x.movzxRegMem8(R.EAX, R.ESI, 0);
@@ -1339,26 +1505,32 @@ function buildProtectedModeCore() {
   x.movRegSib32(R.EAX, R.EBX, R.EAX, 2, 0x7400); // AL=B, AH=G, EAX>>16=R
   x.movMemReg8(R.EDI, 0, R.AL);
   x.movMemReg8(R.EDI, 3, R.AL);
-  x.movMemReg8(R.EDI, 1920, R.AL);
-  x.movMemReg8(R.EDI, 1923, R.AL);
+  x.movMemReg8(R.EBP, 0, R.AL);
+  x.movMemReg8(R.EBP, 3, R.AL);
   x.movMemReg8(R.EDI, 1, R.AH);
   x.movMemReg8(R.EDI, 4, R.AH);
-  x.movMemReg8(R.EDI, 1921, R.AH);
-  x.movMemReg8(R.EDI, 1924, R.AH);
+  x.movMemReg8(R.EBP, 1, R.AH);
+  x.movMemReg8(R.EBP, 4, R.AH);
   x.shrRegImm(R.EAX, 16);
   x.movMemReg8(R.EDI, 2, R.AL);
   x.movMemReg8(R.EDI, 5, R.AL);
-  x.movMemReg8(R.EDI, 1922, R.AL);
-  x.movMemReg8(R.EDI, 1925, R.AL);
+  x.movMemReg8(R.EBP, 2, R.AL);
+  x.movMemReg8(R.EBP, 5, R.AL);
   x.addRegImm32(R.ESI, 1);
   x.addRegImm32(R.EDI, 6);
+  x.addRegImm32(R.EBP, 6);
   x.subRegImm32(R.ECX, 1);
   x.jneLabel("blit24_x_loop");
-  x.addRegImm32(R.EDI, 1920);
+  x.subRegImm32(R.EDI, 1920);
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EAX, R.EBX, 0x7800);
+  x.addRegReg32(R.EDI, R.EAX);
+  x.addRegReg32(R.EDI, R.EAX); // advance EDI by 2 * pitch
   x.subRegImm32(R.EDX, 1);
   x.jneLabel("blit24_y_loop");
 
   x.label("blit_done");
+  x.popReg32(R.EBP);
   // Trigger preemptive check after frame yield
   x.movMemImm32(R.EBP, 0x0FFF0C, 1);
   x.popReg32(R.EDI);

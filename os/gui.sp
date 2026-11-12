@@ -6,6 +6,7 @@
 // wallpapers, chamfered/beveled window frames, buttons, icons, and cursors.
 // ============================================================================
 
+// from spiralos/os/gui.sp:9-125
 int thm_desk_top;
 int thm_desk_bot;
 int thm_taskbar_bg;
@@ -123,7 +124,25 @@ void gui_bevel_rect(int x, int y, int w, int h, int face, int hi, int sh) {
   hal_rect(x + w - 1, y, 1, h, sh);
 }
 
+// 1.2 F1: Clipped string & window-bounded widget helpers
+void gui_str_clip(int x, int y, int s, int max_c, int fg, int bg) {
+  int i = 0;
+  while (i < max_c && r8(s + i) != 0) {
+    hal_char(x + i * 8, y, r8(s + i), fg, bg);
+    i = i + 1;
+  }
+}
+
+void gui_win_str(int wx, int wy, int ww, int wh, int sx, int sy, int s, int fg, int bg) {
+  if (sy < wy + 14 || sy + 8 > wy + wh - 3) return;
+  int max_c = (wx + ww - 4 - sx) / 8;
+  if (max_c <= 0) return;
+  gui_str_clip(sx, sy, s, max_c, fg, bg);
+}
+
+// from spiralos/os/gui.sp:126-140 (modified for 1.2 F1: clip button label to button width)
 void gui_button(int x, int y, int w, int h, int label_str, int active) {
+  if (w <= 2 || h <= 2) return;
   int face = thm_btn_face;
   int hi = thm_btn_hi;
   int sh = thm_btn_sh;
@@ -133,12 +152,25 @@ void gui_button(int x, int y, int w, int h, int label_str, int active) {
     sh = thm_btn_hi;
   }
   gui_bevel_rect(x, y, w, h, face, hi, sh);
+  int max_c = (w - 2) / 8;
   int slen = hal_strlen(label_str);
-  int tx = x + ((w - slen * 8) >> 1);
-  int ty = y + ((h - 8) >> 1);
-  hal_str(tx, ty, label_str, thm_title_text, -1);
+  if (slen > max_c) slen = max_c;
+  if (slen > 0 && h >= 8) {
+    int tx = x + ((w - slen * 8) >> 1);
+    int ty = y + ((h - 8) >> 1);
+    gui_str_clip(tx, ty, label_str, slen, thm_title_text, -1);
+  }
 }
 
+void gui_win_btn(int wx, int wy, int ww, int wh, int bx, int by, int bw, int bh, int label_str, int active) {
+  if (by < wy + 14 || by + bh > wy + wh - 2) return;
+  int right_lim = wx + ww - 4;
+  if (bx + 6 > right_lim) return;
+  if (bx + bw > right_lim) bw = right_lim - bx;
+  gui_button(bx, by, bw, bh, label_str, active);
+}
+
+// from spiralos/os/gui.sp:142-197
 void gui_draw_wallpaper() {
   // Gradient background bands (y = 12 .. 183)
   for (int band = 0; band < 6; band++) {
