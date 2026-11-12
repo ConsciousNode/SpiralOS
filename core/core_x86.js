@@ -47,7 +47,7 @@ const X86_FONT_8X8_HEX =
   "0000c66c386cc6000000c6c6ce76067c0000fc983064fc000e18187018180e00" +
   "18181800181818007018180e1818700076dc0000000000000010386cc6c6fe00";
 
-function buildBootSector(customBanner = "SpiralOS 1.1") {
+function buildBootSector(customBanner = "SpiralOS 1.2") {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
 
@@ -552,7 +552,7 @@ function buildProtectedModeCore() {
   x.callLabel("ps2_mouse_cmd");
   x.cmpRegImm32(R.EDX, 0);
   x.jneLabel("skip_ps2_init");
-  x.callLabel("ps2_in_60");
+  x.callLabel("ps2_in_60_long"); // 1.2.1 H1: BAT can take hundreds of ms on real hardware
   x.cmpRegImm32(R.EDX, 0);
   x.jneLabel("skip_ps2_init");
   x.cmpRegImm32(R.EAX, 0xAA);
@@ -574,7 +574,7 @@ function buildProtectedModeCore() {
 
   // Helper: wait for IBF clear (status bit 1 == 0) then write BL to 0x64
   x.label("ps2_out_64");
-  x.movRegImm32(R.ECX, 16384);
+  x.movRegImm32(R.ECX, 65536); // 1.2.1 H1: was 16384
   x.label("ps2_ibf64_lp");
   x.inAlImm8(0x64);
   x.andRegImm32(R.EAX, 0xFF);
@@ -593,7 +593,7 @@ function buildProtectedModeCore() {
 
   // Helper: wait for IBF clear (status bit 1 == 0) then write BL to 0x60
   x.label("ps2_out_60");
-  x.movRegImm32(R.ECX, 16384);
+  x.movRegImm32(R.ECX, 65536); // 1.2.1 H1: was 16384
   x.label("ps2_ibf60_lp");
   x.inAlImm8(0x64);
   x.andRegImm32(R.EAX, 0xFF);
@@ -610,9 +610,19 @@ function buildProtectedModeCore() {
   x.xorRegReg32(R.EDX, R.EDX);
   x.ret();
 
+  // 1.2.1 H1: a mouse reset (0xFF) on real hardware can take hundreds of ms to
+  // report its self-test (0xAA); 16,384 status reads is only ~16 ms of real I/O.
+  // Long wait (~2M status reads, roughly 2 s on real ISA/LPC-speed port I/O) for
+  // the BAT result only. Emulators answer early, so this costs them nothing.
+  x.label("ps2_in_60_long");
+  x.movRegImm32(R.ECX, 0x200000);
+  x.jmpLabel("ps2_obf_lp");
+
   // Helper: wait for OBF set (status bit 0 == 1) then read 0x60 into EAX
+  // 1.2.1 H1: default wait raised 16,384 -> 65,536 reads (~65 ms real) so ACKs
+  // inside the PS/2 spec's 25 ms response window are never cut off.
   x.label("ps2_in_60");
-  x.movRegImm32(R.ECX, 16384);
+  x.movRegImm32(R.ECX, 65536);
   x.label("ps2_obf_lp");
   x.inAlImm8(0x64);
   x.andRegImm32(R.EAX, 0xFF);
@@ -1353,9 +1363,22 @@ function buildProtectedModeCore() {
   x.cmpRegImm32(R.EBX, 1);
   x.jeLabel("ms_stage1");
 
+  // 1.2.1 H2: decode the 3-byte packet with the 9-bit deltas the PS/2 protocol
+  // actually sends (sign bits in byte 0: bit 4 = X sign, bit 5 = Y sign), and drop
+  // the movement of any packet whose overflow bits (6, 7) are set. Buttons still update.
+  // (replacing spiralos/core/core_x86.js 1.2 lines: 8-bit sign-extension of bytes 1 and 2)
   x.movMemImm32(R.EDX, ADDR_MOUSE_STAGE, 0);
-  x.shlRegImm(R.EAX, 24);
-  x.sarRegImm(R.EAX, 24);
+  x.movRegMem32(R.EBX, R.EDX, ADDR_MOUSE_B0);
+  x.movRegReg32(R.ECX, R.EBX);
+  x.andRegImm32(R.ECX, 0xC0);
+  x.jneLabel("ms_skip_move");
+
+  // dY: EAX = byte 2 (0..255), minus 256 if the Y sign bit is set
+  x.movRegReg32(R.ECX, R.EBX);
+  x.andRegImm32(R.ECX, 0x20);
+  x.jeLabel("ms_dy_pos");
+  x.subRegImm32(R.EAX, 256);
+  x.label("ms_dy_pos");
   x.movRegMem32(R.ECX, R.EDX, ADDR_MOUSE_Y);
   x.subRegReg32(R.ECX, R.EAX);
   x.cmpRegImm32(R.ECX, 0); x.jgeLabel("ms_y_min_ok"); x.xorRegReg32(R.ECX, R.ECX);
@@ -1365,9 +1388,14 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.EDX, ADDR_MOUSE_Y, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD0C, R.ECX);
 
+  // dX: EAX = byte 1 (0..255), minus 256 if the X sign bit is set
   x.movRegMem32(R.EAX, R.EDX, ADDR_MOUSE_B1);
-  x.shlRegImm(R.EAX, 24);
-  x.sarRegImm(R.EAX, 24);
+  x.andRegImm32(R.EAX, 0xFF);
+  x.movRegReg32(R.ECX, R.EBX);
+  x.andRegImm32(R.ECX, 0x10);
+  x.jeLabel("ms_dx_pos");
+  x.subRegImm32(R.EAX, 256);
+  x.label("ms_dx_pos");
   x.movRegMem32(R.ECX, R.EDX, ADDR_MOUSE_X);
   x.addRegReg32(R.ECX, R.EAX);
   x.cmpRegImm32(R.ECX, 0); x.jgeLabel("ms_x_min_ok"); x.xorRegReg32(R.ECX, R.ECX);
@@ -1377,13 +1405,21 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.EDX, ADDR_MOUSE_X, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD08, R.ECX);
 
-  x.movRegMem32(R.EAX, R.EDX, ADDR_MOUSE_B0);
+  x.label("ms_skip_move");
+  x.movRegReg32(R.EAX, R.EBX);
   x.andRegImm32(R.EAX, 0x07);
   x.movMemReg32(R.EDX, ADDR_MOUSE_BTN, R.EAX);
   x.movMemReg32(R.EBP, 0x0FFD10, R.EAX);
   x.jmpLabel("ps2_poll_next");
 
   x.label("ms_stage0");
+  // 1.2.1 H2: packet sync. Byte 0 of every PS/2 mouse packet has bit 3 set; a byte
+  // without it can't be a packet start (a late ID byte, a stray ACK tail, a dropped
+  // byte), so discard it and stay in stage 0. Without this, one stray byte shifts
+  // every later packet by one byte forever (cursor pinned to an edge).
+  x.movRegReg32(R.ECX, R.EAX);
+  x.andRegImm32(R.ECX, 0x08);
+  x.jeLabel("ps2_poll_next");
   x.movMemReg32(R.EDX, ADDR_MOUSE_B0, R.EAX);
   x.movMemImm32(R.EDX, ADDR_MOUSE_STAGE, 1);
   x.jmpLabel("ps2_poll_next");
@@ -2301,7 +2337,7 @@ function formatHexLines(bytesArr, startIdx, endIdx) {
   return lines;
 }
 
-function buildX86Core(customBanner = "SpiralOS 1.1") {
+function buildX86Core(customBanner = "SpiralOS 1.2") {
   const pm = buildProtectedModeCore();
   const bootSector = buildBootSector(customBanner);
   const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr);

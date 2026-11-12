@@ -120,8 +120,8 @@ void shell_exec_cmd(int cmd_str) {
     return;
   }
   if (hal_strcmp(cmd_str, "ver") == 1) {
-    if (g_machine_id == 1) shell_print("SpiralOS 1.1 on TabComp TC-32");
-    else shell_print("SpiralOS 1.1 on Hummingbird i586");
+    if (g_machine_id == 1) shell_print("SpiralOS 1.2.1 on TabComp TC-32");
+    else shell_print("SpiralOS 1.2.1 on Hummingbird i586");
     shell_print(VMRAM_STATUS + 0x80);
     return;
   }
@@ -205,7 +205,7 @@ void apps1_init() {
   g_shell_in_len = 0;
   g_shell_lines = 0;
   g_shell_hist_cnt = 0;
-  shell_print("SpiralOS 1.1 ('help')");
+  shell_print("SpiralOS 1.2.1 ('help')");
 
   g_paint_color = 14;
   g_paint_tool = 0;
@@ -444,7 +444,7 @@ void app_draw_build(int x, int y, int w, int h) {
     hal_rect(x + 4, y + 15, w - 8, h - 36, 16);
   }
   int b_limit = h - 18;
-  gui_win_str(x, y, w, b_limit, x + 8, y + 19, "Self-Hosting SpiralC v1.1", 14, -1);
+  gui_win_str(x, y, w, b_limit, x + 8, y + 19, "Self-Hosting SpiralC v1.2.1", 14, -1);
   gui_win_str(x, y, w, b_limit, x + 8, y + 31, "Target: SPIR Unified VM", 15, -1);
   gui_win_str(x, y, w, b_limit, x + 8, y + 43, "TitleOverride:", 11, -1);
   hal_itoa(g_cc_parsed_override, NUM_STR_BUF, 10);

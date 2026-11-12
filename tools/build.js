@@ -115,7 +115,7 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
   // Add on-disk documentation
   spfs.writeFile(
     "/docs/README.txt",
-    "SpiralOS 1.1 'Real Spiral' - ConsciousNode SoftWorks (MIT)\n" +
+    "SpiralOS 1.2.1 'Real Spiral' - ConsciousNode SoftWorks (MIT)\n" +
     "Unified VM Bytecode OS for TabComp & Hummingbird.\n" +
     "Includes full self-hosting SpiralC compiler (/src/cc.sp)\n" +
     "and symbolic native core assemblers (/src/asm.sp).\n",
@@ -160,7 +160,7 @@ if (require.main === module) {
   const res = buildSpiralOSImage(rootDir);
   const outPath = path.join(rootDir, "spiralos.img");
   fs.writeFileSync(outPath, res.img);
-  console.log("=== SpiralOS 1.1 Unified Build Complete ===");
+  console.log("=== SpiralOS 1.2.1 Unified Build Complete ===");
   console.log(`  Output Image      : ${outPath} (${res.img.length} bytes / 1.44 MB)`);
   console.log(`  x86 Native Core   : ${res.x86Core.totalBytes} bytes (Stage1: 512 B, Stage2: 512 B, PM Core: ${res.x86Core.pmCore.length} B)`);
   console.log(`  TC-32 Native Core : ${res.tc32Core.bytes.length} bytes (${res.tc32Core.wordCount} words)`);

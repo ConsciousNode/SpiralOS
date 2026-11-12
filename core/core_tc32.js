@@ -29,7 +29,7 @@ const TC32_J_MNEM = {
   0x2A: "JGE", 0x2B: "JLE", 0x2C: "JGT", 0x2D: "CALL"
 };
 
-function buildTC32Core(customBanner = "SpiralOS 1.1") {
+function buildTC32Core(customBanner = "SpiralOS 1.2") {
   const code = [];
   const labels = {};
   const fixups = []; // { wordIdx, label, type: 'J24' | 'IMM32' | 'RAW32' }

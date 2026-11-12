@@ -5,6 +5,8 @@
 
 ---
 
+> **1.2.1 (2026-11-12):** PS/2 mouse fixes from the first Toshiba test: packet sync, 9-bit deltas, overflow drop, and 8042 timeouts sized for real hardware. Version strings now say 1.2/1.2.1. See [`CHANGES-1.2.1.md`](CHANGES-1.2.1.md).
+>
 > **1.2 (2026-11-11):** bare-metal bring-up patch, audited ([`AUDIT-1.2.md`](AUDIT-1.2.md)). Shell and app text stay inside their windows. The PS/2 mouse init does the full 8042 handshake with timeouts. The framebuffer pitch comes from VBE. Every bring-up test fails on 1.1 and passes on 1.2, including against emulated slow controllers, mice that need a reset, and padded scanlines.
 
 ## 1. Overview

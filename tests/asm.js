@@ -8,7 +8,7 @@
  *      TabComp and Hummingbird produces machine code 100% byte-identical to the
  *      JS-built cores (Sectors 0..31 for x86, Sectors 32..63 for TC-32).
  *   2. Editing /src/core_x86.asm and /src/core_tc32.asm inside SpiralOS (changing
- *      the boot banner from "SpiralOS 1.1" to "SpiralOS 1.1-X"), reassembling
+ *      the boot banner from "SpiralOS 1.2" to "SpiralOS 1.2-X"), reassembling
  *      inside SpiralOS, rebooting both machines, and verifying that the modified
  *      boot banner is live in Sector 0, VGA text RAM (0xB8000), and vmRam[0x0FFD80]!
  */
@@ -102,12 +102,12 @@ function runAsmSuite() {
     while (tcCpu.presentCount < 2) { tcCpu.yielded = false; tcCpu.stepBatch(50000); }
 
     const initBanner = new TextDecoder().decode(tcCpu.ram.subarray(vmBase + 0x0FFD80, vmBase + 0x0FFD90)).replace(/\0/g, "");
-    assert.strictEqual(initBanner, "SpiralOS 1.1", `Expected initial boot banner 'SpiralOS 1.1', got '${initBanner}'`);
+    assert.strictEqual(initBanner, "SpiralOS 1.2", `Expected initial boot banner 'SpiralOS 1.2', got '${initBanner}'`);
 
-    // Edit /src/core_tc32.asm and /src/core_x86.asm in SpiralFS to change banner to "SpiralOS 1.1-X"
+    // Edit /src/core_tc32.asm and /src/core_x86.asm in SpiralFS to change banner to "SpiralOS 1.2-X"
     const spfs = new SpiralFS(tcCpu.ram.subarray(vmBase + 0x228000, vmBase + 0x228000 + SPFS_SIZE));
-    const tcAsmMod = spfs.readText("/src/core_tc32.asm").replace('.ascii "SpiralOS 1.1"', '.ascii "SpiralOS 1.1-X"');
-    const x86AsmMod = spfs.readText("/src/core_x86.asm").replace('.banner "SpiralOS 1.1"', '.banner "SpiralOS 1.1-X"');
+    const tcAsmMod = spfs.readText("/src/core_tc32.asm").replace('.ascii "SpiralOS 1.2"', '.ascii "SpiralOS 1.2-X"');
+    const x86AsmMod = spfs.readText("/src/core_x86.asm").replace('.banner "SpiralOS 1.2"', '.banner "SpiralOS 1.2-X"');
     spfs.writeFile("/src/core_tc32.asm", tcAsmMod, (tcAsmMod.length + 2048) & ~511);
     spfs.writeFile("/src/core_x86.asm", x86AsmMod, (x86AsmMod.length + 2048) & ~511);
     tcCpu.ram.set(spfs.buf, vmBase + 0x228000);
@@ -121,7 +121,7 @@ function runAsmSuite() {
     sendShellCmdTabComp(tcCpu, "reboot");
     while (tcCpu.presentCount < 2) { tcCpu.yielded = false; tcCpu.stepBatch(50000); }
     const newTcBanner = new TextDecoder().decode(tcCpu.ram.subarray(vmBase + 0x0FFD80, vmBase + 0x0FFD90)).replace(/\0/g, "");
-    assert.strictEqual(newTcBanner, "SpiralOS 1.1-X", `Expected modified TC-32 banner 'SpiralOS 1.1-X', got '${newTcBanner}'`);
+    assert.strictEqual(newTcBanner, "SpiralOS 1.2-X", `Expected modified TC-32 banner 'SpiralOS 1.2-X', got '${newTcBanner}'`);
     console.log(`  [PASS] 2. Edited /src/core_tc32.asm -> Assembled in-OS -> Rebooted TabComp -> Banner: "${newTcBanner}"`);
 
     // Boot Hummingbird from the exact same reassembled image (or reassemble on Hummingbird) and verify!
@@ -131,14 +131,14 @@ function runAsmSuite() {
       hbPc.cpu.runSteps(200000);
     }
     const newHbBanner = new TextDecoder().decode(hbPc.ram.subarray(vmBase + 0x0FFD80, vmBase + 0x0FFD90)).replace(/\0/g, "");
-    assert.strictEqual(newHbBanner, "SpiralOS 1.1-X", `Expected modified x86 banner 'SpiralOS 1.1-X', got '${newHbBanner}'`);
+    assert.strictEqual(newHbBanner, "SpiralOS 1.2-X", `Expected modified x86 banner 'SpiralOS 1.2-X', got '${newHbBanner}'`);
 
     // Also verify VGA Text Mode RAM at physical 0xB8000 row 2 (0xB8000 + 324) where Stage 1 Boot Sector wrote the banner!
     let vgaTextBanner = "";
     for (let i = 0; i < 14; i++) {
       vgaTextBanner += String.fromCharCode(hbPc.ram[0xB8000 + 324 + i * 2]);
     }
-    assert.strictEqual(vgaTextBanner, "SpiralOS 1.1-X", `Expected VGA 0xB8000 banner 'SpiralOS 1.1-X', got '${vgaTextBanner}'`);
+    assert.strictEqual(vgaTextBanner, "SpiralOS 1.2-X", `Expected VGA 0xB8000 banner 'SpiralOS 1.2-X', got '${vgaTextBanner}'`);
     console.log(`  [PASS] 3. Edited /src/core_x86.asm -> Assembled in-OS -> Booted Hummingbird -> VGA 0xB8000 & VM Banner: "${vgaTextBanner}"`);
   }
 }
