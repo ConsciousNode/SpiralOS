@@ -4,7 +4,7 @@
 
 > **Corrected 2026-11-12 (SpiralOS 1.2.1).** Earlier versions of this file described a 12-byte header with a checksum, echo ping, chat on port 900, ports `0x500..0x518` and node IDs `0x0001`/`0x0002`. None of that matched the code that ships. Sections 1 and 2 below now describe what `os/net.sp` and the NIC in `hummingbird.html`/`tabcomp.html` actually do. **The code is the authority; this file follows it.** The mismatch was found by Argon while building TritOS Desktop 1.1 (see the Triton repo, `AUDIT-DESKTOP-1.1.md`). Section 3 (Sonder) has not been rechecked against the code yet.
 
-**StudioNet** is SpiralOS's virtual LAN. It connects TabComp, Hummingbird, the Sonder gateway and (from TritOS 1.1.1) Triton machines, across one page or across browser tabs on `BroadcastChannel('studionet_v1')`.
+**StudioNet** is SpiralOS's virtual LAN. It connects TabComp, Hummingbird, the Sonder gateway and (from TritOS 1.1.1) Triton machines, across one page or across browser tabs on `BroadcastChannel("studionet-v1")` (hyphen: the name `tabcomp.html` and `hummingbird.html` use). Note: `triton3.html` and TritOS 1.1.1 still use `studionet_v1` (underscore), so they don't share tabs with SpiralOS yet; found by Argon, fix pending on the Triton side.
 
 ---
 
@@ -49,7 +49,7 @@ Every frame is a **16-byte header** and then up to **480 bytes** of payload (`ne
 | `14..15` | `len` | payload length in bytes |
 | `16..` | payload | |
 
-Receivers drop frames shorter than 16 bytes and handle at most 8 frames per poll. The receiver writes a 0 after the payload, so text payloads can be read as C strings.
+Receivers drop frames shorter than 16 bytes and handle at most 8 frames per poll. `net.sp` does **not** check that `len` matches the frame length (it trusts `len`); stricter stacks such as TritOS also drop frames whose `len` disagrees. The receiver writes a 0 after the payload, so text payloads can be read as C strings.
 
 ### 2.1 Services
 
