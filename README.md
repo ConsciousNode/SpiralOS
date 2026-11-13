@@ -5,6 +5,8 @@
 
 ---
 
+> **1.3 Triton Core (2026-11-13):** SpiralOS now runs on a third machine, the balanced-ternary **Triton 3.1**. Open [`triton/spiralos-triton.html`](triton/spiralos-triton.html) and it boots [`triton/spiralos-1.3.img`](triton/spiralos-1.3.img). That image is the 1.2.1 image plus one new record, the Triton Core, in sectors 960–994. Sectors 0–959 are byte-identical to 1.2.1, so on x86 (Hummingbird, real hardware) and TabComp, 1.3 behaves exactly like 1.2.1. Audited ([`AUDIT-TRITON-CORE.md`](AUDIT-TRITON-CORE.md)): an ALU oracle of 39,444 vectors run through the disk had 0 mismatches, and it boots in real Chrome. Not yet: the root `spiralos.img` and the Build Station (`index.html`) are still 1.2.1, and the Build Station can't produce the 1.3 image yet.
+>
 > **1.2.1 (2026-11-12):** PS/2 mouse fixes from the first Toshiba test: packet sync, 9-bit deltas, overflow drop, and 8042 timeouts sized for real hardware. Version strings now say 1.2/1.2.1. See [`CHANGES-1.2.1.md`](CHANGES-1.2.1.md).
 >
 > **On real hardware (2026-11-12):** 1.2.1 boots from a USB stick on Kham's Core 2 Duo–era Toshiba laptop in Legacy BIOS mode. Display, keyboard and the internal trackpad all work, and Paint paints. A USB mouse (through the BIOS's legacy PS/2 emulation) is still erratic. Paint has no save, Files `[+New]` writes a fixed demo file, and there's no general text editor yet: those are next. An idle soak of about two hours ran without a hang, and with USB first in the boot order it goes from POST to the desktop in under a minute (Kham's report).
@@ -27,7 +29,10 @@
 | `index.html` | **Spiral Build Station** — Single-file IDE, compiler, dual live emulators (TabComp + Hummingbird connected via StudioNet), one-click 1.44 MB floppy `.img` & TabComp cartridge `.html` exporter, and automated §3 self-hosting demo | `718,846 B` |
 | `tabcomp.html` | Patched single-file **TabComp 1.3** adding `StudioNetNIC` (`0x0FFD40`), mouse MMIO (`0x0FFD08`), and SpiralOS disk boot hooks (`19/19` self-tests passing) | `1,428,476 B` |
 | `hummingbird.html` | Patched single-file **Hummingbird 1.1** adding `StudioNetNIC` (`0x02A0..0x02AF`, `IRQ 10`) and SpiralOS boot milestone tracking | `438,289 B` |
-| `spiralos.img` | Unified **1.44 MB Bootable SpiralOS Floppy / Disk Image** (`2,880` sectors × `512 B`) that boots unchanged in both Hummingbird and TabComp | `1,474,560 B` |
+| `spiralos.img` | Unified **1.44 MB Bootable SpiralOS Floppy / Disk Image** (`2,880` sectors × `512 B`) that boots unchanged in both Hummingbird and TabComp (1.2.1; sha256 `9d239cd8…`) | `1,474,560 B` |
+| `triton/spiralos-triton.html` | **SpiralOS on Triton 3.1**: the balanced-ternary machine page booting the 1.3 image through the Triton Core | `807,881 B` |
+| `triton/spiralos-1.3.img` | 1.3 image: 1.2.1 plus the Triton Core record (`'TRIT'`, 8,858 trytes) in sectors 960–994 | `1,474,560 B` |
+| `core/core_triton.js` | Native **Triton 3.1 Core** generator (balanced-ternary guest assembly, `core_triton.asm`) | `8,858` trytes |
 | `core/core_tc32.js` | Native **TabComp TC-32 Core** machine-code generator (`900` words) | `3,600 B` (binary) |
 | `core/core_x86.js` | Native **Hummingbird x86 Core** generator (`512 B` 16-bit Real Mode BIOS bootloader + `6,314 B` 32-bit Protected Mode kernel & VM interpreter) | `6,826 B` (binary) |
 | `core/x86_asm.js` | Symbolic 16/32-bit x86 machine-code assembler helper | `6,620 B` |
