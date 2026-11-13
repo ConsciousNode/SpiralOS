@@ -2,6 +2,8 @@
 
 **Studio:** ConsciousNode SoftWorks · **Licence:** MIT
 
+> **Correction Note (SpiralOS 1.3):** As documented in `AUDIT-1.1.md`, Sections 2–5 of this file describe an earlier byte-stream draft of the Spiral VM rather than the 32-bit word-encoded VM actually emitted by `compiler/spiralc.js` and executed by `core/core_tc32.js`, `core/core_x86.js`, and `core/core_triton.js`. For the authoritative, code-verified 40-opcode ISA table (`0x00..0x27`), 22-syscall table (`0..21`), 4 MB (`0x400000`) memory map, and reference-Core disagreement analysis, see **[TRITON-CORE.md](https://www.google.com/search?q=./TRITON-CORE.md)**.
+
 The **Spiral VM** is a portable, deterministic, stack-and-frame bytecode virtual machine designed so that a single compiled operating system image (`spiralos.img`) boots and runs identically on two completely different hardware architectures:
 
 1. **TabComp (`TC-32`)**: A 32-bit RISC fantasy workstation (`16` general-purpose registers, word-addressed memory, `320×200` 8-bpp framebuffer, custom MMIO).

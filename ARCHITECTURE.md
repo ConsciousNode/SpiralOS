@@ -22,7 +22,8 @@ A single `1,474,560`-byte (`2,880` × 512-byte sectors) disk image serves as bot
 | **Sectors `32 .. 63`** | `0x004000 .. 0x007FFF` | `16 KB` | **TabComp `TC-32` Native Core** (`4,360` bytes / `1,090` 32-bit words assembled from `/src/core_tc32.asm`, SHA-256 `5442fe3b7c9a46ad04a788610401c440...`). |
 | **Sectors `64 .. 319`** | `0x008000 .. 0x027FFF` | `128 KB` | **`SPIR` Portable OS Bytecode Image** (`95,796` code bytes + `3,351` string bytes, `187` functions, `539` global words, SHA-256 `7fded06d819a3945e036bf2e0131f3c74a9e7d017faa6192b84488ca75ed7496`). Loaded into VM memory `0x00000..0x1FFFF` on both machines. |
 | **Sectors `320 .. 959`**| `0x028000 .. 0x077FFF` | `320 KB` | **`SpiralFS` Volume** (`22` files, `274,432` bytes allocated, `53,248` bytes free). Loaded into VM memory `0x228000..0x277FFF`. |
-| **Sectors `960 .. 2879`**| `0x078000 .. 0x167FFF`| `960 KB` | Free disk sectors / scratch space. |
+| **Sectors `960 .. 1023`**| `0x078000 .. 0x07FFFF`| `32 KB` | **Triton 3.1 Balanced-Ternary Native Core (1.3)** (`17,732` bytes active in Sectors `960..994`, `'TRIT'` magic `0x54495254` + `8,858` 16-bit biased trytes assembled from `core/core_triton.js`, SHA-256 `c649fe0396a1f334be511766a8810727...`). Loaded by the 96-tryte Triton Stage-0 Boot ROM. |
+| **Sectors `1024 .. 2879`**| `0x080000 .. 0x167FFF`| `928 KB` | Free disk sectors / scratch space. |
 
 ---
 
