@@ -24,3 +24,6 @@
 4. **Missing from the delivery:** the 1.3 `tools/build.js`, `tests/triton-all.js` and the doc generators. So Argon's numbers in `REPORT-TRITON-CORE.md` (for example the self-host rebuild on Triton and the speed table) are **unverified by me**, except where my own checks above overlap them. `spiralos.img` at the repo root is still 1.2.1. The 1.3 image is in `triton/` until `build.js` lands.
 5. **Cosmetic:** the top bar says `i586` on Triton. The unmodified OS only checks `machine_id == 1` and otherwise draws `i586`, as Argon documented. Fixing it means changing `SPIR`, so it's for a later OS patch (show "Triton" for ID 3).
 6. **Cosmetic:** `ARCHITECTURE.md` is still titled "1.2". The generator contains a dead `DIVI_FAKE` line that it emits and then pops.
+
+## Addendum 2026-11-13: StudioNet on the Triton page (missed by this audit)
+`triton/spiralos-triton.html` joined BroadcastChannel `"studionet_v1"` (underscore; everything else uses `studionet-v1`) and only received: no TX hook, so SYS_NET_SEND frames (ports 26/24) never left the tab. This audit never exercised networking on the Triton page. Fixed: channel renamed and `wasmVm.txHooks` now posts frames. Verified in real Chrome that the page joins `studionet-v1` and accepts an incoming frame without error; an end-to-end chat between tabs is still to be tested (needs addressable peers, SpiralOS 1.4).

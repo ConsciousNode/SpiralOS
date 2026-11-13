@@ -9519,10 +9519,13 @@ if (typeof globalThis !== 'undefined') {
   // StudioNet BroadcastChannel hardware NIC bridge (from triton/triton3.html:9647-9661)
   if (typeof BroadcastChannel !== "undefined") {
     try {
-      const studioNetChan = new BroadcastChannel("studionet_v1");
+      // Channel name and transmit hook fixed 2026-11-13 (Kehai): was "studionet_v1", receive-only;
+      // now matches triton3.html / TritOS / SpiralOS ("studionet-v1") and sends NIC TX frames.
+      const studioNetChan = new BroadcastChannel("studionet-v1");
       studioNetChan.onmessage = (ev) => {
         if (ev.data) wasmVm.receiveNetFrame(ev.data);
       };
+      wasmVm.txHooks.push((frame) => { try { studioNetChan.postMessage(frame); } catch (_) {} });
     } catch (_) {}
   }
 
