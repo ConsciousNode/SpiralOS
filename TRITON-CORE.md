@@ -1,6 +1,8 @@
 # SpiralOS 1.3 — Triton 3.1 Balanced-Ternary Native Core Specification (`TRITON-CORE.md`)
 
 **Studio:** ConsciousNode SoftWorks · **Licence:** MIT  
+
+> Audit fix (2026-11-13): rows `0x0A`, `0x0B`, `0x0D` corrected to the globals base the code actually uses (`0x020000`, checked against `core_tc32.js` and `core_triton.js`); the delivered rows said `0x010000` and contained leftover working notes.
 **Implementation:** `spiralos/core/core_triton.js` → `spiralos/core/core_triton.asm` (`8,858` trytes / `17,732` disk record bytes in Sectors `960..994`)
 
 This document specifies:
@@ -33,10 +35,10 @@ Contrary to `VM.md` §4 (which describes a variable-length byte-stream VM with o
 | `0x07` | `OP_SWAP` | — | `a, b -> b, a` | Swap top two 32-bit words at `[VM_SP - 8]` and `[VM_SP - 4]`. |
 | `0x08` | `OP_GET_LOCAL` | `u16 idx` | `-> LOCAL[idx]` | Push 32-bit word from `vmRam[VM_FP + idx * 4]`. |
 | `0x09` | `OP_SET_LOCAL` | `u16 idx` | `val ->` | Pop 32-bit word and store to `vmRam[VM_FP + idx * 4]`. |
-| `0x0A` | `OP_GET_GLOBAL` | `u16 idx` | `-> GLOB[idx]` | Push 32-bit word from `vmRam[0x010000 + idx * 4]` (or `0x020000 + idx * 4` when `SPIR` `magic == 0x52495053` uses 128 KB code/string segment; note `spiralc.js` emits `ADDR_GLOBAL`/`GET_GLOBAL` relative to `0x010000` in standalone tests and `0x020000` via explicit addresses in OS). Wait: in all three Cores, `GET_GLOBAL`/`SET_GLOBAL`/`ADDR_GLOBAL` use base `0x010000 + idx * 4`, and `spiralc.js` shifts global indices by `+0x4000` (`16,384` words = `0x010000` bytes) so `0x010000 + (idx + 0x4000)*4 = 0x020000 + idx*4`! |
-| `0x0B` | `OP_SET_GLOBAL` | `u16 idx` | `val ->` | Pop 32-bit word and store to `vmRam[0x010000 + idx * 4]`. |
+| `0x0A` | `OP_GET_GLOBAL` | `u16 idx` | `-> GLOB[idx]` | Push 32-bit word from `vmRam[0x020000 + idx * 4]` (globals base `0x020000`, host `0x00220000` on all three Cores). |
+| `0x0B` | `OP_SET_GLOBAL` | `u16 idx` | `val ->` | Pop 32-bit word and store to `vmRam[0x020000 + idx * 4]`. |
 | `0x0C` | `OP_ADDR_LOCAL` | `u16 idx` | `-> (VM_FP + idx * 4)` | Push 32-bit VM byte offset `(VM_FP + idx * 4) & 0xFFFFFFFF`. |
-| `0x0D` | `OP_ADDR_GLOBAL` | `u16 idx` | `-> (0x010000 + idx * 4)` | Push 32-bit VM byte offset `0x010000 + idx * 4`. |
+| `0x0D` | `OP_ADDR_GLOBAL` | `u16 idx` | `-> (0x020000 + idx * 4)` | Push 32-bit VM byte offset `0x020000 + idx * 4`. |
 | `0x0E` | `OP_LOAD8U` | `s16 off` | `addr -> u8` | Pop `addr`, compute `ea = (addr + s16(off)) & 0x003FFFFF`, push zero-extended `vmRam[ea]` (`0..255`). |
 | `0x0F` | `OP_LOAD8S` | `s16 off` | `addr -> s8` | Pop `addr`, compute `ea = (addr + s16(off)) & 0x003FFFFF`, push sign-extended `vmRam[ea]` (`-128..127`). |
 | `0x10` | `OP_LOAD16U` | `s16 off` | `addr -> u16` | Pop `addr`, compute `ea = (addr + s16(off)) & 0x003FFFFF`, push little-endian `u16` at `vmRam[ea..ea+1]`. |
