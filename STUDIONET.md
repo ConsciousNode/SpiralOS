@@ -1,53 +1,73 @@
-# StudioNet & Sonder Engine Specification (`STUDIONET.md`)
+# StudioNet Specification (`STUDIONET.md`)
 
 **Studio:** ConsciousNode SoftWorks · **Licence:** MIT
 
-**StudioNet** is SpiralOS's zero-dependency virtual local area network device and protocol stack, connecting **TabComp (`0x0001`)**, **Hummingbird (`0x0002`)**, and the **Sonder Procedural Web Gateway (`0x00FE`)** across both single-page dual-station mode (`index.html`) and cross-tab `BroadcastChannel('studionet_v1')` links.
+> **Corrected 2026-11-12 (SpiralOS 1.2.1).** Earlier versions of this file described a 12-byte header with a checksum, echo ping, chat on port 900, ports `0x500..0x518` and node IDs `0x0001`/`0x0002`. None of that matched the code that ships. Sections 1 and 2 below now describe what `os/net.sp` and the NIC in `hummingbird.html`/`tabcomp.html` actually do. **The code is the authority; this file follows it.** The mismatch was found by Argon while building TritOS Desktop 1.1 (see the Triton repo, `AUDIT-DESKTOP-1.1.md`). Section 3 (Sonder) has not been rechecked against the code yet.
+
+**StudioNet** is SpiralOS's virtual LAN. It connects TabComp, Hummingbird, the Sonder gateway and (from TritOS 1.1.1) Triton machines, across one page or across browser tabs on `BroadcastChannel('studionet_v1')`.
 
 ---
 
-## 1. Hardware Interface
+## 1. Hardware: the StudioNet NIC (TabComp and Hummingbird)
 
-### 1.1 Hummingbird (`i586`) I/O Port Interface (`0x500 .. 0x518`)
-Added to `HummingbirdPC` as an emulated I/O device with **hardware presence detection**:
+Both emulators carry the same `StudioNetNIC` device, with 16 byte-wide I/O ports at base **`0x2A0`**:
 
-| I/O Port | Width | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `0x500` | `8/32-bit` | Read/Write | **Status / Control Register**: Returns `0xA5` (`bit 7 = 1` present magic, `bit 0 = RX ready`) when a StudioNet NIC is installed. On machines without StudioNet (e.g. QEMU or `strictBios: { noStudioNet: true }`), reading `0x500` returns `0xFF` (`0x00` in strict unconnected buses). The x86 Core checks `(inb(0x500) & 0xFE) == 0xA4` before touching any FIFO registers, preventing bogus RX reads on bare metal. |
-| `0x504` | `32-bit` | Read | **Node ID**: `0x0002` (Hummingbird station address). |
-| `0x508` | `32-bit` | Read/Write | **TX Length / Trigger**: Writing frame byte length (`1..512`) transmits the TX buffer onto the StudioNet bus. |
-| `0x50C` | `32-bit` | Read/Write | **RX Length / Pop**: Reading returns pending RX frame byte length (`0` if empty); writing `1` pops the current RX frame. |
-| `0x510` | `8-bit` | Write | **TX FIFO Byte Port**: Appends a byte to the outbound frame buffer. |
-| `0x514` | `8-bit` | Read | **RX FIFO Byte Port**: Reads the next byte from the current inbound frame. |
+| Offset | Read | Write |
+|---|---|---|
+| `+0x00`, `+0x01` | Signature `'S'` (`0x53`), `'N'` (`0x4E`) | (none) |
+| `+0x02` | Status: bit 0 = RX frame pending, bit 2 = present (always 1), bit 3 = IRQ enabled | **Command:** `1` TX_SEND, `2` RX_POP, `3` RESET, `4` IRQ_EN, `5` IRQ_DIS |
+| `+0x04`, `+0x05` | Node ID, low and high byte | Set node ID |
+| `+0x06`, `+0x07` | Length of current RX frame | TX length (lo, hi), max 512 |
+| `+0x08..+0x0B` | DMA address | Set DMA address (32-bit, little-endian) |
+| `+0x0C` | Next byte of the current RX frame (PIO) | Append a byte to the TX frame (PIO) |
+| `+0x0D` | TX count (low byte) | (none) |
+| `+0x0E`, `+0x0F` | RX count | (none) |
 
-### 1.2 TabComp (`TC-32`) System Trap Interface
-- `SYS 40` (`sys_net_tx(buf_addr, len)`): Copies `len` bytes from `VM_MEM[buf_addr]` and broadcasts the frame over `BroadcastChannel('studionet_v1')` and `window._studioNetLocalHook`.
-- `SYS 41` (`sys_net_rx(buf_addr, max_len)`): Dequeues the next frame from `netRxQueue` into `VM_MEM[buf_addr]` and returns its byte length (`0` if empty).
-- `SYS 42` (`sys_net_node()`): Returns `0x0001` (TabComp station address).
+- **TX_SEND:** if the TX length is non-zero, sends `len` bytes from RAM at the DMA address. Otherwise it sends the PIO bytes appended through `+0x0C`.
+- **RX_POP:** copies the next queued frame to RAM at the DMA address and makes it readable byte by byte at `+0x0C`.
+- **Delivery:** a frame reaches a NIC when its `dst` (bytes 0–1) is that NIC's node ID, `0xFFFF` (broadcast), `0x0000`, or when the NIC is promiscuous.
+- **Default node IDs:** TabComp `0x0101`, Hummingbird `0x0201`, Sonder gateway `0x00FE`. TritOS desktops use `0x0003..0x0006`.
+
+The OS reaches the NIC through the Core HAL (`hal_net_send`, `hal_net_recv`, `hal_net_info`), so `net.sp` never touches ports directly.
 
 ---
 
-## 2. Wire Frame Format & Protocol Stack (`/src/net.sp`)
+## 2. Wire frame (`os/net.sp`)
 
-Every StudioNet frame has a **12-byte header** followed by up to `500` bytes of payload:
+Every frame is a **16-byte header** and then up to **480 bytes** of payload (`net_send_frame` clamps it). All fields are little-endian. **There is no checksum.**
 
-| Byte Offset | Size | Field | Description |
-| :--- | :--- | :--- | :--- |
-| `0x00 .. 0x01` | `u16 LE` | `dst_node` | Destination node (`0x0001` TabComp, `0x0002` Hummingbird, `0x00FE` Sonder Gateway, `0xFFFF` Broadcast) |
-| `0x02 .. 0x03` | `u16 LE` | `src_node` | Source node (`0x0001` or `0x0002`) |
-| `0x04` | `u8` | `proto` | Protocol ID (`1`=`ECHO_REQ`, `2`=`ECHO_REP`, `3`=`SDP` Datagram, `4`=`SHP` Hypertext, `5`=`SFP` File Transfer) |
-| `0x05` | `u8` | `ttl` | Time-to-live (`16` default) |
-| `0x06 .. 0x07` | `u16 LE` | `seq` | Monotonic packet sequence number |
-| `0x08 .. 0x09` | `u16 LE` | `len` | Payload length in bytes |
-| `0x0A .. 0x0B` | `u16 LE` | `checksum` | 16-bit XOR/additive frame checksum (`net_checksum`) |
+| Bytes | Field | Notes |
+|---|---|---|
+| `0..1` | `dst` | destination node; `0xFFFF` = broadcast |
+| `2..3` | `src` | sender's node ID (`g_local_node_id`, read from the NIC at boot) |
+| `4` | `proto` | `1` SNS, `2` SDP (datagram), `3` SSP (sequenced stream) |
+| `5` | `flags` | bit mask: `1` SYN, `2` ACK, `4` PSH, `8` FIN |
+| `6..7` | `sport` | source port |
+| `8..9` | `dport` | destination port |
+| `10..11` | `seq` | sender's sequence number (starts at 100) |
+| `12..13` | `ack` | acknowledged sequence (`seq + 1` of the frame being answered) |
+| `14..15` | `len` | payload length in bytes |
+| `16..` | payload | |
 
-### Supported Protocols
-1. **`PROTO_ECHO_REQ` (`1`) / `PROTO_ECHO_REP` (`2`)**: Hardware/OS ping with round-trip latency tracking.
-2. **`PROTO_SDP` (`3`, Studio Datagram Protocol)**: Port-addressed UDP-style datagrams (`dst_port u16`, `src_port u16`, payload):
-   - Port `900`: **SpiralChat** real-time peer-to-peer messaging between TabComp and Hummingbird.
-   - Port `4400`: **Multiplayer SpiralSnake** (`net_send_snake_state`) — live dual-snake arena synchronization (`head_x`, `head_y`, `dir`, `score`) between TabComp and Hummingbird.
-3. **`PROTO_SHP` (`4`, Studio Hypertext Protocol)**: Request/response hypertext transport serving both local `/www/*.shm` pages and procedural Sonder pages from `sonder.gw` (`0x00FE`).
-4. **`PROTO_SFP` (`5`, Studio File Protocol)**: Cross-machine file push (`net_send_file`), writing received files directly into `/home/` on the remote machine's `SpiralFS`.
+Receivers drop frames shorter than 16 bytes and handle at most 8 frames per poll. The receiver writes a 0 after the payload, so text payloads can be read as C strings.
+
+### 2.1 Services
+
+| Service | proto | Port | Payload | Notes |
+|---|---|---|---|---|
+| **SpiralChat** | 2 SDP | `4200` → `4200` | message, NUL-terminated (`len` includes the NUL) | flags `PSH`. The receiver labels a line `TC:` if `src == 0x0101`, otherwise `HB:`. |
+| **Ping** (shell `ping`) | 2 SDP | `4200` | the text `PING from SpiralSh` | Only a chat message. `PORT_ECHO = 7` is defined but nothing answers it, so there is no echo reply. |
+| **Multiplayer Snake** | 2 SDP | `4400` → `4400` | 8 bytes: `x`, `y`, `dx+2`, `dy+2` (u8 each), `score` (u32) | sent to the peer |
+| **File push** | 3 SSP | `4300` → `4300` | 32-byte NUL-padded name (max 31 chars), then the file bytes (max 440) | flags `SYN|PSH`, one frame per file. The receiver writes the file with `fs_write` and answers `ACK` with payload `OK`, `ack = seq + 1`. |
+| **SpiralHttpd** (server) | 3 SSP | → `80` | `GET /…` | answers `ACK|PSH` from port 80 with `/www/index.hts`, or `/www/sonder.hts` for `GET /s…`, or a 404 page |
+| **SpiralWeb** (client) | 3 SSP | `49152` → `80` | `GET <path>` | takes the response payload (first 1023 bytes) as the page |
+| **SNS** | 1 | (none) | (none) | Name resolution is **local only**. `sns_resolve` maps `tabcomp.local` → `0x0101`, `hummingbird.local` → `0x0201`, `sonder.gw` → `0x00FE`, and `peer` → the other machine. No SNS frames are sent. |
+
+### 2.2 Interop notes for new stacks (e.g. TritOS)
+
+- To be heard by SpiralOS: send SDP chat to `dport 4200` with a NUL-terminated payload. The line will show as `HB:` unless `src` is `0x0101`. That's a known cosmetic limit.
+- To push a file to SpiralOS: one SSP frame on port 4300 with `SYN|PSH`, the 32-byte name block, at most 440 bytes of data. Expect an `ACK` frame with `OK` back.
+- SpiralOS never replies to a ping. A stack that wants round-trip time against SpiralOS has to measure something that does get a reply, such as the file-push ACK.
 
 ---
 
