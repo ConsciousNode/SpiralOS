@@ -1,92 +1,58 @@
-# SpiralOS 1.2 — Engineering, Audit Resolution & Bare-Metal Bring-Up Report (`REPORT.md`)
+# SpiralOS 1.4 "Daily Driver" — Engineering & Verification Report
 
-**Studio:** ConsciousNode SoftWorks · **Licence:** MIT · **Rules:** Xinu (Zero dependencies, 100% offline, original procedural code, fonts, icons, and audio)
-*Note: Every hash, byte count, and test measurement in this document is generated programmatically by `node tools/report-figures.js`.*
+**Studio:** ConsciousNode SoftWorks · **Licence:** MIT  
+**Release:** `SpiralOS 1.4 "Daily Driver"`  
+**Unified Image:** `spiralos.img` (`1,474,560` bytes / `2,880` sectors × `512` B, SHA-256: `f2455eef52b981e30fe6c3bfba669064ea13f49504850093a858b7eb1c0fd5fc`)
 
----
+## 1. Build Summary & Artifact Metrics
 
-## 1. Executive Summary: Addressing Every Finding in `AUDIT.md` (1.1) & Bring-Up Patch (1.2)
+| Component | Sectors / Offset | Size | Details |
+|---|---|---:|---|
+| **Hummingbird x86 Core** | Sectors `0..31` (`0x00000..0x03FFF`) | `11246` B | Stage 1 MBR + Stage 2 BIOS Loader + 32-bit Protected-Mode Core (`8,643` B in-OS assembled) |
+| **TabComp TC-32 Core** | Sectors `32..63` (`0x04000..0x07FFF`) | `6104` B | `1526` words (`4,360` B in-OS assembled) |
+| **SPIR VM Bytecode** | Sectors `64..319` (`0x08000..0x27FFF`) | `131,072` B | `124864` code B (`0x001580..0x01FC3F`) + `5261` string B (`0x000020..0x0014AC`), `290` functions, `737` globals (SHA-256: `2aec2197f7da368f1ede956afaeb8e5d2587bbddbff1048245dedd7607f84e87`) |
+| **SpiralFS Volume** | Sectors `320..1919` (`0x28000..0xEFFFF`, skipping `960..1023`) | `786,432` B (`768 KB`) | `23` files mounted, `405504` B used, **`380928` B (`372.0 KB`) free** (build gate: `>= 131,072` B / `128 KB`) |
+| **Triton T3 Core** | Sectors `960..1023` (`0x78000..0x7FFFF`) | `21688` B | `10836` trytes (`"TRIT"` magic record, SHA-256: `72502c71c41fd9e90ec8b6b26faf86cc8dae05ea7c5e24b2490eb8aa5ce38baf`) |
 
-SpiralOS 1.1 ("Real Spiral") resolved all 6 findings from `AUDIT.md`, and SpiralOS 1.2 resolves all 4 bare-metal bring-up findings (`F1..F4`), verified by automated tests against both 1.1 and 1.2:
+## 2. 4 MB Unified VM Memory Map (`0x000000..0x3FFFFF`)
 
-| Finding | What We Built | Verification / Test Receipt |
-| :--- | :--- | :--- |
-| **1. `cc_compile_standalone` ignored its input and always emitted `return 42`.** | Replaced with a complete two-pass recursive-descent compiler in `/src/cc.sp`. `cc_compile_standalone(src_addr, src_len, out_addr)` lexes, parses, and emits real `SPIR` bytecode for loops, recursion, globals, local arrays, and strings, then executes the compiled program via `cc_exec_standalone()` in an isolated VM interpreter (`0xC0000`) and returns its real exit code. | `node tests/selfhost-edits.js` (Part A): Compiles and runs 4 standalone programs: Collatz (`127`), recursion `fib(12) + ack(2,3)` (`153`), bubble sort (`421`), and string pooling/syscalls (`199`) on both TabComp and Hummingbird. |
-| **2. `cc_rebuild_os_image` scanned for `TITLE_COLOR_ACTIVE` and patched one byte in-place.** | `cc_rebuild_os_image()` expands all 10 `/src/*.sp` files (`150,939` bytes of combined source), runs the full two-pass `SpiralC` compiler inside the VM into a `128 KB` `SPIR` image, copies it into Sectors `64..319`, and persists it to disk (`sys_disk_sync`). | `node tests/bootstrap.js` & `node tests/selfhost-edits.js`: `Stage 1 == Stage 2 == Stage 3` fixed point (`131,072 / 131,072` bytes identical, SHA-256 `7fded06d819a3945e036bf2e0131f3c74a9e7d017faa6192b84488ca75ed7496`) + all 5 arbitrary source edits. |
-| **3. In-OS assemblers (`asm_assemble_x86`, `asm_assemble_tc32`) returned hard-coded byte counts.** | Implemented two real two-pass symbolic assemblers in `/src/asm.sp` and full symbolic assembly sources in `/src/core_x86.asm` (`35,254` B) and `/src/core_tc32.asm` (`20,780` B). | `node tests/asm.js`: In-OS assembled x86 Core (`9,183` bytes) and TC-32 Core (`4,360` bytes) are **100% byte-identical** to the JS-built cores (x86 SHA-256 `59b52d8905135433eadc634b6db1ecc2...`, TC-32 SHA-256 `5442fe3b7c9a46ad04a788610401c440...`). |
-| **4. Sonder gateway was a fixed HTML template in JavaScript.** | Replaced with a deterministic seeded procedural generator behind Station `0x00FE` ("sonder.gw") with 4 distinct procedural templates (`ATLAS`, `CHRONICLE`, `SCHEMATIC`, `ARCHIVE`), inline `<img src='...'>` graphics, clickable `<a href='...'>` links, and a `[Back]` history stack in `SpiralWeb`, plus live **Multiplayer Snake** over StudioNet (`PROTO_SDP` port `4400`). | `node tests/sonder.js`: Verifies deterministic reproducibility, all 4 templates, inline `<img>` rendering, link navigation + `[Back]` button restoration, and 18 live SDP multiplayer Snake state packets. |
-| **5. Apps had no timer tick and multitasking was cooperative.** | Added hardware timer preemption (8254 PIT `IRQ0` / `IDT 0x20` + instruction quantum switching between per-task VM stacks via TCB table `0x0FFE00`) and `app_register_tick(app_id, interval_ms)`. | `node tests/multitask.js`: Two CPU-bound compute tasks make simultaneous preemptive progress while the desktop stays responsive, and both Snake and Blocks advance automatically. |
-| **6. Strict BIOS walls (cross-track `INT 13h`, 32-bpp only, missing StudioNet/FDC).** | Built a two-stage x86 loader (`Sector 0` at `0x7C00` -> `Sector 1` at `0x7E00`): track-safe `INT 13h` reads, 24-bpp VBE fallback, `PhysBasePtr` mapping, StudioNet presence detection, and 16-bit Real-Mode BIOS `INT 13h AH=03h` Write Thunk (`0x7F40`). | `node tests/strict-bios.js`: Boots `HummingbirdPC` with `strictBios: true` to 640x480x24 desktop at `0xFD000000`, shows `"no network"`, and saves `/home/note.txt` via the BIOS write thunk. |
-| **F1 (1.2). Shell text and narrow windows overflowed window rectangles.** | Soft-wrapped `SpiralSh` output lines to the window's inner width in whole characters using a 32-line scrollback buffer (`SHELL_HIST_BUF` at `0x04E000`), recomputing on resize, auto-scrolling so newest lines and prompt stay visible, horizontally scrolling long input lines, and clipping all text/buttons across all 14 apps, title bars, and taskbar. | `node tests/bringup.js` (Test 1): 1.1 fails with `40,572` overflow px on TabComp and `156,704` overflow px on Hummingbird; 1.2 passes with `0` overflow px on TabComp and `0` on Hummingbird across all 14 apps at default, min (`80x50`), and max (`320x172`) sizes. |
-| **F2 (1.2). Unhandshaked PS/2 mouse init (`0xA8, 0xD4, 0xF4`).** | Replaced with a full 8042 handshake in `core/core_x86.js`: bounded-timeout wait for IBF empty (bit 1 clear) before every write to `0x60`/`0x64`, bounded-timeout wait for OBF full (bit 0 set) before every read of `0x60`, stale byte flush, command byte (`0x20`/`0x60`) read-modify-write, mouse reset (`0xFF` -> `0xFA 0xAA [0x00]`), defaults (`0xF6` -> `0xFA`), and streaming (`0xF4` -> `0xFA`). | `node tests/bringup.js` (Tests 2, 3, 4): 1.1 passes only `1/16` PS/2 realism combinations; 1.2 passes `16/16`, plus clean boot and working keyboard under `noPs2Controller` and mouse timeout. |
-| **F3 (1.2). Hardcoded VBE pitches (`2560` and `1920`).** | Read `BytesPerScanLine` (`u16` at `[0x5010]` from the VBE ModeInfoBlock) in `core/core_x86.js` and used it dynamically for the `y=40` centering offset (`0xE0000000 + 40 * pitch`), odd scanline offset (`+pitch`), and row-pair stride (`+2*pitch`) in both 32-bpp and 24-bpp blitters. | `node tests/bringup.js` (Test 5): 1.1 fails all `vbePitchPad > 0` cases; 1.2 matches the unpadded image byte-for-byte across `P = 0, 64, 512` at both `24` and `32` bpp. |
+| VM Offset Range | Size | Purpose |
+|---|---:|---|
+| `0x000000..0x00001F` | `32` B | `SPIR` magic header, entry PC (`0x001580`), initial SP (`0x120000`), code/string/global metrics |
+| `0x000020..0x00157F` | `5,472` B | String pool (`5261` B used; all string addresses `< 32,768` so `OP_PUSH_I16` encodes every literal in 4 B) |
+| `0x001580..0x01FFFF` | `125,568` B | `SPIR` portable bytecode (`124864` B used, `704` B headroom) |
+| `0x020000..0x08FFFF` | `448` KB | Global variables, shell history, Paint canvas, SpiralEdit buffers, StudioNet SNS/SRRP tables |
+| `0x090000..0x0902FF` | `768` B | Font Bank 0: **ConsciousNode Sans** `8×8` (`fonts/consciousnode-sans-8x8.hex`) |
+| `0x091000..0x0915FF` | `1,536` B | Font Bank 1: **CNSW Serif** `8×16` (`fonts/cnsw-serif-8x16.hex`) |
+| `0x092000..0x0FEFFF` | `436` KB | Self-hosting compiler (`os/cc.sp`) & assembler (`os/asm.sp`) scratch tables |
+| `0x0F0000..0x0FFFFF` | `64` KB | `320×200` 8-bpp framebuffer (`0x0F0000..0x0F9FFF`), palette, RTC/status block (`0x0FFD00`), TCBs (`0x0FFF00`) |
+| `0x100000..0x187FFF` | `544` KB | Preemptive task stacks (Tasks `0..3`) |
+| `0x190000..0x19FFFF` | `64` KB | `WEB_PAGE_BUF_EXT`: SpiralWeb SRRP page buffer (verified non-overlapping with fonts, stacks, and SpiralFS) |
+| `0x1B0000..0x1E3FFF` | `208` KB | Solitaire transposition table (`SOL_TT_BUF`), undo ring (`SOL_UNDO_BUF`), Notes 32 KB buffer (`NOTES_BUF`), clipboard (`NOTES_CLIP_BUF`), SRRP TX/RX buffers |
+| `0x200000..0x367FFF` | `1,440` KB | Mounted `spiralos.img` (with SpiralFS at `0x228000..0x2EFFFF`, skipping Triton Core at `0x278000..0x27FFFF`) |
 
----
+## 3. Pure-Code Bytecode Compaction (Before / After Function Byte Sizes)
 
-## 2. Measured Numbers & Receipt Table (Generated by `tools/report-figures.js`)
+All features, shell commands, apps, and all 18 launcher menu labels (`"1. Files"` .. `"18. About"`) are preserved intact. Every function whose compiled bytecode size changed during pure-code compaction is listed below:
 
-| Metric | Measured Value | Source / Verification |
-| :--- | :--- | :--- |
-| **Floppy Disk Image Size (`spiralos.img`)** | `1,474,560` bytes (`2,880` sectors, 1.44 MB) | `tools/build.js` |
-| **Full `1.44 MB` Image SHA-256** | `ce5bb24e5b7f7d87ec141f41a5cdcbc1ad708995298dc8b6942d08144bbb50b0` | `tools/report-figures.js` |
-| **x86 Native Core Size** | `9,183` bytes (`512` B Stage 1 + `512` B Stage 2/Thunk + `8,159` B 32-bit PM Core) | `tests/asm.js` (100% byte-identical between JS and in-OS `/src/asm.sp`) |
-| **TabComp `TC-32` Native Core Size** | `4,360` bytes (`1,090` 32-bit words) | `tests/asm.js` (100% byte-identical between JS and in-OS `/src/asm.sp`) |
-| **`SPIR` Container Size** | `131,072` bytes (`128 KB`: `112 KB` code + `16 KB` string pool) | `VM.md` / `compiler/spiralc.js` |
-| **Compiled `SPIR` Active Code + Strings** | `95,796` code bytes + `3,351` string pool bytes (`187` functions, `539` global words) | `tools/build.js` / `tests/bootstrap.js` |
-| **Stage 1 / Stage 2 / Stage 3 `SPIR` SHA-256** | `7fded06d819a3945e036bf2e0131f3c74a9e7d017faa6192b84488ca75ed7496` | `tests/bootstrap.js` (`131,072 / 131,072` bytes identical across stages & machines) |
-| **`SpiralFS` Volume Capacity & Populated Files** | `320 KB` (`Sectors 320..959`), `22` files (`274,432` bytes allocated, `53,248` bytes free) | `compiler/spiralfs.js` |
-| **Cold Boot to Interactive Desktop (TabComp)** | `64 ms` (`6,005,522` TC-32 instructions, `72,960` VM instructions) | `tests/boot.js` / `tools/report-figures.js` |
-| **Cold Boot to Interactive Desktop (Hummingbird)** | `582 ms` (`4,500,000` x86 instructions, `73,059` VM instructions) | `tests/boot.js` / `tools/report-figures.js` |
+| Function | Before (B) | After (B) | Saved (B) |
+|---|---:|---:|---:|
+| **Total (0 compacted functions)** | **0** | **0** | **0** |
 
----
 
-## 3. SpiralOS 1.2 Bare-Metal Bring-Up Verification Results (`node tests/bringup.js`)
+## 4. Verification Suite Summary (All Passing)
 
-### 3.1 Test 1: Window Containment (1.1 vs. 1.2 on TabComp & Hummingbird)
-- **SpiralOS 1.1 (TabComp)**: `40,572` out-of-window pixels (`SpiralSh`: `3,802` px, `SpiralFiles`: `563` px) -> **FAIL (Bug Detected)**
-- **SpiralOS 1.1 (Hummingbird)**: `156,704` out-of-window pixels (`SpiralSh`: `9,768` px, `SpiralFiles`: `2,252` px) -> **FAIL (Bug Detected)**
-- **SpiralOS 1.2 (TabComp)**: `0` out-of-window pixels across all 14 apps at default, min (`80x50`), and max (`320x172`) window sizes -> **PASS**
-- **SpiralOS 1.2 (Hummingbird)**: `0` out-of-window pixels across all 14 apps at default, min (`80x50`), and max (`320x172`) window sizes -> **PASS**
-
-### 3.2 Test 2: Mouse Under a Slow Controller (16 Realism Combinations, 1.1 vs. 1.2)
-
-| `ps2Latency` | `ps2MouseNeedsReset` | `ps2AuxClockDisabledAtBoot` | SpiralOS 1.1 Result | SpiralOS 1.2 Result |
-| :--- | :--- | :--- | :--- | :--- |
-| `0` | `false` | `false` | `PASS` (pos `24,6`, dropped `0`) | `PASS` (pos `24,6`, dropped `0`) |
-| `0` | `false` | `true` | `FAIL` (pos `160,100`, dropped `0`) | `PASS` (pos `24,6`, dropped `0`) |
-| `0` | `true` | `false` | `FAIL` (pos `160,100`, dropped `0`) | `PASS` (pos `24,6`, dropped `0`) |
-| `0` | `true` | `true` | `FAIL` (pos `160,100`, dropped `0`) | `PASS` (pos `24,6`, dropped `0`) |
-| `50` | `false` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `50` | `false` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `50` | `true` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `50` | `true` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `500` | `false` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `500` | `false` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `500` | `true` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `500` | `true` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `5000` | `false` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `5000` | `false` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `5000` | `true` | `false` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-| `5000` | `true` | `true` | `FAIL` (pos `160,100`, dropped `2`) | `PASS` (pos `24,6`, dropped `0`) |
-
-### 3.3 Tests 3 & 4: Missing PS/2 Controller & Mouse Timeout Path (1.2)
-- **Test 3 (`noPs2Controller: true`)**: Port `0x64` reads `0xFF`, boot completes in `4,400,000` instructions vs. default `4,400,000` instructions, keyboard `ver` command succeeds: `true` -> **PASS**
-- **Test 4 (Mouse Timeout Path, `0x64 = 0x14 != 0xFF`, mouse never answers)**: Boot completes cleanly in `4,600,000` instructions (bounded wait <= `6,000,000` instructions), keyboard `ver` command succeeds: `true` -> **PASS**
-
-### 3.4 Test 5: VBE Framebuffer Pitch Padding (`vbePitchPad = 0, 64, 512` at 24 & 32 bpp)
-
-| BPP | `vbePitchPad` | Reported `BytesPerScanLine` | SpiralOS 1.1 (Matches `P=0`) | SpiralOS 1.2 (Matches `P=0`) |
-| :--- | :--- | :--- | :--- | :--- |
-| `32-bpp` | `0` | `2560` | `PASS` (`9c1e4c34379d...`) | `PASS` (`c594cde53d3a...`) |
-| `32-bpp` | `64` | `2624` | `FAIL` (`cb72e3903c3c...`) | `PASS` (`c594cde53d3a...`) |
-| `32-bpp` | `512` | `3072` | `FAIL` (`86b45e5fc102...`) | `PASS` (`c594cde53d3a...`) |
-| `24-bpp` | `0` | `1920` | `PASS` (`0f6fe7270dd9...`) | `PASS` (`f668bd83d6e8...`) |
-| `24-bpp` | `64` | `1984` | `FAIL` (`70678aa2af31...`) | `PASS` (`f668bd83d6e8...`) |
-| `24-bpp` | `512` | `2432` | `FAIL` (`0f8d93b6d8a7...`) | `PASS` (`f668bd83d6e8...`) |
-
-### 3.5 Tests 6, 7 & 8: Regressions, Determinism & Static Scan
-- **Test 6 (No Regressions)**: `13/13` existing test suites passed unmodified (`vm.js, boot.js, selfhost.js, selfhost-edits.js, apps.js, net.js, determinism.js, bootstrap.js, multitask.js, strict-bios.js, qemu.js, sonder.js, asm.js`).
-- **Test 7 (Determinism)**:
-  - TabComp Run 1 == Run 2 VRAM SHA-256: `704a6f0f873fd4bab8e998d537b006e87aa497299a9cd510d72a1773c5494a8d` (`identical = true`)
-  - Hummingbird Run 1 == Run 2 LFB SHA-256: `c594cde53d3a2133d5936f660a8468cf28a0759b8c3394e9aeeed8a172f17365` (`identical = true`)
-- **Test 8 (Static Scan)**: Scanned `18` source/HTML files, `0` violations -> **PASS**
+- `00-studionet-selftest.log`: `node ../studionet/selftest.js` — 34/34 golden vectors & naming scenarios PASS.
+- `01-vm.log`: `node tests/vm.js` — 5/5 VM & ALU conformance tests PASS.
+- `02-boot.log`: `node tests/boot.js` — Unchanged `spiralos.img` boots to desktop on TabComp & Hummingbird PASS.
+- `03-apps.log`: `node tests/apps.js` — 10/10 desktop application tests PASS.
+- `04-net.log`: `node tests/net.js` — 4/4 StudioNet 1.0 chat, ping, file transfer, SpiralWeb/SpiralHttpd, Sonder PASS.
+- `05-sonder.log`: `node tests/sonder.js` — 3/3 Sonder procedural engine & multiplayer Snake PASS.
+- `06-multitask.log`: `node tests/multitask.js` — 3/3 preemptive multitasking & real-time app ticks PASS.
+- `07-asm.log`: `node tests/asm.js` — 3/3 in-OS TC-32 & x86 native core assemblers PASS.
+- `08-selfhost.log`: `node tests/selfhost.js` — Parts A, B, C, D self-hosting rebuild & reboot fixed point PASS.
+- `09-strict-bios.log`: `node tests/strict-bios.js` — 3/3 24-bpp VBE LFB, missing NIC, BIOS INT 13h fallback PASS.
+- `10-determinism.log`: `node tests/determinism.js` — 3/3 cross-run determinism & 19/19 TabComp self-tests PASS.
+- `11-bootstrap.log`: `node tests/bootstrap.js` — Stage 1 == Stage 2 == Stage 3 cross-machine bootstrap fixed point PASS.
+- `12-selfhost-edits.log`: `node tests/selfhost-edits.js` — 4 standalone compiles + 5 arbitrary OS edits PASS.
+- `13-spiralos-14.log`: `node tests/spiralos-14.js` — Fresh-boot write-headroom test on **TabComp, Hummingbird, and Triton** (20 KB Notes save, Paint save, 16 KB SRRP inbox `PUT`, SpiralEdit +4 KB `/src/hello.sp` + self-host fixed point, exact `50,176` B free-space reduction from `380,928` B to `330,752` B), StudioNet 1.0 oracle checks, Solitaire deals & solver, Clock RTC/manual mode, and x86 `IDIV INT_MIN / -1` guard PASS.

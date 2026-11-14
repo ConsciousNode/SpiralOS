@@ -1,0 +1,4 @@
+=== SpiralOS 1.1 Preemptive Multitasking & App Tick Suite (tests/multitask.js) ===
+  [PASS] 1. TabComp Preemptive Multitasking: workerA=14546 iters, workerB=14044 iters, switches=4773, timerTicks=5376, desktop responsive (frames=8)
+  [PASS] 2. Hummingbird i586 Preemptive Multitasking (PIT IRQ0 + IDT 0x20): workerA=3360 iters, workerB=3246 iters, switches=1104, irq0Ticks=42
+  [PASS] 3. Real-Time App Tick API: SpiralSnake auto-stepped (1->6) + [Step] button works; SpiralBlocks auto-fell (1->21)!

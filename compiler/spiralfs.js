@@ -1,35 +1,35 @@
 /**
- * SpiralOS 1.1 — SpiralFS Filesystem Builder & Inspector (compiler/spiralfs.js)
+ * SpiralOS 1.4 "Daily Driver" — SpiralFS Filesystem Builder & Inspector (compiler/spiralfs.js)
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
- * Manages the 320 KB SpiralFS volume stored in Sectors 320..959 (offset 0x28000..0x77FFF)
- * of spiralos.img (mounted at vmRam[0x228000..0x277FFF] on both TabComp and Hummingbird).
+ * Manages the enlarged SpiralFS volume stored in Sectors 320..1919 (offset 0x28000..0xEFFFF,
+ * 800 KB span = 768 KB usable + 32 KB reserved Triton Core window at Sectors 960..1023)
+ * of spiralos.img (mounted at vmRam[0x228000..0x2EFFFF] on TabComp, Hummingbird, and Triton).
  *
  * Volume Layout (relative to volume base 0x228000 in vmRam / 0x28000 in spiralos.img):
- *   0x0000 .. 0x003F (64 B): Superblock
- *     0x00: Magic 0x53465053 ('SPFS')
+ *   0x00000 .. 0x0003F (64 B): Superblock
+ *     0x00: Magic 0x53465053 ("SPFS")
  *     0x04: Version 1
  *     0x08: Max entries (63)
  *     0x0C: Next free data offset (relative to volume base, 512B aligned, starts at 0x1000)
- *   0x0040 .. 0x0FFF (63 * 64 = 4032 B): Directory Entries (each 64 bytes)
- *     0x00..0x27 (40 B): Null-terminated path (e.g. "/src/wm.sp")
- *     0x28 (i32): Flags (1 = file, 2 = dir, 0 = free)
- *     0x2C (i32): Data offset relative to volume base (0x1000 .. 0x4FFFF)
- *     0x30 (i32): File size in bytes
- *     0x34 (i32): Allocated capacity in bytes (multiple of 512)
- *     0x38 (i32): mtime / revision counter
- *     0x3C (i32): Simple additive byte checksum
- *   0x1000 .. 0x4FFFF (316 KB): File data sectors (512-byte aligned)
+ *   0x00040 .. 0x00FFF (63 * 64 = 4032 B): Directory Entries (each 64 bytes)
+ *   0x01000 .. 0x4FFFF (316 KB): Lower file data sectors (Sectors 328..959)
+ *   0x50000 .. 0x57FFF (32 KB) : Reserved Triton Core record (Sectors 960..1023, skipped by allocator)
+ *   0x58000 .. 0xC7FFF (448 KB): Upper file data sectors (Sectors 1024..1919)
  */
 
 "use strict";
 
-const SPFS_MAGIC = 0x53465053; // 'SPFS'
+const SPFS_MAGIC = 0x53465053; // "SPFS"
 const SPFS_START_SECTOR = 320;
 const SPFS_IMG_OFFSET = SPFS_START_SECTOR * 512; // 0x28000 in spiralos.img
 const SPFS_VMRAM_BASE = 0x200000 + SPFS_IMG_OFFSET; // 0x228000 in vmRam
-const SPFS_SECTORS = 640; // 320 KB (Sectors 320..959)
-const SPFS_SIZE = SPFS_SECTORS * 512; // 0x50000 (327,680 bytes)
+const SPFS_SECTORS = 1600; // Sectors 320..1919 (800 KB span)
+const SPFS_SIZE = SPFS_SECTORS * 512; // 0xC8000 (819,200 bytes)
+const SPFS_HOLE_START = 0x50000; // Relative offset of Sector 960 (0x78000 in spiralos.img)
+const SPFS_HOLE_END   = 0x58000; // Relative offset of Sector 1024 (0x80000 in spiralos.img)
+const SPFS_USABLE_SECTORS = SPFS_SECTORS - 64; // 1536 sectors (768 KB usable)
+const SPFS_USABLE_SIZE = SPFS_USABLE_SECTORS * 512; // 0xC0000 (786,432 bytes usable)
 const SPFS_MAX_FILES = 63;
 
 class SpiralFS {
@@ -42,7 +42,11 @@ class SpiralFS {
   }
 
   format() {
-    this.buf.fill(0);
+    const holeLo = Math.min(this.buf.length, SPFS_HOLE_START);
+    this.buf.fill(0, 0, holeLo);
+    if (this.buf.length > SPFS_HOLE_END) {
+      this.buf.fill(0, SPFS_HOLE_END);
+    }
     this.dv.setUint32(0x00, SPFS_MAGIC, true);
     this.dv.setUint32(0x04, 1, true);
     this.dv.setUint32(0x08, SPFS_MAX_FILES, true);
@@ -111,7 +115,10 @@ class SpiralFS {
     const alignedCap = (needed + 511) & ~511;
 
     if (oldFlags === 0 || data.length + 1 > cap) {
-      const nextFree = this.dv.getUint32(0x0C, true);
+      let nextFree = this.dv.getUint32(0x0C, true);
+      if (nextFree < SPFS_HOLE_END && nextFree + alignedCap > SPFS_HOLE_START) {
+        nextFree = SPFS_HOLE_END;
+      }
       if (nextFree + alignedCap > this.buf.length) {
         throw new Error(`SpiralFS out of space writing ${pathStr} (${nextFree + alignedCap} > ${this.buf.length})`);
       }
@@ -149,6 +156,22 @@ class SpiralFS {
     return new TextDecoder().decode(bytes);
   }
 
+  freeBytes() {
+    const nextFree = this.dv.getUint32(0x0C, true);
+    if (nextFree <= SPFS_HOLE_START) {
+      const upperFree = Math.max(0, this.buf.length - SPFS_HOLE_END);
+      return (SPFS_HOLE_START - nextFree) + upperFree;
+    }
+    return Math.max(0, this.buf.length - nextFree);
+  }
+
+  usedBytes() {
+    const totalUsable = (this.buf.length >= SPFS_HOLE_END)
+      ? (this.buf.length - (SPFS_HOLE_END - SPFS_HOLE_START))
+      : this.buf.length;
+    return totalUsable - this.freeBytes();
+  }
+
   listFiles() {
     const list = [];
     for (let i = 0; i < SPFS_MAX_FILES; i++) {
@@ -179,6 +202,10 @@ if (typeof module !== "undefined" && module.exports) {
     SPFS_VMRAM_BASE,
     SPFS_SECTORS,
     SPFS_SIZE,
+    SPFS_HOLE_START,
+    SPFS_HOLE_END,
+    SPFS_USABLE_SECTORS,
+    SPFS_USABLE_SIZE,
     SPFS_MAX_FILES
   };
 }

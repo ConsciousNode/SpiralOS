@@ -1,5 +1,5 @@
 // ============================================================================
-// SpiralOS 1.1 — In-OS Symbolic Native Core Assemblers (/src/asm.sp)
+// SpiralOS 1.4 "Daily Driver" — In-OS Symbolic Native Core Assemblers (/src/asm.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 //
 // Two genuine two-pass symbolic assemblers written in Spiral Language:
@@ -32,7 +32,7 @@ int asm_find_label(int name_ptr) {
   int sig = cc_name_sig(name_ptr);
   for (int i = 0; i < g_asm_lbl_cnt; i++) {
     int e = ASM_LBL_TAB + i * 36;
-    if (r32(e + 28) == sig && hal_strcmp(e, name_ptr) == 1) {
+    if (r32(e + 28) == sig && hal_strcmp(e, name_ptr)) {
       return r32(e + 32);
     }
   }
@@ -104,58 +104,22 @@ int asm_parse_tc_reg(int s_ptr) {
   return 0;
 }
 
+int asm_find_tok(int s, int list_str, int hex_str) {
+  int idx = tok_find_idx(s, list_str);
+  if (idx < 0) return -1;
+  return (cc_hex_val(r8(hex_str + idx * 2)) << 4) | cc_hex_val(r8(hex_str + idx * 2 + 1));
+}
+
 int asm_tc32_r_op(int m) {
-  if (hal_strcmp(m, "ADD") == 1)  return 0x05;
-  if (hal_strcmp(m, "SUB") == 1)  return 0x06;
-  if (hal_strcmp(m, "MUL") == 1)  return 0x07;
-  if (hal_strcmp(m, "DIV") == 1)  return 0x08;
-  if (hal_strcmp(m, "MOD") == 1)  return 0x09;
-  if (hal_strcmp(m, "UDIV") == 1) return 0x0A;
-  if (hal_strcmp(m, "UMOD") == 1) return 0x0B;
-  if (hal_strcmp(m, "AND") == 1)  return 0x0C;
-  if (hal_strcmp(m, "OR") == 1)   return 0x0D;
-  if (hal_strcmp(m, "XOR") == 1)  return 0x0E;
-  if (hal_strcmp(m, "SHL") == 1)  return 0x0F;
-  if (hal_strcmp(m, "SHR") == 1)  return 0x10;
-  if (hal_strcmp(m, "SAR") == 1)  return 0x11;
-  if (hal_strcmp(m, "CMP") == 1)  return 0x1A;
-  return -1;
+  return asm_find_tok(m, "ADD|SUB|MUL|DIV|MOD|UDIV|UMOD|AND|OR|XOR|SHL|SHR|SAR|CMP", "05060708090a0b0c0d0e0f10111a");
 }
 
 int asm_tc32_i_op(int m) {
-  if (hal_strcmp(m, "MOV") == 1)   return 0x01;
-  if (hal_strcmp(m, "LUI16") == 1) return 0x03;
-  if (hal_strcmp(m, "LHI") == 1)   return 0x04;
-  if (hal_strcmp(m, "ADDI") == 1)  return 0x12;
-  if (hal_strcmp(m, "SUBI") == 1)  return 0x13;
-  if (hal_strcmp(m, "ANDI") == 1)  return 0x14;
-  if (hal_strcmp(m, "SHLI") == 1)  return 0x17;
-  if (hal_strcmp(m, "SHRI") == 1)  return 0x18;
-  if (hal_strcmp(m, "SARI") == 1)  return 0x19;
-  if (hal_strcmp(m, "CMPI") == 1)  return 0x1B;
-  if (hal_strcmp(m, "LDBU") == 1)  return 0x1C;
-  if (hal_strcmp(m, "LDBS") == 1)  return 0x1D;
-  if (hal_strcmp(m, "LDHU") == 1)  return 0x1E;
-  if (hal_strcmp(m, "LDW") == 1)   return 0x20;
-  if (hal_strcmp(m, "STB") == 1)   return 0x21;
-  if (hal_strcmp(m, "STH") == 1)   return 0x22;
-  if (hal_strcmp(m, "STW") == 1)   return 0x23;
-  if (hal_strcmp(m, "RET") == 1)   return 0x2E;
-  if (hal_strcmp(m, "JR") == 1)    return 0x35;
-  if (hal_strcmp(m, "SETCC") == 1) return 0x36;
-  return -1;
+  return asm_find_tok(m, "MOV|LUI16|LHI|ADDI|SUBI|ANDI|SHLI|SHRI|SARI|CMPI|LDBU|LDBS|LDHU|LDW|STB|STH|STW|RET|JR|SETCC", "0103041213141718191b1c1d1e202122232e3536");
 }
 
 int asm_tc32_j_op(int m) {
-  if (hal_strcmp(m, "JMP") == 1)  return 0x26;
-  if (hal_strcmp(m, "JEQ") == 1)  return 0x27;
-  if (hal_strcmp(m, "JNE") == 1)  return 0x28;
-  if (hal_strcmp(m, "JLT") == 1)  return 0x29;
-  if (hal_strcmp(m, "JGE") == 1)  return 0x2A;
-  if (hal_strcmp(m, "JLE") == 1)  return 0x2B;
-  if (hal_strcmp(m, "JGT") == 1)  return 0x2C;
-  if (hal_strcmp(m, "CALL") == 1) return 0x2D;
-  return -1;
+  return asm_find_tok(m, "JMP|JEQ|JNE|JLT|JGE|JLE|JGT|CALL", "262728292a2b2c2d");
 }
 
 void asm_emit32(int w) {
@@ -191,11 +155,29 @@ int asm_assemble_tc32() {
       if (tlen > 1 && r8(tok1 + tlen - 1) == 58) {
         w8(tok1 + tlen - 1, 0);
         asm_add_label(tok1, g_asm_out_len);
-      } else if (hal_strcmp(tok1, ".dd") == 1) {
+      } else if (hal_strcmp(tok1, ".dd")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_add_fixup(g_asm_out_len, tok2, 3, 0, 0);
         asm_emit32(0);
-      } else if (hal_strcmp(tok1, ".ascii") == 1) {
+      } else if (hal_strcmp(tok1, ".hex")) {
+        lp = asm_skip_ws(src, lp, line_end);
+        int w_acc = 0;
+        int b_idx = 0;
+        while (lp + 1 < line_end) {
+          int h1 = r8(src + lp);
+          int h2 = r8(src + lp + 1);
+          if (cc_is_hex(h1) == 0 || cc_is_hex(h2) == 0) break;
+          int bv = (cc_hex_val(h1) << 4) | cc_hex_val(h2);
+          w_acc = w_acc | (bv << (b_idx * 8));
+          b_idx = b_idx + 1;
+          if (b_idx == 4) {
+            asm_emit32(w_acc);
+            w_acc = 0;
+            b_idx = 0;
+          }
+          lp = lp + 2;
+        }
+      } else if (hal_strcmp(tok1, ".ascii")) {
         while (lp < line_end && r8(src + lp) != 34) lp = lp + 1;
         if (lp < line_end && r8(src + lp) == 34) lp = lp + 1;
         for (int b = 0; b < 16; b++) w8(ASM_WORK_BUF + g_asm_out_len + b, 0);
@@ -206,14 +188,14 @@ int asm_assemble_tc32() {
           bi = bi + 1;
         }
         g_asm_out_len = g_asm_out_len + 16;
-      } else if (hal_strcmp(tok1, "LA") == 1) {
+      } else if (hal_strcmp(tok1, "LA")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         int rd = asm_parse_tc_reg(tok2);
         asm_add_fixup(g_asm_out_len, tok3, 2, 0, rd);
         asm_emit32((0x03 << 24) | ((rd & 15) << 20));
         asm_emit32((0x04 << 24) | ((rd & 15) << 20));
-      } else if (hal_strcmp(tok1, "SYS") == 1) {
+      } else if (hal_strcmp(tok1, "SYS")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         int snum = asm_parse_int(tok2);
         asm_emit32((0x2F << 24) | (snum & 0xFFFF));
@@ -251,7 +233,6 @@ int asm_assemble_tc32() {
     p = line_end + 1;
   }
 
-  // Pass 2: Resolve Fixups
   for (int i = 0; i < g_asm_fix_cnt; i++) {
     int fx = ASM_FIX_TAB + i * 48;
     int target = asm_find_label(fx);
@@ -269,7 +250,6 @@ int asm_assemble_tc32() {
     }
   }
 
-  // Write 'TC32' header + length + code into Sectors 32..63 (VMRAM_IMG_BASE + 0x4000)
   hal_memset(VMRAM_IMG_BASE + 0x4000, 0, 16384);
   w32(VMRAM_IMG_BASE + 0x4000, 0x32334354);
   w32(VMRAM_IMG_BASE + 0x4004, g_asm_out_len);
@@ -286,15 +266,9 @@ void asm_emit8(int b) {
 }
 
 int asm_parse_x86_reg(int s_ptr) {
-  if (hal_strcmp(s_ptr, "eax") == 1) return 0;
-  if (hal_strcmp(s_ptr, "ecx") == 1) return 1;
-  if (hal_strcmp(s_ptr, "edx") == 1) return 2;
-  if (hal_strcmp(s_ptr, "ebx") == 1) return 3;
-  if (hal_strcmp(s_ptr, "esp") == 1) return 4;
-  if (hal_strcmp(s_ptr, "ebp") == 1) return 5;
-  if (hal_strcmp(s_ptr, "esi") == 1) return 6;
-  if (hal_strcmp(s_ptr, "edi") == 1) return 7;
-  return 0;
+  int r = tok_find_idx(s_ptr, "eax|ecx|edx|ebx|esp|ebp|esi|edi");
+  if (r < 0) return 0;
+  return r;
 }
 
 void asm_x86_mem_disp(int reg_field, int base_reg, int disp) {
@@ -331,26 +305,11 @@ void asm_x86_shift_ri(int subop, int reg, int count) {
 }
 
 int asm_x86_jcc_code(int m) {
-  if (hal_strcmp(m, "je") == 1)  return 0x84;
-  if (hal_strcmp(m, "jne") == 1) return 0x85;
-  if (hal_strcmp(m, "jl") == 1)  return 0x8C;
-  if (hal_strcmp(m, "jge") == 1) return 0x8D;
-  if (hal_strcmp(m, "jle") == 1) return 0x8E;
-  if (hal_strcmp(m, "jg") == 1)  return 0x8F;
-  if (hal_strcmp(m, "jb") == 1)  return 0x82;
-  if (hal_strcmp(m, "ja") == 1)  return 0x87;
-  return -1;
+  return asm_find_tok(m, "je|jne|jl|jge|jle|jg|jb|ja", "84858c8d8e8f8287");
 }
 
 int asm_x86_rr_op(int m) {
-  if (hal_strcmp(m, "mov_rr") == 1) return 0x89;
-  if (hal_strcmp(m, "add_rr") == 1) return 0x01;
-  if (hal_strcmp(m, "sub_rr") == 1) return 0x29;
-  if (hal_strcmp(m, "and_rr") == 1) return 0x21;
-  if (hal_strcmp(m, "or_rr") == 1)  return 0x09;
-  if (hal_strcmp(m, "xor_rr") == 1) return 0x31;
-  if (hal_strcmp(m, "cmp_rr") == 1) return 0x39;
-  return -1;
+  return asm_find_tok(m, "mov_rr|add_rr|sub_rr|and_rr|or_rr|xor_rr|cmp_rr", "89012921093139");
 }
 
 int asm_assemble_x86() {
@@ -382,10 +341,10 @@ int asm_assemble_x86() {
       if (tlen > 1 && r8(tok1 + tlen - 1) == 58) {
         w8(tok1 + tlen - 1, 0);
         asm_add_label(tok1, base_addr + g_asm_out_len);
-      } else if (hal_strcmp(tok1, ".org") == 1) {
+      } else if (hal_strcmp(tok1, ".org")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         base_addr = asm_parse_int(tok2);
-      } else if (hal_strcmp(tok1, ".hex") == 1) {
+      } else if (hal_strcmp(tok1, ".hex")) {
         lp = asm_skip_ws(src, lp, line_end);
         while (lp + 1 < line_end) {
           int h1 = r8(src + lp);
@@ -394,7 +353,7 @@ int asm_assemble_x86() {
           asm_emit8((cc_hex_val(h1) << 4) | cc_hex_val(h2));
           lp = lp + 2;
         }
-      } else if (hal_strcmp(tok1, ".banner") == 1) {
+      } else if (hal_strcmp(tok1, ".banner")) {
         while (lp < line_end && r8(src + lp) != 34) lp = lp + 1;
         if (lp < line_end && r8(src + lp) == 34) lp = lp + 1;
         for (int b = 0; b < 16; b++) w8(ASM_WORK_BUF + g_asm_out_len + b, 0);
@@ -405,96 +364,63 @@ int asm_assemble_x86() {
           bi = bi + 1;
         }
         g_asm_out_len = g_asm_out_len + 16;
-      } else if (hal_strcmp(tok1, ".dd") == 1) {
+      } else if (hal_strcmp(tok1, ".dd")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_add_fixup(g_asm_out_len, tok2, 1, 0, 0);
         asm_emit32(0);
-      } else if (hal_strcmp(tok1, "cdq") == 1) {
-        asm_emit8(0x99);
-      } else if (hal_strcmp(tok1, "ret") == 1) {
-        asm_emit8(0xC3);
-      } else if (hal_strcmp(tok1, "cld") == 1) {
-        asm_emit8(0xFC);
-      } else if (hal_strcmp(tok1, "cli") == 1) {
-        asm_emit8(0xFA);
-      } else if (hal_strcmp(tok1, "hlt") == 1) {
-        asm_emit8(0xF4);
-      } else if (hal_strcmp(tok1, "rep_movsd") == 1) {
-        asm_emit8(0xF3); asm_emit8(0xA5);
-      } else if (hal_strcmp(tok1, "rep_movsb") == 1) {
-        asm_emit8(0xF3); asm_emit8(0xA4);
-      } else if (hal_strcmp(tok1, "rep_stosd") == 1) {
-        asm_emit8(0xF3); asm_emit8(0xAB);
-      } else if (hal_strcmp(tok1, "rep_stosb") == 1) {
-        asm_emit8(0xF3); asm_emit8(0xAA);
-      } else if (hal_strcmp(tok1, "push") == 1) {
+      } else if (asm_find_tok(tok1, "cdq|ret|cld|cli|hlt", "99c3fcfaf4") >= 0) {
+        asm_emit8(asm_find_tok(tok1, "cdq|ret|cld|cli|hlt", "99c3fcfaf4"));
+      } else if (asm_find_tok(tok1, "rep_movsd|rep_movsb|rep_stosd|rep_stosb", "a5a4abaa") >= 0) {
+        asm_emit8(0xF3);
+        asm_emit8(asm_find_tok(tok1, "rep_movsd|rep_movsb|rep_stosd|rep_stosb", "a5a4abaa"));
+      } else if (hal_strcmp(tok1, "push")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_emit8(0x50 + asm_parse_x86_reg(tok2));
-      } else if (hal_strcmp(tok1, "pop") == 1) {
+      } else if (hal_strcmp(tok1, "pop")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_emit8(0x58 + asm_parse_x86_reg(tok2));
-      } else if (hal_strcmp(tok1, "jmp") == 1) {
+      } else if (hal_strcmp(tok1, "jmp")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_emit8(0xE9);
         asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0);
         asm_emit32(0);
-      } else if (hal_strcmp(tok1, "call") == 1) {
+      } else if (hal_strcmp(tok1, "call")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         asm_emit8(0xE8);
         asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0);
         asm_emit32(0);
-      } else if (hal_strcmp(tok1, "mov_ri") == 1) {
+      } else if (hal_strcmp(tok1, "mov_ri")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         asm_emit8(0xB8 + asm_parse_x86_reg(tok2));
         asm_emit32(asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_rl") == 1) {
+      } else if (hal_strcmp(tok1, "mov_rl")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         asm_emit8(0xB8 + asm_parse_x86_reg(tok2));
         asm_add_fixup(g_asm_out_len, tok3, 1, 0, 0);
         asm_emit32(0);
-      } else if (hal_strcmp(tok1, "add_ri") == 1) {
+      } else if (asm_find_tok(tok1, "add_ri|sub_ri|and_ri|cmp_ri", "00050407") >= 0) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_alu_ri(0, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "sub_ri") == 1) {
+        asm_x86_alu_ri(asm_find_tok(tok1, "add_ri|sub_ri|and_ri|cmp_ri", "00050407"), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
+      } else if (asm_find_tok(tok1, "shl_ri|shr_ri|sar_ri", "040507") >= 0) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_alu_ri(5, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "and_ri") == 1) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_alu_ri(4, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "cmp_ri") == 1) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_alu_ri(7, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "shl_ri") == 1) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_shift_ri(4, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "shr_ri") == 1) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_shift_ri(5, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "sar_ri") == 1) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_shift_ri(7, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_rm") == 1) {
+        asm_x86_shift_ri(asm_find_tok(tok1, "shl_ri|shr_ri|sar_ri", "040507"), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
+      } else if (hal_strcmp(tok1, "mov_rm")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         lp = asm_read_word(src, lp, line_end, tok4);
         asm_emit8(0x8B);
         asm_x86_mem_disp(asm_parse_x86_reg(tok2), asm_parse_x86_reg(tok3), asm_parse_int(tok4));
-      } else if (hal_strcmp(tok1, "mov_mr") == 1) {
+      } else if (hal_strcmp(tok1, "mov_mr")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         lp = asm_read_word(src, lp, line_end, tok4);
         asm_emit8(0x89);
         asm_x86_mem_disp(asm_parse_x86_reg(tok4), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_mi") == 1) {
+      } else if (hal_strcmp(tok1, "mov_mi")) {
         lp = asm_read_word(src, lp, line_end, tok2);
         lp = asm_read_word(src, lp, line_end, tok3);
         lp = asm_read_word(src, lp, line_end, tok4);

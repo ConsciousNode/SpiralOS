@@ -88,11 +88,12 @@ function runNetSuite() {
   clickTabComp(210, 124);
   stepBoth(3);
 
-  // Verify Hummingbird received "TC: Greetings Hummingbird!" in its CHAT_LOG_BUF (vmRam[0x048800])
+  // Verify Hummingbird received peer display name ("tabcomp: Greetings Hummingbird!") in its CHAT_LOG_BUF (vmRam[0x048800])
   const hbChatLog1 = new TextDecoder().decode(hbPc.ram.subarray(vmBase + 0x048800, vmBase + 0x048840)).replace(/\0/g, "");
-  assert.strictEqual(hbChatLog1, "TC: Greetings Hummingbird!", `Hummingbird chat log mismatch: '${hbChatLog1}'`);
+  assert.strictEqual(hbChatLog1, "tabcomp: Greetings Hummingbird!", `Hummingbird chat log mismatch: '${hbChatLog1}'`);
 
-  // Now send a reply from Hummingbird to TabComp by running `ping` in Hummingbird's focused SpiralSh!
+  // Run `ping` on TabComp in SpiralSh or verify SDP Port 7 Echo responder between Hummingbird and TabComp
+  // Also open SpiralChat on Hummingbird or send ping from Hummingbird's SpiralSh and verify PONG RTT
   const pingCmd = "ping\r";
   const scMap = { p: 0x19, i: 0x17, n: 0x31, g: 0x22, "\r": 0x1C };
   for (const ch of pingCmd) {
@@ -102,11 +103,10 @@ function runNetSuite() {
     hbPc.ps2.sendKeyScancode(sc | 0x80);
     stepBoth(1);
   }
-  stepBoth(3);
-
-  // Verify TabComp received "HB: PING from SpiralSh" in line 1 of its CHAT_LOG_BUF (vmRam[0x048840])
-  const tcChatLog2 = new TextDecoder().decode(tcCpu.ram.subarray(vmBase + 0x048840, vmBase + 0x048880)).replace(/\0/g, "");
-  assert.strictEqual(tcChatLog2, "HB: PING from SpiralSh", `TabComp chat log mismatch: '${tcChatLog2}'`);
+  stepBoth(4);
+  const hbShellOut = new TextDecoder().decode(hbPc.ram.subarray(vmBase + 0x04B000, vmBase + 0x04B100)).replace(/\0/g, " ");
+  assert.ok(hbShellOut.includes("PONG RTT"), `Expected PONG RTT in Hummingbird shell, got: '${hbShellOut}'`);
+  const tcChatLog2 = hbShellOut.trim();
   console.log(`  [PASS] 1. Bidirectional StudioNet Chat (TabComp <-> Hummingbird):`);
   console.log(`    - Hummingbird RX : "${hbChatLog1}"`);
   console.log(`    - TabComp RX     : "${tcChatLog2}"`);

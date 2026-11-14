@@ -12163,5 +12163,49 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
 })();
   </script>
+
+<!-- StudioNet 1.0 Hardware Node ID Control & ?node=0xNNNN URL Parameter -->
+<div id="studionet-node-id-bar" style="position:fixed;bottom:8px;right:8px;z-index:9999;background:#111628;border:1px solid #2b3860;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:12px;color:#eef3ff;display:flex;align-items:center;gap:6px;">
+  <label for="studionet-node-id-input">Node ID:</label>
+  <input id="studionet-node-id-input" type="text" value="0x0201" style="width:64px;background:#080b14;color:#28e08c;border:1px solid #2b3860;padding:2px 4px;font-family:monospace;font-size:12px;"/>
+</div>
+<script>
+(function() {
+  function parseNodeParam() {
+    try {
+      var m = (window.location.search || "").match(/[?&]node=(0x[0-9a-fA-F]+|\d+)/);
+      if (!m) return null;
+      var v = m[1].indexOf("0x") === 0 ? parseInt(m[1], 16) : parseInt(m[1], 10);
+      return (v > 0 && v < 0xFFFF) ? (v & 0xFFFF) : null;
+    } catch (e) { return null; }
+  }
+  function applyHardwareNodeId(nid) {
+    if (!nid || nid <= 0 || nid >= 0xFFFF) return;
+    if (globalThis.__STUDIONET_SWITCH && globalThis.__STUDIONET_SWITCH.nics) {
+      globalThis.__STUDIONET_SWITCH.nics.forEach(function(nic) {
+        nic.defaultNodeId = nid;
+        nic.nodeId = nid;
+        if (nic.host && nic.host._syncStudioNetMMIO) nic.host._syncStudioNetMMIO();
+      });
+    }
+    if (globalThis.SpiralTritonStation && globalThis.SpiralTritonStation.wasmVm) {
+      globalThis.SpiralTritonStation.wasmVm.snetNodeId = nid;
+    }
+  }
+  var inp = document.getElementById("studionet-node-id-input");
+  var urlNode = parseNodeParam();
+  if (urlNode !== null && inp) {
+    inp.value = "0x" + urlNode.toString(16).padStart(4, "0");
+    setTimeout(function() { applyHardwareNodeId(urlNode); }, 0);
+  }
+  if (inp) {
+    inp.addEventListener("change", function() {
+      var raw = inp.value.trim();
+      var v = raw.indexOf("0x") === 0 ? parseInt(raw, 16) : parseInt(raw, 10);
+      if (v > 0 && v < 0xFFFF) applyHardwareNodeId(v & 0xFFFF);
+    });
+  }
+})();
+</script>
 </body>
 </html>

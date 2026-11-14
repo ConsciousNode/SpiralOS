@@ -1,0 +1,40 @@
+PASS 1a frame round trip
+PASS 1b short frame refused
+PASS 1c len mismatch refused
+PASS 1d 481-byte payload refused by encoder
+PASS 2a HELLO round trip
+PASS 2b WHO round trip
+PASS 2c BYE
+PASS 2d bad name refused
+PASS 2e display names
+PASS 3a lone core keeps plain name
+PASS 3b three in join order -> hb1 hb2 hb3 — {"201":"hb1","202":"hb2","203":"hb3"}
+PASS 3c numbers do not shift when hb1 leaves — {"202":"hb2","203":"hb3"}
+PASS 3d newcomer takes lowest free (hb1) — {"202":"hb2","203":"hb3","204":"hb1"}
+PASS 3e base name resolves to lowest number
+PASS 3f tie (same age) -> lower token is tri1 — {"301":"tri2","302":"tri1"}
+PASS 3g control: without tokens the tie resolves differently — {"301":"tri1","302":"tri2"}
+PASS 3h LAN merge: older hb1 keeps it, no duplicates — {"before":{"201":"hb1","202":"hb2","211":"hb1","212":"hb2"},"after":{"201":"hb1","202":"hb2","211":"hb3","212":"hb4"}}
+PASS 3i chosen-name clash -> older keeps it, other gets toshiba2 — {"101":"toshiba","201":"toshiba2"}
+PASS 4a request round trip
+PASS 4b response round trip
+PASS 4c legacy "GET /" detected
+PASS 4d Size mismatch refused
+PASS 4e trytes16 round trip
+PASS 4f unsafe names refused
+PASS 4g POST form submit parses
+PASS 5a 64 KB clean link — frames sent 137, resent 0, max window 8, seq wrapped through 65535
+PASS 5b 64 KB with 5% drop, 3% duplicates, reordering — dropped 12, dups 10, resent 26, timeouts 10, rx duplicates 22
+PASS 5c 3 KB with 20% drop — resent 7
+PASS 5d one-frame message (SYN|PSH|FIN)
+PASS 5e SACK cuts resends (control: SACK bitmap zeroed) — with SACK 32 resends (19 drops); without 42
+PASS 5f timeout halves window — cwnd 4
+PASS 5g gives up after 5 timeouts without progress
+PASS 5h oversize PUT refused at the first frame (413)
+PASS 6a envelope round trip
+PASS 6b corrupted frame dropped by CRC (positive control)
+PASS 6c own origin dropped (loop guard)
+PASS 6d hop limit
+PASS 6e CRC-32 known answer ("123456789" = 0xCBF43926)
+
+ALL PASS

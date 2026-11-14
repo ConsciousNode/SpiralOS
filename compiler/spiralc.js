@@ -89,7 +89,8 @@ const OP_RET         = 0x26;
 const OP_SYSCALL     = 0x27;
 
 const SPIR_MAGIC     = 0x52495053; // 'SPIR'
-const SPIR_STR_BASE  = 0x01C000;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
+const SPIR_STR_BASE  = 0x000020;
+const SPIR_CODE_BASE = 0x001580;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
 const SPIR_MAX_SIZE  = 0x020000;   // 128 KB total SPIR image size
 
 function expandImports(entryPath, readFileTextFn) {
@@ -138,12 +139,13 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   // Output 128 KB SPIR buffer
   const outBuf = new Uint8Array(SPIR_MAX_SIZE);
   const outDV = new DataView(outBuf.buffer);
-  let codePos = 0x0020; // Bytecode starts right after 32-byte SPIR header
+  let codePos = SPIR_CODE_BASE;
+  let lastPatchPos = -1; // Bytecode starts right after 32-byte SPIR header
   let strPos = SPIR_STR_BASE;
 
   function emitWord(w) {
-    if (codePos + 4 > SPIR_STR_BASE) {
-      throw new Error(`SpiralC: Code size exceeded ${SPIR_STR_BASE} bytes at line ${lineNum}`);
+    if (codePos + 4 > SPIR_MAX_SIZE) {
+      throw new Error(`SpiralC: Code size exceeded ${SPIR_MAX_SIZE} bytes at line ${lineNum}`);
     }
     outDV.setUint32(codePos, w >>> 0, true);
     const addr = codePos;
@@ -151,15 +153,77 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     return addr;
   }
 
+  function popAddOffset16() {
+    if (codePos >= SPIR_CODE_BASE + 8) {
+      const last1 = outDV.getUint32(codePos - 4, true);
+      const last2 = outDV.getUint32(codePos - 8, true);
+      if (last1 === (OP_ADD << 24) && ((last2 >>> 24) & 0xFF) === OP_PUSH_I16) {
+        codePos -= 8;
+        return last2 & 0xFFFF;
+      }
+    }
+    return 0;
+  }
+
+  function emitDropStmt() {
+    if (codePos >= SPIR_CODE_BASE + 8) {
+      const last1 = outDV.getUint32(codePos - 4, true);
+      const last2 = outDV.getUint32(codePos - 8, true);
+      const op1 = (last1 >>> 24) & 0xFF;
+      const op2 = (last2 >>> 24) & 0xFF;
+      if (last1 === (OP_PUSH_I16 << 24) && op2 >= OP_STORE8 && op2 <= OP_STORE32) {
+        codePos -= 4;
+        return;
+      }
+      if ((op1 === OP_SET_LOCAL || op1 === OP_SET_GLOBAL) && last2 === (OP_DUP << 24)) {
+        outDV.setUint32(codePos - 8, last1, true);
+        codePos -= 4;
+        return;
+      }
+    }
+    emitOp(OP_DROP);
+  }
+
   function emitOp(op, a = 0, imm16 = 0) {
+    if ((op === OP_ADD || op === OP_SUB || op === OP_MUL || op === OP_SHL) && codePos >= SPIR_CODE_BASE + 8) {
+      const w1 = outDV.getUint32(codePos - 4, true);
+      if (((w1 >>> 24) & 0xFF) === OP_PUSH_I16) {
+        const c2 = ((w1 & 0xFFFF) << 16) >> 16;
+        const w2 = outDV.getUint32(codePos - 8, true);
+        const op2 = (w2 >>> 24) & 0xFF;
+        if (op2 === OP_PUSH_I16) {
+          const c1 = ((w2 & 0xFFFF) << 16) >> 16;
+          codePos -= 8;
+          const r = (op === OP_ADD) ? (c1 + c2) : (op === OP_SUB) ? (c1 - c2) : (op === OP_MUL) ? Math.imul(c1, c2) : (c1 << (c2 & 31));
+          return emitPushConst(r | 0);
+        }
+        if ((op === OP_ADD || op === OP_SUB) && op2 === OP_PUSH_HI && codePos >= SPIR_CODE_BASE + 12) {
+          const w3 = outDV.getUint32(codePos - 12, true);
+          if (((w3 >>> 24) & 0xFF) === OP_PUSH_U16) {
+            const c1 = (((w2 & 0xFFFF) << 16) | (w3 & 0xFFFF)) | 0;
+            codePos -= 12;
+            return emitPushConst(((op === OP_ADD) ? (c1 + c2) : (c1 - c2)) | 0);
+          }
+        }
+      }
+    }
     return emitWord((((op & 0xFF) << 24) | ((a & 0xFF) << 16) | (imm16 & 0xFFFF)) >>> 0);
   }
 
   function emitJump(op, addr24 = 0) {
+    if (op === OP_JZ && addr24 === 0 && codePos >= SPIR_CODE_BASE + 8 && lastPatchPos !== codePos) {
+      const w1 = outDV.getUint32(codePos - 4, true);
+      const w2 = outDV.getUint32(codePos - 8, true);
+      if (w2 === (OP_PUSH_I16 << 24)) {
+        if (w1 === (OP_CMP << 24)) { codePos -= 8; op = OP_JNZ; }
+        else if (w1 === ((OP_CMP << 24) | 1)) { codePos -= 8; op = OP_JZ; }
+      }
+    }
     return emitWord((((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF)) >>> 0);
   }
 
   function patchJump(instByteAddr, targetByteAddr) {
+    lastPatchPos = targetByteAddr;
     const prev = outDV.getUint32(instByteAddr, true);
     const op = (prev >>> 24) & 0xFF;
     outDV.setUint32(instByteAddr, ((op << 24) | (targetByteAddr & 0x00FFFFFF)) >>> 0, true);
@@ -192,7 +256,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       }
       p += slen + 1;
     }
-    if (strPos + len + 1 > SPIR_MAX_SIZE) {
+    if (strPos + len + 1 > SPIR_CODE_BASE) {
       throw new Error(`SpiralC: String pool overflow at line ${lineNum}`);
     }
     const startAddr = strPos;
@@ -593,6 +657,11 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   function parseUnary() {
     if (tok === 45) { // '-x' -> 0 - x
       nextToken();
+      if (tok === TK_NUM) {
+        emitPushConst((-tokVal) | 0);
+        nextToken();
+        return;
+      }
       emitPushConst(0);
       parseUnary();
       emitOp(OP_SUB);
@@ -652,21 +721,23 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         expect(40);
         parseExpr();
         expect(41);
-        if (name === "r8") emitOp(OP_LOAD8U, 0, 0);
-        else if (name === "r8s") emitOp(OP_LOAD8S, 0, 0);
-        else if (name === "r16") emitOp(OP_LOAD16U, 0, 0);
-        else emitOp(OP_LOAD32, 0, 0);
+        const off16 = popAddOffset16();
+        if (name === "r8") emitOp(OP_LOAD8U, 0, off16);
+        else if (name === "r8s") emitOp(OP_LOAD8S, 0, off16);
+        else if (name === "r16") emitOp(OP_LOAD16U, 0, off16);
+        else emitOp(OP_LOAD32, 0, off16);
         return;
       }
       if (name === "w8" || name === "w16" || name === "w32") {
         expect(40);
         parseExpr(); // addr
+        const off16 = popAddOffset16();
         expect(44);  // ','
         parseExpr(); // val
         expect(41);
-        if (name === "w8") emitOp(OP_STORE8, 0, 0);
-        else if (name === "w16") emitOp(OP_STORE16, 0, 0);
-        else emitOp(OP_STORE32, 0, 0);
+        if (name === "w8") emitOp(OP_STORE8, 0, off16);
+        else if (name === "w16") emitOp(OP_STORE16, 0, off16);
+        else emitOp(OP_STORE32, 0, off16);
         emitPushConst(0); // expression value 0
         return;
       }
@@ -720,6 +791,10 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           }
         }
         expect(41);
+        if (nargs === 5 && name === "hal_char") {
+          emitPushConst(0);
+          nargs = 6;
+        }
         const fn = funcs.get(name);
         if (fn && fn.defined) {
           emitJump(OP_CALL, fn.addr);
@@ -751,13 +826,6 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           emitOp(OP_SHL); // index * 4
         }
         emitOp(OP_ADD); // base + offset
-        if (tok === 61) { // '='
-          nextToken();
-          parseExpr();
-          emitOp(v.isByte ? OP_STORE8 : OP_STORE32, 0, 0);
-          emitPushConst(0);
-          return;
-        }
         if (tok === TK_ADDEQ || tok === TK_SUBEQ) {
           const isAdd = (tok === TK_ADDEQ);
           nextToken();
@@ -769,7 +837,15 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           emitPushConst(0);
           return;
         }
-        emitOp(v.isByte ? OP_LOAD8U : OP_LOAD32, 0, 0);
+        const arrOff16 = popAddOffset16();
+        if (tok === 61) { // '='
+          nextToken();
+          parseExpr();
+          emitOp(v.isByte ? OP_STORE8 : OP_STORE32, 0, arrOff16);
+          emitPushConst(0);
+          return;
+        }
+        emitOp(v.isByte ? OP_LOAD8U : OP_LOAD32, 0, arrOff16);
         return;
       }
 
@@ -866,10 +942,12 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       parseStmt();
       if (tok === TK_ELSE) {
         nextToken();
-        const jEnd = emitJump(OP_JMP, 0);
+        const prevOp = (outDV.getUint32(codePos - 4, true) >>> 24) & 0xFF;
+        const noFall = (lastPatchPos !== codePos && (prevOp === OP_RET || prevOp === OP_JMP));
+        const jEnd = noFall ? -1 : emitJump(OP_JMP, 0);
         patchJump(jFalse, codePos);
         parseStmt();
-        patchJump(jEnd, codePos);
+        if (jEnd >= 0) patchJump(jEnd, codePos);
       } else {
         patchJump(jFalse, codePos);
       }
@@ -917,7 +995,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         expect(59);
       } else if (tok !== 59) {
         parseExpr();
-        emitOp(OP_DROP);
+        emitDropStmt();
         expect(59);
       } else {
         expect(59);
@@ -935,7 +1013,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       const stepStart = codePos;
       if (tok !== 41) {
         parseExpr();
-        emitOp(OP_DROP);
+        emitDropStmt();
       }
       expect(41);
       emitJump(OP_JMP, condStart);
@@ -1001,7 +1079,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
 
     // 10. Expression statement
     parseExpr();
-    emitOp(OP_DROP);
+    emitDropStmt();
     expect(59);
   }
 
@@ -1097,9 +1175,11 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           true
         );
 
-        // Fallback return 0
-        emitPushConst(0);
-        emitOp(OP_RET);
+        // Fallback return 0 (omit if function already ended with OP_RET)
+        if (outDV.getUint32(codePos - 4, true) !== ((OP_RET << 24) >>> 0)) {
+          emitPushConst(0);
+          emitOp(OP_RET);
+        }
         continue;
       }
 
@@ -1167,14 +1247,14 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   outDV.setUint32(0x18, strPos - SPIR_STR_BASE, true);
 
   let csum = 0;
-  for (let i = 0x20; i < codePos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
+  for (let i = SPIR_CODE_BASE; i < codePos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
   for (let i = SPIR_STR_BASE; i < strPos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
   outDV.setUint32(0x1C, csum >>> 0, true);
 
   return {
     image: outBuf,
     entryPc: mainFn.addr,
-    codeBytes: codePos - 0x20,
+    codeBytes: codePos - SPIR_CODE_BASE,
     stringBytes: strPos - SPIR_STR_BASE,
     globalWords: globalSlotCount,
     funcCount: funcs.size,

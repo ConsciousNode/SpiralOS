@@ -21,31 +21,83 @@ const { R, X86Builder } = (typeof globalThis !== "undefined" && globalThis.X86Bu
   ? { R: globalThis.X86Reg, X86Builder: globalThis.X86Builder }
   : require("./x86_asm.js");
 
+// from fonts/consciousnode-sans-8x8.hex:1-96
 const X86_FONT_8X8_HEX =
-  "0000000000000000183c3c18180018006c6c2400000000006c6cfe6cfe6c6c00" +
-  "183e603c067c180000c6cc183066c600386c3876dccccc761818300000000000" +
-  "0c18303030180c0030180c0c0c18300000663cff3c6600000018187e18180000" +
-  "00000000001818300000007e000000000000000000181800060c183060c08000" +
-  "7cc6cedef6e67c001838181818187e007cc6063c60c6fe007cc6063c06c67c00" +
-  "1c3c6cccfe0c1e00fec0fc0606c67c003c60c0fcc6c67c00fec60c1830303000" +
-  "7cc6c67cc6c67c007cc6c67e060c780000181800001818000018180000181830" +
-  "0c18306030180c0000007e00007e000030180c060c1830007cc60c1818001800" +
-  "7cc6dededec07800386cc6fec6c6c600fcc6c6fcc6c6fc003c66c0c0c0663c00" +
-  "f8ccc6c6c6ccf800fec0c0f8c0c0fe00fec0c0f8c0c0c0003c66c0cec6663e00" +
-  "c6c6c6fec6c6c6003c18181818183c001e0c0c0cccce7800e6666c786c66e600" +
-  "f06060606266fe00c6eefefed6c6c600c6e6f6decec6c6007cc6c6c6c6c67c00" +
-  "fcc6c6fc6060f0007cc6c6c6decc7a00fcc6c6fc6c66e6007cc660380cc67c00" +
-  "7e7e181818183c00c6c6c6c6c6c67c00c6c6c6c6c66c3800c6c6c6d6feeec600" +
-  "c66c3838386cc6006666663c18183c00fecc183060c6fe003c30303030303c00" +
-  "c06030180c0602003c0c0c0c0c0c3c0010386cc60000000000000000000000ff" +
-  "30180c00000000000000780c7ccc7600e0607c666666dc0000007cc6c0c67c00" +
-  "1c0c7ccc6666760000007cc6fec07c003c6660f86060f000000076cccc7c0cf8" +
-  "e0606c766666e6001800381818183c00060006060666663c00e060666c786ce6" +
-  "3818181818183c000000ecfed6d6c6000000dc666666660000007cc6c6c67c00" +
-  "0000dc66667c60f0000076cccc7c0c1e0000dc766060f00000007cc07c06fc00" +
-  "10307c30303418000000cccecfd66e000000c6c6c66c38000000c6d6fefeecc6" +
-  "0000c66c386cc6000000c6c6ce76067c0000fc983064fc000e18187018180e00" +
-  "18181800181818007018180e1818700076dc0000000000000010386cc6c6fe00";
+  "00000000000000001010101000101000444444000000000048fc4848fc480000" +
+  "107c907814f81000c4c810204c8c000070887094887400001010200000000000" +
+  "081020202010080020100808081020000054387c385400000010107c10100000" +
+  "00000000001810200000007c0000000000000000003030000408102040800000" +
+  "788c94a4c48478001030501010107c00788404384080fc00f808103804847800" +
+  "08182848fc080800fc80f80404847800384080f884847800fc04081020202000" +
+  "78844830488478007884847c0408700000303000303000000018180018102000" +
+  "081020402010080000007c007c00000040201008102040007884081010001000" +
+  "7884bca4bc807c00304884fc84848400f88484f88484f8007884808080847800" +
+  "f08884848488f000fc8080f88080fc00fc8080f8808080007884809c84847800" +
+  "848484fc848484007c10101010107c003c08080888887000848890e090888400" +
+  "808080808080fc0082c6aa928282820084c4a4948c8484007884848484847800" +
+  "f88484f88080800078848484a4947a00f88484f8908884007884807804847800" +
+  "fe101010101010008484848484847800848484484830300082828292aac68200" +
+  "84483030304884008448301010101000fc0810204080fc003820202020203800" +
+  "804020100804000038080808080838001028440000000000000000000000fe00" +
+  "2010000000000000000078047c847c008080f8848484f8000000788480847800" +
+  "04047c8484847c0000007884fc8078001c20f8202020200000007c84847c0478" +
+  "8080f884848484001000301010103800080018080808887080808890e0908800" +
+  "20202020202018000000ec92929292000000f088888888000000788484847800" +
+  "0000f88484f8808000007c84847c040400009cc28080800000007c807804f800" +
+  "2020f8202024180000008484848c740000008484484830000000829292aa4400" +
+  "000084483048840000008484483010600000fc083040fc001820204020201800" +
+  "101010101010100030080804080830000064980000000000007c547c547c0000";
+
+// from fonts/cnsw-serif-8x16.hex:1-96
+const X86_FONT_SERIF_8X16_HEX =
+  "0000000000000000000000000000000000303030303010100000303000000000" +
+  "0066664444000000000000000000000000004444fe4444fe4444000000000000" +
+  "00107c9290781412927c1000000000000000c4c8101020204c8c000000000000" +
+  "0038444438508a848c7200000000000000303040400000000000000000000000" +
+  "000c1020204040402020100c0000000000601008080404040808106000000000" +
+  "0000001054387c3854100000000000000000000010107c101000000000000000" +
+  "00000000000000000000303010200000000000000000007c0000000000000000" +
+  "0000000000000000000030300000000000040408081010202040408000000000" +
+  "003844868a92a2c2828244380000000000103050101010101010107c00000000" +
+  "0078848404081020408084fc0000000000788404043804040484847800000000" +
+  "00081828488888fc0808083c0000000000fc848080f804040484847800000000" +
+  "0038448080f88484848444380000000000fc8404080810102020203800000000" +
+  "007884844830304884848478000000000078848484847c040408483000000000" +
+  "0000000000303000000030300000000000000000003030000000303010200000" +
+  "0000000810204020100800000000000000000000007c00007c00000000000000" +
+  "0000004020100810204000000000000000788484040810100000101000000000" +
+  "00788484bca4a4bc8080403c0000000000382844444482fe828282c600000000" +
+  "00f8444444784442424244f800000000003c4484808080808084443800000000" +
+  "00f8444242424242424244f80000000000fc444050705040404044fc00000000" +
+  "00fc444050705040404040e000000000003c448480809c848484443800000000" +
+  "00c6444444447c44444444c600000000007c1010101010101010107c00000000" +
+  "003e080808080808888888700000000000c6485060406050484444c600000000" +
+  "00e0404040404040404044fc0000000000c6ee5454544444444444c600000000" +
+  "00c66454544c4c44444444c60000000000384482828282828282443800000000" +
+  "00f844444444f840404040e0000000000038448282828282928a463a00000000" +
+  "00f844444444f850484444c600000000007c848040380404048484f800000000" +
+  "00fe921010101010101010380000000000c64444444444444444443800000000" +
+  "00c6444444444428282810100000000000c64444445454545428282800000000" +
+  "00c6442828101010282844c60000000000c64428281010101010103800000000" +
+  "00fc840808102020408084fc0000000000382020202020202020203800000000" +
+  "0080804040202010100808040000000000380808080808080808083800000000" +
+  "00102844000000000000000000000000000000000000000000000000fe000000" +
+  "0020100000000000000000000000000000000000007884047c84847c00000000" +
+  "00c0404040784442424244f80000000000000000007884808080847800000000" +
+  "000c0404043c44848484443c000000000000000000788484fc80847800000000" +
+  "001c2420207c2020202020700000000000000000007c888870807c8484443800" +
+  "00c0404040586444444444cc0000000000001000003010101010103800000000" +
+  "0000080000180808080808088888700000c04040404c5060504848cc00000000" +
+  "002060202020202020202070000000000000000000d45454545454d600000000" +
+  "0000000000d84444444444cc0000000000000000007884848484847800000000" +
+  "0000000000f84444444444784040e00000000000007c88888888887808081c00" +
+  "0000000000dc4440404040e00000000000000000007c8440380484f800000000" +
+  "00000020207c202020202418000000000000000000cc444444444c3600000000" +
+  "0000000000cc484848303030000000000000000000c644545454282800000000" +
+  "0000000000cc4830303048cc000000000000000000cc4848303010102040c000" +
+  "0000000000fc8810204088fc0000000000182020204040202020201800000000" +
+  "0010101010101010101010100000000000300808080404080808083000000000" +
+  "0000006498000000000000000000000000000038549292925438000000000000";
 
 function buildBootSector(customBanner = "SpiralOS 1.2") {
   const b = new Uint8Array(512);
@@ -265,7 +317,7 @@ function buildBootSector(customBanner = "SpiralOS 1.2") {
   return b;
 }
 
-function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr) {
+function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000) {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
   let p = 0;
@@ -366,6 +418,29 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   dv.setInt16(call1Pos + 1, (readRangeAddr - 0x7E00) - (call1Pos + 3), true);
   dv.setInt16(call2Pos + 1, (readRangeAddr - 0x7E00) - (call2Pos + 3), true);
 
+  if (p > 0x00C5) throw new Error(`Stage 2 entry overflows into Read2 Thunk (${p} > 0x00C5)`);
+  // Offset 0x00C5 (phys 0x7EC5): Real-Mode Batch-2 Read Thunk (loads Sectors 960..1919 = 480 KB to 0x00010000)
+  p = 0x00C5;
+  put(0xB8); put16(0x0020);          // mov ax, 0x0020 (16-bit data seg, base 0)
+  put(0x8E, 0xD8);                   // mov ds, ax
+  put(0x66, 0xB8); put32(0x00000010);// mov eax, 0x10 (clear PE)
+  put(0x0F, 0x22, 0xC0);             // mov cr0, eax
+  const realRd2Entry = 0x7E00 + p + 5;
+  put(0xEA); put16(realRd2Entry); put16(0x0000); // jmp 0x0000:realRd2Entry
+  put(0x31, 0xC0);                   // xor ax, ax
+  put(0x8E, 0xD8);                   // mov ds, ax
+  put(0x8E, 0xC0);                   // mov es, ax
+  put(0x8E, 0xD0);                   // mov ss, ax
+  put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
+  put(0xBE); put16(960);             // mov si, 960
+  put(0xBD); put16(960);             // mov bp, 960 (Sectors 960..1919 = 480 KB)
+  put(0xBF); put16(0x1000);          // mov di, 0x1000 (phys 0x00010000)
+  const callRd2Pos = p;
+  put(0xE8); put16(0);               // call read_range
+  dv.setInt16(callRd2Pos + 1, (readRangeAddr - 0x7E00) - (callRd2Pos + 3), true);
+  put(0x66, 0xB8); put32(0x80000011);// mov eax, 0x80000011 (PG | PE | ET)
+  put(0x0F, 0x22, 0xC0);             // mov cr0, eax
+  put(0x66, 0xEA); put32(pmBiosRead2RetAddr >>> 0); put16(0x0008);
   if (p > 0x0100) throw new Error(`Stage 2 loader overflows into the GDT (${p} > 0x100)`);
 
   // Offset 0x100 (phys 0x7F00): GDTR (6 bytes) + 5 GDT descriptors at 0x7F08 (40 bytes)
@@ -736,12 +811,29 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.EDI, 0, R.EAX);
   x.movMemReg32(R.EDI, 4, R.EBX);
 
-  // Load Protected-Mode IDTR from [0x7FF8]
-  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
-
-  // Copy 480 KB disk image from 0x00010000 to 0x00400000 (vmRam[0x200000])
+  // Copy Batch 1 (Sectors 0..959, 480 KB) from 0x00010000 to 0x00400000 (vmRam[0x200000..0x277FFF])
   x.movRegImm32(R.ESI, 0x00010000);
   x.movRegImm32(R.EDI, 0x00400000);
+  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
+  x.repMovsd();
+
+  // Read Batch 2 (Sectors 960..1919, 480 KB) via 16-bit Real-Mode Read Thunk at 0x0018:0x00007EC5
+  x.cli();
+  x.movRegImm32(R.EAX, 0x00000011);
+  x.u8(0x0F); x.u8(0x22); x.u8(0xC0);
+  x.u8(0xEA); x.u32(0x00007EC5); x.u16(0x0018);
+  x.label("pm_bios_read2_ret");
+  x.movRegImm32(R.EAX, 0x0010);
+  x.u8(0x8E); x.u8(0xD8);
+  x.u8(0x8E); x.u8(0xC0);
+  x.u8(0x8E); x.u8(0xD0);
+  x.u8(0x8E); x.u8(0xE0);
+  x.u8(0x8E); x.u8(0xE8);
+  x.movRegImm32(R.ESP, 0x00098000);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8);
+  // Copy Batch 2 (Sectors 960..1919, 480 KB) from 0x00010000 to 0x00478000 (vmRam[0x278000..0x2EFFFF])
+  x.movRegImm32(R.ESI, 0x00010000);
+  x.movRegImm32(R.EDI, 0x00478000);
   x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
   x.repMovsd();
 
@@ -766,10 +858,20 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.ECX, 4);
   x.repMovsd();
 
-  // Copy embedded 768B font to 0x002EF000 and 768B palette to 0x002FFA00
+  // Copy embedded 768B font to 0x002EF000 and 0x00291800, 1536B serif font to 0x00291000, and 768B palette to 0x002FFA00
   x.movRegLabel32(R.ESI, "embedded_font");
   x.movRegImm32(R.EDI, 0x002EF000);
   x.movRegImm32(R.ECX, 768 >>> 2);
+  x.repMovsd();
+
+  x.movRegLabel32(R.ESI, "embedded_font");
+  x.movRegImm32(R.EDI, 0x00291800);
+  x.movRegImm32(R.ECX, 768 >>> 2);
+  x.repMovsd();
+
+  x.movRegLabel32(R.ESI, "embedded_font_serif");
+  x.movRegImm32(R.EDI, 0x00291000);
+  x.movRegImm32(R.ECX, 1536 >>> 2);
   x.repMovsd();
 
   x.movRegLabel32(R.ESI, "embedded_palette");
@@ -1138,22 +1240,30 @@ function buildProtectedModeCore() {
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
   x.label("div_nonzero");
+  x.cmpRegImm32(R.ECX, -1);
+  x.jneLabel("div_safe");
+  x.cmpRegImm32(R.EAX, -2147483648);
+  x.jeLabel("div_store");
+  x.label("div_safe");
   x.cdq();
   x.idivReg32(R.ECX);
+  x.label("div_store");
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
   x.label("op_19_mod");
   popBinArgs();
   x.cmpRegImm32(R.ECX, 0);
-  x.jneLabel("mod_nonzero");
-  x.xorRegReg32(R.EAX, R.EAX);
-  x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
-  x.jmpLabel("vm_loop");
-  x.label("mod_nonzero");
+  x.jeLabel("mod_zero");
+  x.cmpRegImm32(R.ECX, -1);
+  x.jeLabel("mod_zero");
   x.cdq();
   x.idivReg32(R.ECX);
   x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EDX);
+  x.jmpLabel("vm_loop");
+  x.label("mod_zero");
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.movSibReg32(R.EBP, R.EDI, 0, -4, R.EAX);
   x.jmpLabel("vm_loop");
 
   x.label("op_1a_and");
@@ -1271,6 +1381,7 @@ function buildProtectedModeCore() {
   x.movRegReg32(R.EAX, R.EBX);
   x.shrRegImm(R.EAX, 16);
   x.andRegImm32(R.EAX, 0xFF);
+  x.movRegReg32(R.ECX, R.EAX);
   x.shlRegImm(R.EAX, 2);
   x.subRegReg32(R.EDI, R.EAX);
 
@@ -1280,7 +1391,7 @@ function buildProtectedModeCore() {
 
   x.andRegImm32(R.EBX, 0xFFFF);
 
-  for (let s = 0; s <= 21; s++) {
+  for (let s = 0; s <= 22; s++) {
     x.cmpRegImm32(R.EBX, s);
     x.jeLabel("sys_" + String(s).padStart(2, "0"));
   }
@@ -1668,27 +1779,41 @@ function buildProtectedModeCore() {
   x.xorRegReg32(R.EAX, R.EAX);
   x.jmpLabel("sys_push_eax");
 
-  // Internal subroutine: draw single 8x8 glyph
+  // Internal subroutine: draw single 8x8 (font=0) or 8x16 (font=1) glyph (font in [0x7804])
   x.label("sub_draw_char");
+  x.andRegImm32(R.ECX, 0xFF);
   x.subRegImm32(R.ECX, 32);
   x.cmpRegImm32(R.ECX, 0); x.jlLabel("dc6_ret");
   x.cmpRegImm32(R.ECX, 95); x.jgLabel("dc6_ret");
   x.cmpRegImm32(R.EAX, 0); x.jlLabel("dc6_ret");
   x.cmpRegImm32(R.EAX, 312); x.jgLabel("dc6_ret");
   x.cmpRegImm32(R.EBX, 0); x.jlLabel("dc6_ret");
-  x.cmpRegImm32(R.EBX, 192); x.jgLabel("dc6_ret");
 
   x.pushReg32(R.EDI);
   x.pushReg32(R.EBP);
+  x.xorRegReg32(R.EDI, R.EDI);
+  x.movRegMem32(R.EBP, R.EDI, 0x7804);
+  x.cmpRegImm32(R.EBP, 0);
+  x.jneLabel("dc6_serif");
+  x.cmpRegImm32(R.EBX, 192); x.jgLabel("dc6_pop_ret");
   x.shlRegImm(R.ECX, 3);
   x.addRegImm32(R.ECX, 0x002EF000);
+  x.movRegImm32(R.EBP, 8);
+  x.jmpLabel("dc6_vram");
+
+  x.label("dc6_serif");
+  x.cmpRegImm32(R.EBX, 184); x.jgLabel("dc6_pop_ret");
+  x.shlRegImm(R.ECX, 4);
+  x.addRegImm32(R.ECX, 0x00291000);
+  x.movRegImm32(R.EBP, 16);
+
+  x.label("dc6_vram");
   x.movRegImm32(R.EDI, 320);
   x.imulRegReg32(R.EBX, R.EDI);
   x.addRegReg32(R.EBX, R.EAX);
   x.addRegImm32(R.EBX, 0x002F0000);
   x.movRegReg32(R.EDI, R.EBX);
 
-  x.movRegImm32(R.EBP, 8);
   x.label("dc6_row");
   x.movzxRegMem8(R.EBX, R.ECX, 0);
   x.addRegImm32(R.ECX, 1);
@@ -1713,14 +1838,24 @@ function buildProtectedModeCore() {
   x.subRegImm32(R.EBP, 1);
   x.jneLabel("dc6_row");
 
+  x.label("dc6_pop_ret");
   x.popReg32(R.EBP);
   x.popReg32(R.EDI);
   x.label("dc6_ret");
   x.ret();
 
-  // SYS 6: DRAW_CHAR(x, y, ch, fg, bg)
+  // SYS 6: DRAW_CHAR(x, y, ch, fg, bg[, font])
   x.label("sys_06");
   x.pushReg32(R.ESI);
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 8);
+  x.shrRegImm(R.EAX, 8);
+  x.andRegImm32(R.EAX, 1);
+  x.cmpRegImm32(R.ECX, 6);
+  x.jlLabel("sys06_store_font");
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 20);
+  x.label("sys06_store_font");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movMemReg32(R.EBX, 0x7804, R.EAX);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
   x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
@@ -1731,10 +1866,17 @@ function buildProtectedModeCore() {
   x.xorRegReg32(R.EAX, R.EAX);
   x.jmpLabel("sys_push_eax");
 
-  // SYS 7: DRAW_STR(x, y, str_ptr, fg, bg)
+  // SYS 7: DRAW_STR(x, y, str_ptr, fg, bg[, font])
   x.label("sys_07");
   x.pushReg32(R.ESI);
   x.pushReg32(R.EDI);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.cmpRegImm32(R.ECX, 6);
+  x.jlLabel("sys07_store_font");
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 20);
+  x.label("sys07_store_font");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movMemReg32(R.EBX, 0x7804, R.EAX);
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
   x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
   x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 8);
@@ -1927,6 +2069,7 @@ function buildProtectedModeCore() {
 
   // SYS 11: REBOOT() -> triggers hardware reset on port 0x64 (0xFE) to reboot from updated floppyImage!
   x.label("sys_11");
+  x.movMemImm32(R.EBP, 0x0FFD04, 0);
   x.movRegImm32(R.EAX, 0xFE);
   x.outImm8Al(0x64);
   x.jmpLabel("vm_warm_boot");
@@ -2220,6 +2363,60 @@ function buildProtectedModeCore() {
   x.popReg32(R.ESI);
   x.jmpLabel("sys_push_eax");
 
+  // Subroutine: read CMOS register AL and convert BCD -> binary if Status Reg B bit 2 is 0
+  x.label("sub_read_cmos");
+  x.outImm8Al(0x70);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAlImm8(0x71);
+  x.movRegReg32(R.ECX, R.EAX);
+  x.movRegImm32(R.EAX, 0x0B);
+  x.outImm8Al(0x70);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAlImm8(0x71);
+  x.andRegImm32(R.EAX, 4);
+  x.jneLabel("cmos_is_bin");
+  x.movRegReg32(R.EAX, R.ECX);
+  x.movRegReg32(R.EBX, R.EAX);
+  x.andRegImm32(R.EBX, 15);
+  x.shrRegImm(R.EAX, 4);
+  x.andRegImm32(R.EAX, 15);
+  x.movRegImm32(R.ECX, 10);
+  x.imulRegReg32(R.EAX, R.ECX);
+  x.addRegReg32(R.EAX, R.EBX);
+  x.ret();
+  x.label("cmos_is_bin");
+  x.movRegReg32(R.EAX, R.ECX);
+  x.ret();
+
+  // SYS 22: DATE() -> reads CMOS RTC (ports 0x70/0x71), writes [year, month, day, hour, min, sec]
+  // to vmRam[0x0FFD90..0x0FFDA4], and returns packed (year << 16) | (month << 8) | day.
+  x.label("sys_22");
+  x.pushReg32(R.ESI);
+  x.movRegImm32(R.EAX, 0x00); x.callLabel("sub_read_cmos"); x.movMemReg32(R.EBP, 0x0FFDA4, R.EAX); // sec
+  x.movRegImm32(R.EAX, 0x02); x.callLabel("sub_read_cmos"); x.movMemReg32(R.EBP, 0x0FFDA0, R.EAX); // min
+  x.movRegImm32(R.EAX, 0x04); x.callLabel("sub_read_cmos"); x.movMemReg32(R.EBP, 0x0FFD9C, R.EAX); // hour
+  x.movRegImm32(R.EAX, 0x07); x.callLabel("sub_read_cmos"); x.movMemReg32(R.EBP, 0x0FFD98, R.EAX); // day
+  x.movRegImm32(R.EAX, 0x08); x.callLabel("sub_read_cmos"); x.movMemReg32(R.EBP, 0x0FFD94, R.EAX); // month
+  x.movRegImm32(R.EAX, 0x32); x.callLabel("sub_read_cmos"); // century
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("cmos_cent_ok");
+  x.movRegImm32(R.EAX, 20);
+  x.label("cmos_cent_ok");
+  x.movRegImm32(R.ECX, 100);
+  x.imulRegReg32(R.EAX, R.ECX);
+  x.movRegReg32(R.ESI, R.EAX);
+  x.movRegImm32(R.EAX, 0x09); x.callLabel("sub_read_cmos"); // 2-digit year
+  x.addRegReg32(R.EAX, R.ESI);
+  x.movMemReg32(R.EBP, 0x0FFD90, R.EAX); // full year
+  x.shlRegImm(R.EAX, 16);
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFD94);
+  x.shlRegImm(R.ECX, 8);
+  x.orRegReg32(R.EAX, R.ECX);
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFD98);
+  x.orRegReg32(R.EAX, R.ECX);
+  x.popReg32(R.ESI);
+  x.jmpLabel("sys_push_eax");
+
   // ==========================================================================
   // 4. VM Task Exit / Halt & Jump Tables
   // ==========================================================================
@@ -2278,6 +2475,11 @@ function buildProtectedModeCore() {
   x.label("embedded_font");
   for (let i = 0; i < 768; i++) {
     x.u8(parseInt(X86_FONT_8X8_HEX.substr(i * 2, 2), 16));
+  }
+
+  x.label("embedded_font_serif");
+  for (let i = 0; i < 1536; i++) {
+    x.u8(parseInt(X86_FONT_SERIF_8X16_HEX.substr(i * 2, 2), 16));
   }
 
   x.label("embedded_palette");
@@ -2340,7 +2542,7 @@ function formatHexLines(bytesArr, startIdx, endIdx) {
 function buildX86Core(customBanner = "SpiralOS 1.2") {
   const pm = buildProtectedModeCore();
   const bootSector = buildBootSector(customBanner);
-  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr);
+  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr, pm.labels.pm_bios_read2_ret);
   const combined = new Uint8Array(32 * 512); // Sectors 0..31 (16 KB)
   combined.set(bootSector, 0);
   combined.set(stage2, 512);

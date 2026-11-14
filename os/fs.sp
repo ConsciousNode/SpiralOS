@@ -1,12 +1,17 @@
 // ============================================================================
-// SpiralOS 1.1 — SpiralFS Filesystem Driver (/src/fs.sp)
+// SpiralOS 1.4 "Daily Driver" — SpiralFS Filesystem Driver (/src/fs.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 //
 // Operates on the mounted SpiralFS volume at VMRAM_SPFS_BASE (0x228000,
-// Sectors 320..959 of spiralos.img, 320 KB capacity).
+// Sectors 320..1919 of spiralos.img, 768 KB usable capacity + 32 KB reserved
+// Triton Core window in Sectors 960..1023 at relative offset 0x50000..0x57FFF).
 // ============================================================================
 
+// from spiralos/os/fs.sp:1-123
 const FS_MAX_ENTRIES = 63;
+const SPFS_SIZE      = 0xC8000;
+const SPFS_HOLE_LO   = 0x50000;
+const SPFS_HOLE_HI   = 0x58000;
 
 int fs_entry_ptr(int idx) {
   return VMRAM_SPFS_BASE + 0x40 + idx * 64;
@@ -29,11 +34,24 @@ int fs_entry_cap(int idx) {
   return r32(fs_entry_ptr(idx) + 0x34);
 }
 
+int fs_free_bytes() {
+  int next_free = r32(VMRAM_SPFS_BASE + 0x0C);
+  if (next_free <= SPFS_HOLE_LO) {
+    return (SPFS_HOLE_LO - next_free) + (SPFS_SIZE - SPFS_HOLE_HI);
+  }
+  if (next_free >= SPFS_SIZE) return 0;
+  return SPFS_SIZE - next_free;
+}
+
+int fs_used_bytes() {
+  return (SPFS_SIZE - 0x8000) - fs_free_bytes();
+}
+
 int fs_find(int path_str) {
   for (int i = 0; i < FS_MAX_ENTRIES; i++) {
     int e = fs_entry_ptr(i);
     if (r32(e + 0x28) != 0) {
-      if (hal_strcmp(e, path_str) == 1) {
+      if (hal_strcmp(e, path_str)) {
         return i;
       }
     }
@@ -81,7 +99,10 @@ int fs_write(int path_str, int src_ptr, int len) {
     int next_free = r32(VMRAM_SPFS_BASE + 0x0C);
     int need = (len + 1024) & (~511);
     if (need < 1024) need = 1024;
-    if (next_free + need > 0x50000) return -2;
+    if (next_free < SPFS_HOLE_HI && next_free + need > SPFS_HOLE_LO) {
+      next_free = SPFS_HOLE_HI;
+    }
+    if (next_free + need > SPFS_SIZE) return -2;
     rel_off = next_free;
     cap = need;
     w32(VMRAM_SPFS_BASE + 0x0C, next_free + need);

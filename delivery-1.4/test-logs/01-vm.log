@@ -1,0 +1,9 @@
+=== SpiralOS VM Conformance Suite (tests/vm.js) ===
+TabComp TC-32 Core: 6104 bytes | Hummingbird x86 Core: 11236 bytes
+  [PASS] 1. 32-Bit ALU, Signed Division, Modulo & Shifts — tcExit=9, hbExit=9, icnt=13
+  [PASS] 2. All 8 Signed & Unsigned Comparison Operators — tcExit=1101, hbExit=1101, icnt=22
+  [PASS] 3. Calling Convention (CALL, ENTER, RET, Locals & Recursion) — fib(10)+fact(6)=775, icnt=2019 (identical on TC-32 & x86)
+  [PASS] 4. Memory Load/Store (8/16/32-bit, Signed Extension & Global Arrays) — tcExit=49744, hbExit=49744, icnt=15
+  [PASS] 5. Graphics & String Syscall Parity (FILL_RECT, DRAW_CHAR, ITOA, STRCMP) — exit=11, vram=64000/64000 bytes bit-identical, icnt=30
+
+VM Conformance Summary: 5/5 passed.

@@ -1,0 +1,8 @@
+=== SpiralOS StudioNet Cross-Machine Networking Suite (tests/net.js) ===
+  [PASS] 1. Bidirectional StudioNet Chat (TabComp <-> Hummingbird):
+    - Hummingbird RX : "tabcomp: Greetings Hummingbird!"
+    - TabComp RX     : "SpiralOS 1.4 "Daily Driver"                     PONG RTT 25 ms"
+  [PASS] 2. Cross-Machine File Transfer (TabComp -> Hummingbird): /home/beam.txt (51 bytes) verified byte-for-byte + SSP ACK received!
+  [PASS] 3. SpiralWeb <-> SpiralHttpd: TabComp fetched & rendered HTML page served over StudioNet SSP by Hummingbird!
+  [PASS] 4. Sonder Gateway Bridge (Stretch §5): surfed sonder.gw (/atlas) via StudioNet Node 0x00FE!
+  [PASS] Total StudioNet frames routed: 36

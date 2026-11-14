@@ -1,0 +1,10 @@
+=== SpiralOS 1.1 Arbitrary-Edit & Standalone Compiler Suite (tests/selfhost-edits.js) ===
+  [PASS] Standalone 1. Loops & Branching (Collatz steps for 1..15) -> size=260 B, result=127 (verified in-OS + native TC-32 + native x86)
+  [PASS] Standalone 2. Recursion (Fibonacci(12) + Ackermann(2, 3)) -> size=232 B, result=153 (verified in-OS + native TC-32 + native x86)
+  [PASS] Standalone 3. Local & Global Arrays (Sieve & Bubble Sort) -> size=556 B, result=421 (verified in-OS + native TC-32 + native x86)
+  [PASS] Standalone 4. Strings & Syscalls (String Literal Pooling, STRLEN, STRCMP) -> size=2061 B, result=199 (verified in-OS + native TC-32 + native x86)
+  [PASS] Edit 1 (Change a constant): WM_TITLE_COLOR_OVERRIDE -> 200 verified on TabComp & Hummingbird
+  [PASS] Edit 2 (Rename function everywhere): wm_active_title_color -> wm_custom_bar_col verified!
+  [PASS] Edit 3 (Add new function & call from shell): calc_sum_squares(10) -> '385' printed in SpiralSh!
+  [PASS] Edit 4 (Add brand-new app with window & desktop icon): SpiralPulse (APP_PULSE=15) opened on TabComp & Hummingbird (3072 px)!
+  [PASS] Edit 5 (Introduce syntax error): Diagnostic="Err line 12: constant expr expected", old SPIR image 100% intact (4cc49ab636932d4f1ee2d5d0...)!

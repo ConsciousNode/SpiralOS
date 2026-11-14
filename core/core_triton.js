@@ -16,38 +16,112 @@
 const fs = require("fs");
 const path = require("path");
 
-// Provenance: carried from spiralos/core/core_x86.js lines 22-50
+// from fonts/consciousnode-sans-8x8.hex:1-96
 const X86_FONT_8X8_HEX =
-  "0000000000000000183c3c18180018006c6c2400000000006c6cfe6cfe6c6c00" +
-  "183e603c067c180000c6cc183066c600386c3876dccccc761818300000000000" +
-  "0c18303030180c0030180c0c0c18300000663cff3c6600000018187e18180000" +
-  "00000000001818300000007e000000000000000000181800060c183060c08000" +
-  "7cc6cedef6e67c001838181818187e007cc6063c60c6fe007cc6063c06c67c00" +
-  "1c3c6cccfe0c1e00fec0fc0606c67c003c60c0fcc6c67c00fec60c1830303000" +
-  "7cc6c67cc6c67c007cc6c67e060c780000181800001818000018180000181830" +
-  "0c18306030180c0000007e00007e000030180c060c1830007cc60c1818001800" +
-  "7cc6dededec07800386cc6fec6c6c600fcc6c6fcc6c6fc003c66c0c0c0663c00" +
-  "f8ccc6c6c6ccf800fec0c0f8c0c0fe00fec0c0f8c0c0c0003c66c0cec6663e00" +
-  "c6c6c6fec6c6c6003c18181818183c001e0c0c0cccce7800e6666c786c66e600" +
-  "f06060606266fe00c6eefefed6c6c600c6e6f6decec6c6007cc6c6c6c6c67c00" +
-  "fcc6c6fc6060f0007cc6c6c6decc7a00fcc6c6fc6c66e6007cc660380cc67c00" +
-  "7e7e181818183c00c6c6c6c6c6c67c00c6c6c6c6c66c3800c6c6c6d6feeec600" +
-  "c66c3838386cc6006666663c18183c00fecc183060c6fe003c30303030303c00" +
-  "c06030180c0602003c0c0c0c0c0c3c0010386cc60000000000000000000000ff" +
-  "30180c00000000000000780c7ccc7600e0607c666666dc0000007cc6c0c67c00" +
-  "1c0c7ccc6666760000007cc6fec07c003c6660f86060f000000076cccc7c0cf8" +
-  "e0606c766666e6001800381818183c00060006060666663c00e060666c786ce6" +
-  "3818181818183c000000ecfed6d6c6000000dc666666660000007cc6c6c67c00" +
-  "0000dc66667c60f0000076cccc7c0c1e0000dc766060f00000007cc07c06fc00" +
-  "10307c30303418000000cccecfd66e000000c6c6c66c38000000c6d6fefeecc6" +
-  "0000c66c386cc6000000c6c6ce76067c0000fc983064fc000e18187018180e00" +
-  "18181800181818007018180e1818700076dc0000000000000010386cc6c6fe00";
+  "00000000000000001010101000101000444444000000000048fc4848fc480000" +
+  "107c907814f81000c4c810204c8c000070887094887400001010200000000000" +
+  "081020202010080020100808081020000054387c385400000010107c10100000" +
+  "00000000001810200000007c0000000000000000003030000408102040800000" +
+  "788c94a4c48478001030501010107c00788404384080fc00f808103804847800" +
+  "08182848fc080800fc80f80404847800384080f884847800fc04081020202000" +
+  "78844830488478007884847c0408700000303000303000000018180018102000" +
+  "081020402010080000007c007c00000040201008102040007884081010001000" +
+  "7884bca4bc807c00304884fc84848400f88484f88484f8007884808080847800" +
+  "f08884848488f000fc8080f88080fc00fc8080f8808080007884809c84847800" +
+  "848484fc848484007c10101010107c003c08080888887000848890e090888400" +
+  "808080808080fc0082c6aa928282820084c4a4948c8484007884848484847800" +
+  "f88484f88080800078848484a4947a00f88484f8908884007884807804847800" +
+  "fe101010101010008484848484847800848484484830300082828292aac68200" +
+  "84483030304884008448301010101000fc0810204080fc003820202020203800" +
+  "804020100804000038080808080838001028440000000000000000000000fe00" +
+  "2010000000000000000078047c847c008080f8848484f8000000788480847800" +
+  "04047c8484847c0000007884fc8078001c20f8202020200000007c84847c0478" +
+  "8080f884848484001000301010103800080018080808887080808890e0908800" +
+  "20202020202018000000ec92929292000000f088888888000000788484847800" +
+  "0000f88484f8808000007c84847c040400009cc28080800000007c807804f800" +
+  "2020f8202024180000008484848c740000008484484830000000829292aa4400" +
+  "000084483048840000008484483010600000fc083040fc001820204020201800" +
+  "101010101010100030080804080830000064980000000000007c547c547c0000";
+
+// from fonts/cnsw-serif-8x16.hex:1-96
+const FONT_SERIF_8X16_HEX =
+  "0000000000000000000000000000000000303030303010100000303000000000" +
+  "0066664444000000000000000000000000004444fe4444fe4444000000000000" +
+  "00107c9290781412927c1000000000000000c4c8101020204c8c000000000000" +
+  "0038444438508a848c7200000000000000303040400000000000000000000000" +
+  "000c1020204040402020100c0000000000601008080404040808106000000000" +
+  "0000001054387c3854100000000000000000000010107c101000000000000000" +
+  "00000000000000000000303010200000000000000000007c0000000000000000" +
+  "0000000000000000000030300000000000040408081010202040408000000000" +
+  "003844868a92a2c2828244380000000000103050101010101010107c00000000" +
+  "0078848404081020408084fc0000000000788404043804040484847800000000" +
+  "00081828488888fc0808083c0000000000fc848080f804040484847800000000" +
+  "0038448080f88484848444380000000000fc8404080810102020203800000000" +
+  "007884844830304884848478000000000078848484847c040408483000000000" +
+  "0000000000303000000030300000000000000000003030000000303010200000" +
+  "0000000810204020100800000000000000000000007c00007c00000000000000" +
+  "0000004020100810204000000000000000788484040810100000101000000000" +
+  "00788484bca4a4bc8080403c0000000000382844444482fe828282c600000000" +
+  "00f8444444784442424244f800000000003c4484808080808084443800000000" +
+  "00f8444242424242424244f80000000000fc444050705040404044fc00000000" +
+  "00fc444050705040404040e000000000003c448480809c848484443800000000" +
+  "00c6444444447c44444444c600000000007c1010101010101010107c00000000" +
+  "003e080808080808888888700000000000c6485060406050484444c600000000" +
+  "00e0404040404040404044fc0000000000c6ee5454544444444444c600000000" +
+  "00c66454544c4c44444444c60000000000384482828282828282443800000000" +
+  "00f844444444f840404040e0000000000038448282828282928a463a00000000" +
+  "00f844444444f850484444c600000000007c848040380404048484f800000000" +
+  "00fe921010101010101010380000000000c64444444444444444443800000000" +
+  "00c6444444444428282810100000000000c64444445454545428282800000000" +
+  "00c6442828101010282844c60000000000c64428281010101010103800000000" +
+  "00fc840808102020408084fc0000000000382020202020202020203800000000" +
+  "0080804040202010100808040000000000380808080808080808083800000000" +
+  "00102844000000000000000000000000000000000000000000000000fe000000" +
+  "0020100000000000000000000000000000000000007884047c84847c00000000" +
+  "00c0404040784442424244f80000000000000000007884808080847800000000" +
+  "000c0404043c44848484443c000000000000000000788484fc80847800000000" +
+  "001c2420207c2020202020700000000000000000007c888870807c8484443800" +
+  "00c0404040586444444444cc0000000000001000003010101010103800000000" +
+  "0000080000180808080808088888700000c04040404c5060504848cc00000000" +
+  "002060202020202020202070000000000000000000d45454545454d600000000" +
+  "0000000000d84444444444cc0000000000000000007884848484847800000000" +
+  "0000000000f84444444444784040e00000000000007c88888888887808081c00" +
+  "0000000000dc4440404040e00000000000000000007c8440380484f800000000" +
+  "00000020207c202020202418000000000000000000cc444444444c3600000000" +
+  "0000000000cc484848303030000000000000000000c644545454282800000000" +
+  "0000000000cc4830303048cc000000000000000000cc4848303010102040c000" +
+  "0000000000fc8810204088fc0000000000182020204040202020201800000000" +
+  "0010101010101010101010100000000000300808080404080808083000000000" +
+  "0000006498000000000000000000000000000038549292925438000000000000";
 
 let _cachedTritonSystem = null;
 function getTritonSystem() {
   if (_cachedTritonSystem) return _cachedTritonSystem;
   if (typeof globalThis !== "undefined" && globalThis.TritonSystem) {
     _cachedTritonSystem = globalThis.TritonSystem;
+    return _cachedTritonSystem;
+  }
+  const localTritonHtml = path.resolve(__dirname, "../triton/spiralos-triton.html");
+  if (fs.existsSync(localTritonHtml)) {
+    const vm = require("vm");
+    const html = fs.readFileSync(localTritonHtml, "utf8");
+    const tag = "<script id=\"triton-machine-core\">";
+    const start = html.indexOf(tag) + tag.length;
+    const end = html.indexOf("</script>", html.indexOf("globalThis.TritonSystem ="));
+    const code = html.slice(start, end);
+    const ctx = vm.createContext({
+      globalThis: null, window: null,
+      TextEncoder, TextDecoder, Uint8Array, Int8Array, Uint16Array, Int16Array,
+      Uint32Array, Int32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array,
+      ArrayBuffer, DataView, WebAssembly, Math, Number, String, Array, Object, Map, Set,
+      RegExp, Error, TypeError, RangeError, JSON, BigInt, parseInt, parseFloat, isNaN, isFinite,
+      console, Date, performance
+    });
+    ctx.globalThis = ctx;
+    ctx.window = ctx;
+    vm.runInContext(code, ctx, { filename: "triton-machine-core.js" });
+    globalThis.TritonSystem = ctx.TritonSystem;
+    _cachedTritonSystem = ctx.TritonSystem;
     return _cachedTritonSystem;
   }
   const t3CommonPath = path.resolve(__dirname, "../../triton/tests/t3-common.js");
@@ -91,6 +165,7 @@ const VAR_TMP1          = 129; // 3 trytes: scratch word 1
 const VAR_TMP2          = 132; // 3 trytes: scratch word 2
 const VAR_TMP3          = 135; // 3 trytes: scratch word 3
 const VAR_TMP4          = 138; // 3 trytes: scratch word 4
+const VAR_TMP5          = 141; // 3 trytes: font selector scratch
 
 const ADDR_VEC_TABLE    = 150; // 12 * 3 = 36 trytes (150..185)
 const ADDR_OP_TABLE     = 186; // 40 * 3 = 120 trytes (186..305)
@@ -106,6 +181,7 @@ const ADDR_CODE_START   = 2160; // Main Triton Core code start (2160..6650)
 
 // 256-entry fast byte/nibble tables (computed by guest at boot in 6800..9615, all < 9841!)
 const TAB_PAL_LUT       = 9000; // 256 trytes: mapped 729-color palette entries (9000..9255, < 9841)
+const ADDR_FONT_SERIF   = 9300; // 1536 trytes: CNSW Serif 8x16 font bank (9300..10835)
 const TAB_BASE          = 12000; // Base for 10x256-entry bitwise/nibble tables (12000..14559, above all code)
 const OFF_NIB_LO        = 0;    // 256 trytes: b & 15
 const OFF_NIB_LO16      = 256;  // 256 trytes: (b & 15) * 16
@@ -520,12 +596,12 @@ function buildTritonCore(options = {}) {
   emit("LI R1, #1");
   emit("OUT R1, #20"); // DMA_READ
 
-  // Also reload SpiralFS (Sectors 320..959, offset 0x28000 = 163840 = 224 * 729 + 544) into Mem[0x00428000]
+  // Also reload SpiralFS (Sectors 320..1919, offset 0x28000 = 163840 = 224 * 729 + 544) into Mem[0x00428000]
   emit("LI R1, #224");
   emit("OUT R1, #17");
   emitImm27(1, 0x00428000 - 544);
   emit("OUT R1, #18");
-  emit("LI R1, #451");
+  emit("LI R1, #1125");
   emit("OUT R1, #19");
   emit("LI R1, #1");
   emit("OUT R1, #20");
@@ -543,10 +619,20 @@ function buildTritonCore(options = {}) {
   emit("BFILL R1, R2, R3");
 
   label("warm_boot_skip_disk");
-  // Copy 768-byte embedded 8x8 font to vmRam[0x0EF000] (Mem[0x002EF000])
+  // Copy 768-byte embedded 8x8 font to vmRam[0x0EF000] (Mem[0x002EF000]) & vmRam[0x091800] (Mem[0x00291800])
   emitImm27(1, 0x002EF000);
   emitImm27(2, ADDR_FONT_8X8);
   emit("LI R3, #768");
+  emit("BCOPY R1, R2, R3");
+  emitImm27(1, 0x00291800);
+  emitImm27(2, ADDR_FONT_8X8);
+  emit("LI R3, #768");
+  emit("BCOPY R1, R2, R3");
+
+  // Copy 1536-byte CNSW Serif 8x16 font to vmRam[0x091000] (Mem[0x00291000])
+  emitImm27(1, 0x00291000);
+  emitImm27(2, ADDR_FONT_SERIF);
+  emit("LI R3, #1536");
   emit("BCOPY R1, R2, R3");
 
   // Copy 768-byte embedded palette to vmRam[0x0FFA00] (Mem[0x002FFA00])
@@ -1424,6 +1510,8 @@ function buildTritonCore(options = {}) {
   emit("ADD R1, R1, R0");
   emit("CMPI R1, #0");
   emit("JNX sys_unknown");
+  emit("CMPI R1, #22");
+  emit("JZX sys_22");
   emit("CMPI R1, #21");
   emit("JPX sys_unknown");
   emit("MULI R1, R1, #3");
@@ -1717,8 +1805,10 @@ function buildTritonCore(options = {}) {
   emit("LI R0, #0");
   emit("JMP sys_push_r0");
 
-  // Subroutine: draw single 8x8 glyph (R1=x, R2=y, R3=ch, R4=fg, VAR_TMP0=bg)
+  // Subroutine: draw single 8x8 (font=0) or 8x16 (font=1) glyph (R1=x, R2=y, R3=ch, R4=fg, VAR_TMP0=bg, VAR_TMP5=font)
   label("sub_draw_char");
+  emit("LI R0, #256");
+  emit("MOD R3, R3, R0");
   emit("SUBI R3, R3, #32");
   emit("CMPI R3, #0");
   emit("JNX dc_ret");
@@ -1730,12 +1820,30 @@ function buildTritonCore(options = {}) {
   emit("JPX dc_ret");
   emit("CMPI R2, #0");
   emit("JNX dc_ret");
-  emit("CMPI R2, #192");
-  emit("JPX dc_ret");
 
+  emit("PUSH R5");
+  emit("PUSH R6");
+  emit("LI R0, #0");
+  emit(`LW R0, R0, #${VAR_TMP5}`);
+  emit("CMPI R0, #0");
+  emit("JNZ dc_serif");
+  emit("CMPI R2, #192");
+  emit("JPX dc_pop_ret");
   emit("MULI R3, R3, #8");
   emitImm27(0, 0x002EF000);
-  emit("ADD R3, R3, R0"); // R3 = glyph ptr
+  emit("ADD R3, R3, R0"); // R3 = 8x8 glyph ptr
+  emit("LI R5, #8");      // 8 rows
+  emit("JMP dc_vram");
+
+  label("dc_serif");
+  emit("CMPI R2, #184");
+  emit("JPX dc_pop_ret");
+  emit("MULI R3, R3, #16");
+  emitImm27(0, 0x00291000);
+  emit("ADD R3, R3, R0"); // R3 = 8x16 glyph ptr
+  emit("LI R5, #16");     // 16 rows
+
+  label("dc_vram");
   emit("MULI R2, R2, #320");
   emit("ADD R2, R2, R1");
   emitImm27(0, 0x002F0000);
@@ -1743,9 +1851,6 @@ function buildTritonCore(options = {}) {
 
   emit("LI R0, #0");
   emit(`LW R1, R0, #${VAR_TMP0}`); // R1 = bg (< 0 if transparent)
-  emit("PUSH R5");
-  emit("PUSH R6");
-  emit("LI R5, #8"); // 8 rows
   label("dc_row_loop");
   emit("LT R0, R3, #0"); // glyph row byte (0..255)
   emit("ADDI R3, R3, #1");
@@ -1777,13 +1882,22 @@ function buildTritonCore(options = {}) {
   emit("ADDI R2, R2, #320");
   emit("SUBI R5, R5, #1");
   emit("JPX dc_row_loop");
+  label("dc_pop_ret");
   emit("POP R6");
   emit("POP R5");
   label("dc_ret");
   emit("RET");
 
-  // SYS 6: DRAW_CHAR(x, y, ch, fg, bg)
+  // SYS 6: DRAW_CHAR(x, y, ch, fg, bg[, font])
   label("sys_06");
+  emit("LT R0, R8, #-2"); // nargs
+  emit("LI R1, #0");
+  emit("CMPI R0, #6");
+  emit("JNX sys06_store_font");
+  emitLoadS32(1, 7, 20, 0);
+  label("sys06_store_font");
+  emit("LI R0, #0");
+  emit(`SW R1, R0, #${VAR_TMP5}`);
   emitLoadS32(1, 7, 16, 0); // bg
   emit("LI R0, #0");
   emit(`SW R1, R0, #${VAR_TMP0}`);
@@ -1795,8 +1909,16 @@ function buildTritonCore(options = {}) {
   emit("LI R0, #0");
   emit("JMP sys_push_r0");
 
-  // SYS 7: DRAW_STR(x, y, str_ptr, fg, bg)
+  // SYS 7: DRAW_STR(x, y, str_ptr, fg, bg[, font])
   label("sys_07");
+  emit("LT R0, R8, #-2"); // nargs
+  emit("LI R1, #0");
+  emit("CMPI R0, #6");
+  emit("JNX sys07_store_font");
+  emitLoadS32(1, 7, 20, 0);
+  label("sys07_store_font");
+  emit("LI R0, #0");
+  emit(`SW R1, R0, #${VAR_TMP5}`);
   emitLoadS32(1, 7, 16, 0); // bg
   emit("LI R0, #0");
   emit(`SW R1, R0, #${VAR_TMP0}`);
@@ -1891,7 +2013,7 @@ function buildTritonCore(options = {}) {
 
   // SYS 11: REBOOT()
   label("sys_11");
-  // Flush mounted 480 KB image (Sectors 0..959 = 675 Triton 729-tryte sectors) to Disk before warm reboot
+  // Flush mounted 960 KB image (Sectors 0..1919 = 1349 Triton 729-tryte sectors) to Disk before warm reboot
   emit("LI R0, #0");
   emit(`LT R1, R0, #${VAR_HAS_DISK}`);
   emit("JZX reboot_now");
@@ -1899,7 +2021,7 @@ function buildTritonCore(options = {}) {
   emit("OUT R1, #17");
   emitImm27(1, 0x00400000);
   emit("OUT R1, #18");
-  emit("LI R1, #675");
+  emit("LI R1, #1349");
   emit("OUT R1, #19");
   emit("LI R1, #2");
   emit("OUT R1, #20");
@@ -2311,6 +2433,21 @@ function buildTritonCore(options = {}) {
   emit("LI R2, #1");
   emit("ST R2, R1, #0");       // [0x0FFD2C] = 1 (halted flag)
   emit("HALT");
+
+  // SYS 22: DATE() -> 0 (no hardware RTC on Triton)
+  label("sys_22");
+  emit("LI R0, #0");
+  emit("JMP sys_push_r0");
+
+  lines.push(`.org ${ADDR_FONT_SERIF}`);
+  label("embedded_font_serif");
+  for (let row = 0; row < 1536; row += 16) {
+    const chunk = [];
+    for (let k = 0; k < 16; k++) {
+      chunk.push("#" + parseInt(FONT_SERIF_8X16_HEX.substr((row + k) * 2, 2), 16));
+    }
+    emit(".tryte " + chunk.join(", "));
+  }
 
   const asmSource = lines.join("\n") + "\n";
   const assembled = T.assemble(asmSource, { mode: "T3" });

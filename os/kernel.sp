@@ -1,5 +1,5 @@
 // ============================================================================
-// SpiralOS 1.1 — Kernel, HAL Wrappers, Preemptive Multitasking & App Tick API
+// SpiralOS 1.4 "Daily Driver" — Kernel, HAL Wrappers, Preemptive Multitasking & App Tick API
 // (/src/kernel.sp) · Studio: ConsciousNode SoftWorks · Licence: MIT
 // ============================================================================
 
@@ -25,6 +25,13 @@ const SYS_STRCMP        = 18;
 const SYS_STRLEN        = 19;
 const SYS_ITOA          = 20;
 const SYS_TASK_SPAWN_VM = 21;
+const SYS_DATE          = 22;
+
+const FONT_SANS_8X8     = 0;
+const FONT_SERIF_8X16   = 1;
+const VMRAM_FONT_SERIF  = 0x091000;
+const VMRAM_FONT_SANS2  = 0x091800;
+const VMRAM_RTC         = 0x0FFD90;
 
 const VMRAM_VRAM        = 0x0F0000;
 const VMRAM_PALETTE     = 0x0FFA00;
@@ -33,6 +40,7 @@ const VMRAM_TCB_BASE    = 0x0FFE00;
 const VMRAM_SCHED_HDR   = 0x0FFF00;
 const VMRAM_IMG_BASE    = 0x200000;
 const VMRAM_SPFS_BASE   = 0x228000;
+const NUM_STR_BUF       = 0x04DF00;
 
 // Process / Task Table (up to 16 desktop tasks + 8 hardware-preempted VM stack tasks)
 const MAX_TASKS = 16;
@@ -81,8 +89,8 @@ int hal_rect(int x, int y, int w, int h, int col) {
   return sys(5, x, y, w, h, col);
 }
 
-int hal_char(int x, int y, int ch, int fg, int bg) {
-  return sys(6, x, y, ch, fg, bg);
+int hal_char(int x, int y, int ch, int fg, int bg, int font) {
+  return sys(6, x, y, ch, fg, bg, font);
 }
 
 int hal_str(int x, int y, int s, int fg, int bg) {
@@ -117,10 +125,6 @@ int hal_net_info(int cmd, int val) {
   return sys(14, cmd, val);
 }
 
-int hal_beep(int freq, int ms, int wave) {
-  return sys(15, freq, ms, wave);
-}
-
 int hal_info(int q) {
   return sys(16, q);
 }
@@ -143,6 +147,10 @@ int hal_itoa(int val, int buf, int base) {
 
 int hal_task_spawn_vm(int entry_pc, int arg0) {
   return sys(21, entry_pc, arg0);
+}
+
+int hal_date() {
+  return sys(22);
 }
 
 void set_pal_rgb(int idx, int r, int g, int b) {
@@ -273,4 +281,33 @@ int ipc_send(int dst_task, int msg_type, int a0, int a1) {
   task_msg_arg0[dst_task] = a0;
   task_msg_arg1[dst_task] = a1;
   return 0;
+}
+
+// Single canonical version string used across boot banner, shell, About, Build Station, and /docs/README.txt
+int os_version_str() {
+  return "SpiralOS 1.4 \"Daily Driver\"";
+}
+
+int os_machine_name() {
+  if (g_machine_id == 1) return "TabComp TC-32";
+  if (g_machine_id == 3) return "Triton";
+  return "Hummingbird i586";
+}
+
+int tok_find_idx(int s, int list_str) {
+  int idx = 0;
+  int p = 0;
+  while (r8(list_str + p) != 0) {
+    int k = 0;
+    int ok = 1;
+    while (r8(list_str + p + k) != 0 && r8(list_str + p + k) != 124) {
+      if (r8(s + k) != r8(list_str + p + k)) ok = 0;
+      k = k + 1;
+    }
+    if (ok == 1 && r8(s + k) == 0) return idx;
+    p = p + k;
+    if (r8(list_str + p) == 124) p = p + 1;
+    idx = idx + 1;
+  }
+  return -1;
 }

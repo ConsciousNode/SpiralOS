@@ -1,0 +1,4 @@
+=== SpiralOS 1.1 Strict BIOS & Real-Hardware Readiness Suite (tests/strict-bios.js) ===
+  [PASS] 1. Two-Stage Track-Safe Loader & 24-bpp Blitter (@0xFD000000): booted to 640x480x24 desktop (186,296 active pixels)
+  [PASS] 2. StudioNet Presence Detection: detected missing NIC (0xFF), displayed 'no network', 0 bogus RX packets!
+  [PASS] 3. FDC-Less Disk Write-Back: saved /home/note.txt via 16-bit Real-Mode BIOS INT 13h AH=03h Thunk and returned to Protected Mode!

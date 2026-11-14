@@ -23,6 +23,12 @@ int thm_accent;
 int thm_wallpaper_style;
 int thm_bevel_style;
 int g_current_theme_idx;
+int g_w_x;
+int g_w_y;
+int g_w_w;
+int g_w_h;
+
+void gui_set_win(int x, int y, int w, int h) { g_w_x = x; g_w_y = y; g_w_w = w; g_w_h = h; }
 
 void theme_defaults() {
   thm_desk_top = 16;
@@ -69,39 +75,31 @@ int theme_load_file(int path_str) {
   int sz = fs_entry_size(idx);
   int p = 0;
   while (p < sz) {
-    int line_ptr = data + p;
-    int klen = 0;
-    klen = match_prefix(line_ptr, "desk_top=");
-    if (klen > 0) thm_desk_top = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "desk_bot=");
-    if (klen > 0) thm_desk_bot = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "taskbar_bg=");
-    if (klen > 0) thm_taskbar_bg = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "taskbar_fg=");
-    if (klen > 0) thm_taskbar_fg = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "win_bg=");
-    if (klen > 0) thm_win_bg = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "win_border=");
-    if (klen > 0) thm_win_border = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "title_active=");
-    if (klen > 0) thm_title_active = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "title_inactive=");
-    if (klen > 0) thm_title_inactive = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "title_text=");
-    if (klen > 0) thm_title_text = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "btn_face=");
-    if (klen > 0) thm_btn_face = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "btn_hi=");
-    if (klen > 0) thm_btn_hi = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "btn_sh=");
-    if (klen > 0) thm_btn_sh = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "accent=");
-    if (klen > 0) thm_accent = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "wallpaper_style=");
-    if (klen > 0) thm_wallpaper_style = parse_int_at(line_ptr + klen);
-    klen = match_prefix(line_ptr, "bevel_style=");
-    if (klen > 0) thm_bevel_style = parse_int_at(line_ptr + klen);
-
+    int lp = data + p;
+    int eq = 0;
+    while (p + eq < sz && r8(lp + eq) != 10 && r8(lp + eq) != 61) eq = eq + 1;
+    if (r8(lp + eq) == 61 && eq < 24) {
+      byte kbuf[24];
+      hal_memset(kbuf, 0, 24);
+      hal_memcpy(kbuf, lp, eq);
+      int v = parse_int_at(lp + eq + 1);
+      int ki = tok_find_idx(kbuf, "desk_top|desk_bot|taskbar_bg|taskbar_fg|win_bg|win_border|title_active|title_inactive|title_text|btn_face|btn_hi|btn_sh|accent|wallpaper_style|bevel_style");
+      if (ki == 0) thm_desk_top = v;
+      if (ki == 1) thm_desk_bot = v;
+      if (ki == 2) thm_taskbar_bg = v;
+      if (ki == 3) thm_taskbar_fg = v;
+      if (ki == 4) thm_win_bg = v;
+      if (ki == 5) thm_win_border = v;
+      if (ki == 6) thm_title_active = v;
+      if (ki == 7) thm_title_inactive = v;
+      if (ki == 8) thm_title_text = v;
+      if (ki == 9) thm_btn_face = v;
+      if (ki == 10) thm_btn_hi = v;
+      if (ki == 11) thm_btn_sh = v;
+      if (ki == 12) thm_accent = v;
+      if (ki == 13) thm_wallpaper_style = v;
+      if (ki == 14) thm_bevel_style = v;
+    }
     while (p < sz && r8(data + p) != 10) p = p + 1;
     p = p + 1;
   }
@@ -225,4 +223,15 @@ void gui_draw_cursor(int mx, int my) {
   hal_rect(mx + 4, my + 4, 2, 2, thm_accent);
   hal_rect(mx + 1, my + 1, 5, 1, 0);
   hal_rect(mx + 1, my + 1, 1, 5, 0);
+}
+
+void wstr(int rx, int ry, int s, int fg) {
+  gui_win_str(g_w_x, g_w_y, g_w_w, g_w_h, g_w_x + rx, g_w_y + ry, s, fg, -1);
+}
+void wbtn(int rx, int ry, int bw, int bh, int lbl, int act) {
+  gui_win_btn(g_w_x, g_w_y, g_w_w, g_w_h, g_w_x + rx, g_w_y + ry, bw, bh, lbl, act);
+}
+void wnum(int rx, int ry, int val, int fg) {
+  hal_itoa(val, NUM_STR_BUF, 10);
+  gui_win_str(g_w_x, g_w_y, g_w_w, g_w_h, g_w_x + rx, g_w_y + ry, NUM_STR_BUF, fg, -1);
 }

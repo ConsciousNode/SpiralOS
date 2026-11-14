@@ -1,0 +1,5 @@
+=== SpiralOS Application Verification Suite (tests/apps.js) ===
+  [PASS] 1. Terminal & Shell (SpiralSh): executed 'ver' -> 'SpiralOS 1.0 on TabComp TC-32'
+  [PASS] 2. Window Manager: dragged, minimized, and restored window from Helix Taskbar
+  [PASS] 3. File Manager (SpiralFiles): created /home/note.txt (24 files on disk)
+  [PASS] 4. Text Editor (SpiralEdit): typed comment and saved /src/wm.sp to SpiralFS

@@ -1,5 +1,5 @@
 // ============================================================================
-// SpiralOS 1.1 — Master Desktop Compositor, Event Loop & Entry Point (/src/os.sp)
+// SpiralOS 1.4 "Daily Driver" — Master Desktop Compositor, Boot Splash & Event Loop (/src/os.sp)
 // Studio: ConsciousNode SoftWorks · Licence: MIT
 // ============================================================================
 
@@ -18,21 +18,35 @@ int g_mouse_y;
 int g_mouse_btn;
 int g_prev_btn;
 
+int g_l_y;
+void litem(int lbl, int col) {
+  wstr(8, g_l_y, lbl, col);
+  g_l_y = g_l_y + 9;
+}
+
 void open_app_by_id(int app_id) {
-  if (app_id == APP_FILES)    wm_open(APP_FILES,    18, 16, 156, 120, "SpiralFiles");
-  if (app_id == APP_EDIT)     wm_open(APP_EDIT,     28, 20, 214, 134, "SpiralEdit");
-  if (app_id == APP_SHELL)    wm_open(APP_SHELL,    36, 36, 224, 96,  "SpiralSh");
-  if (app_id == APP_BUILD)    wm_open(APP_BUILD,    48, 28, 204, 108, "SpiralBuild");
-  if (app_id == APP_PAINT)    wm_open(APP_PAINT,    60, 24, 164, 94,  "SpiralPaint");
-  if (app_id == APP_CALC)     wm_open(APP_CALC,     180, 22, 112, 98, "SpiralCalc");
-  if (app_id == APP_SYSMON)   wm_open(APP_SYSMON,   136, 78, 168, 88, "SpiralMon");
-  if (app_id == APP_THEME)    wm_open(APP_THEME,    70, 34, 158, 88,  "SpiralTheme");
-  if (app_id == APP_VIEWER)   wm_open(APP_VIEWER,   84, 28, 120, 96,  "SpiralView");
-  if (app_id == APP_SNAKE)    wm_open(APP_SNAKE,    56, 26, 154, 114, "SpiralSnake");
-  if (app_id == APP_BLOCKS)   wm_open(APP_BLOCKS,   92, 26, 124, 104, "SpiralBlocks");
-  if (app_id == APP_CHAT)     wm_open(APP_CHAT,     34, 42, 200, 92,  "SpiralChat");
-  if (app_id == APP_TRANSFER) wm_open(APP_TRANSFER, 52, 46, 180, 90,  "SpiralSend");
+  int t = 0;
+  if (app_id == APP_FILES)     t = "SpiralFiles";
+  if (app_id == APP_EDIT)      t = "SpiralEdit";
+  if (app_id == APP_SHELL)     t = "SpiralSh";
+  if (app_id == APP_BUILD)     t = "SpiralBuild";
+  if (app_id == APP_PAINT)     t = "SpiralPaint";
+  if (app_id == APP_CALC)      t = "SpiralCalc";
+  if (app_id == APP_SYSMON)    t = "SpiralMon";
+  if (app_id == APP_THEME)     t = "SpiralTheme";
+  if (app_id == APP_VIEWER)    t = "SpiralView";
+  if (app_id == APP_SNAKE)     t = "SpiralSnake";
+  if (app_id == APP_BLOCKS)    t = "SpiralBlocks";
+  if (app_id == APP_CHAT)      t = "SpiralChat";
+  if (app_id == APP_TRANSFER)  t = "SpiralSend";
   if (app_id == APP_BROWSER)  wm_open(APP_BROWSER,  26, 22, 236, 132, "SpiralWeb");
+  if (app_id == APP_NOTES)     t = "Notes";
+  if (app_id == APP_CLOCK)     t = "Clock & Cal";
+  if (app_id == APP_SOLITAIRE) t = "Solitaire";
+  if (app_id == APP_ABOUT)     t = "About SpiralOS";
+  if (t == 0) return;
+  int gp = ",+I_1-ff55kS;1aYA/MR}.3TgJOOF4JOM17S?0H\\Q09W48_Q=:UP0.qe--7O/,mi>-cg+*{qC7[Q" + (app_id - 1) * 4;
+  wm_open(app_id, (r8(gp) - 35) << 1, (r8(gp + 1) - 35) << 1, ((r8(gp + 2) - 35) << 1) + 80, (r8(gp + 3) - 35) << 1, t);
 }
 
 void draw_window_client(int wid) {
@@ -41,47 +55,58 @@ void draw_window_client(int wid) {
   int y = win_y[wid];
   int w = win_w[wid];
   int h = win_h[wid];
-  if (app == APP_FILES)    app_draw_files(x, y, w, h);
-  if (app == APP_EDIT)     app_draw_edit(x, y, w, h);
-  if (app == APP_SHELL)    app_draw_shell(x, y, w, h);
-  if (app == APP_BUILD)    app_draw_build(x, y, w, h);
-  if (app == APP_PAINT)    app_draw_paint(x, y, w, h);
-  if (app == APP_CALC)     app_draw_calc(x, y, w, h);
-  if (app == APP_SYSMON)   app_draw_sysmon(x, y, w, h);
-  if (app == APP_THEME)    app_draw_theme(x, y, w, h);
-  if (app == APP_VIEWER)   app_draw_viewer(x, y, w, h);
-  if (app == APP_SNAKE)    app_draw_snake(x, y, w, h);
-  if (app == APP_BLOCKS)   app_draw_blocks(x, y, w, h);
-  if (app == APP_CHAT)     app_draw_chat(x, y, w, h);
-  if (app == APP_TRANSFER) app_draw_transfer(x, y, w, h);
+  if (app == APP_FILES)     app_draw_files(x, y, w, h);
+  if (app == APP_EDIT)      app_draw_edit(x, y, w, h);
+  if (app == APP_SHELL)     app_draw_shell(x, y, w, h);
+  if (app == APP_BUILD)     app_draw_build(x, y, w, h);
+  if (app == APP_PAINT)     app_draw_paint(x, y, w, h);
+  if (app == APP_CALC)      app_draw_calc(x, y, w, h);
+  if (app == APP_SYSMON)    app_draw_sysmon(x, y, w, h);
+  if (app == APP_THEME)     app_draw_theme(x, y, w, h);
+  if (app == APP_VIEWER)    app_draw_viewer(x, y, w, h);
+  if (app == APP_SNAKE)     app_draw_snake(x, y, w, h);
+  if (app == APP_BLOCKS)    app_draw_blocks(x, y, w, h);
+  if (app == APP_CHAT)      app_draw_chat(x, y, w, h);
+  if (app == APP_TRANSFER)  app_draw_transfer(x, y, w, h);
   if (app == APP_BROWSER)  app_draw_browser(x, y, w, h);
+  if (app == APP_NOTES)     app_draw_notes(x, y, w, h);
+  if (app == APP_CLOCK)     app_draw_clock(x, y, w, h);
+  if (app == APP_SOLITAIRE) app_draw_solitaire(x, y, w, h);
+  if (app == APP_ABOUT)     app_draw_about(x, y, w, h);
 }
 
 void dispatch_window_click(int wid, int rx, int ry) {
   int app = win_app[wid];
-  if (app == APP_FILES)    app_click_files(wid, rx, ry);
-  if (app == APP_EDIT)     app_click_edit(wid, rx, ry);
-  if (app == APP_BUILD)    app_click_build(wid, rx, ry);
-  if (app == APP_PAINT)    app_click_paint(wid, rx, ry);
-  if (app == APP_CALC)     app_click_calc(wid, rx, ry);
-  if (app == APP_THEME)    app_click_theme(wid, rx, ry);
-  if (app == APP_VIEWER)   app_click_viewer(wid, rx, ry);
-  if (app == APP_SNAKE)    app_click_snake(wid, rx, ry);
-  if (app == APP_BLOCKS)   app_click_blocks(wid, rx, ry);
-  if (app == APP_CHAT)     app_click_chat(wid, rx, ry);
-  if (app == APP_TRANSFER) app_click_transfer(wid, rx, ry);
-  if (app == APP_BROWSER)  app_click_browser(wid, rx, ry);
+  if (app == APP_FILES)     app_click_files(wid, rx, ry);
+  if (app == APP_EDIT)      app_click_edit(wid, rx, ry);
+  if (app == APP_BUILD)     app_click_build(wid, rx, ry);
+  if (app == APP_PAINT)     app_click_paint(wid, rx, ry);
+  if (app == APP_CALC)      app_click_calc(wid, rx, ry);
+  if (app == APP_THEME)     app_click_theme(wid, rx, ry);
+  if (app == APP_VIEWER)    app_click_viewer(wid, rx, ry);
+  if (app == APP_SNAKE)     app_click_snake(wid, rx, ry);
+  if (app == APP_BLOCKS)    app_click_blocks(wid, rx, ry);
+  if (app == APP_CHAT)      app_click_chat(wid, rx, ry);
+  if (app == APP_TRANSFER)  app_click_transfer(wid, rx, ry);
+  if (app == APP_BROWSER)   app_click_browser(wid, rx, ry);
+  if (app == APP_NOTES)     app_click_notes(wid, rx, ry);
+  if (app == APP_CLOCK)     app_click_clock(wid, rx, ry);
+  if (app == APP_SOLITAIRE) app_click_solitaire(wid, rx, ry);
 }
 
-void dispatch_focused_key(int ascii, int vk) {
+void dispatch_focused_key(int ascii, int vk, int mods) {
   if (g_focused_win < 0) return;
   int app = win_app[g_focused_win];
-  if (app == APP_EDIT)   app_key_edit(ascii, vk);
-  if (app == APP_SHELL)  app_key_shell(ascii, vk);
-  if (app == APP_CALC)   app_key_calc(ascii);
-  if (app == APP_SNAKE)  app_key_snake(ascii, vk);
-  if (app == APP_BLOCKS) app_key_blocks(ascii, vk);
-  if (app == APP_CHAT)   app_key_chat(ascii);
+  if (app == APP_FILES)     app_key_files(ascii, vk);
+  if (app == APP_EDIT)      app_key_edit(ascii, vk);
+  if (app == APP_SHELL)     app_key_shell(ascii, vk);
+  if (app == APP_CALC)      app_key_calc(ascii);
+  if (app == APP_SNAKE)     app_key_snake(ascii, vk);
+  if (app == APP_BLOCKS)    app_key_blocks(ascii, vk);
+  if (app == APP_CHAT)      app_key_chat(ascii);
+  if (app == APP_NOTES)     app_key_notes(ascii, vk, mods);
+  if (app == APP_CLOCK)     app_key_clock(ascii, vk);
+  if (app == APP_SOLITAIRE) app_key_solitaire(ascii, vk);
 }
 
 void app_run_ticks() {
@@ -108,14 +133,20 @@ void draw_desktop_scene() {
   hal_rect(0, 11, 320, 1, thm_btn_hi);
   gui_button(2, 1, 52, 10, "Spiral", g_launcher_open);
   if (g_machine_id == 1) {
-    hal_str(60, 2, "TC-32", thm_accent, -1);
+    hal_str(58, 2, "TC-32", thm_accent, -1);
+  } else if (g_machine_id == 3) {
+    hal_str(58, 2, "Triton", thm_accent, -1);
   } else {
-    hal_str(60, 2, "i586", thm_accent, -1);
+    hal_str(58, 2, "i586", thm_accent, -1);
   }
   gui_button(108, 1, 36, 10, "Thm", 0);
   gui_button(148, 1, 44, 10, "Build", 0);
   if (g_has_snet == 1) {
-    hal_str(196, 2, "SNet:OK", 10, -1);
+    if (g_sns_clash_active == 1) {
+      gui_str_clip(196, 2, "NODE ID CLASH", 10, 12, -1);
+    } else {
+      gui_str_clip(196, 2, SNS_DISP_BUF, 10, 10, -1);
+    }
   } else {
     hal_str(196, 2, "no network", 12, -1);
   }
@@ -125,18 +156,16 @@ void draw_desktop_scene() {
   // 2. Wallpaper & Desktop Shortcut Icons
   gui_draw_wallpaper();
 
-  // Left column desktop icons
-  gui_draw_icon(6, 18, 5, "Files");
-  gui_draw_icon(6, 48, 4, "Edit");
-  gui_draw_icon(6, 78, 18, "Shell");
-  gui_draw_icon(6, 108, 1, "Build");
+  for (int di = 0; di < 4; di++) {
+    int dy = 18 + di * 30;
+    int l1 = "Files"; int l2 = "Calc";
+    if (di == 1) { l1 = "Edit"; l2 = "Mon"; }
+    if (di == 2) { l1 = "Shell"; l2 = "Chat"; }
+    if (di == 3) { l1 = "Build"; l2 = "Web"; }
+    gui_draw_icon(6, dy, r8("FESB" + di) - 64, l1);
+    gui_draw_icon(280, dy, r8("CMCT" + di) - 64, l2);
+  }
   gui_draw_icon(6, 138, 15, "Paint");
-
-  // Right column desktop icons
-  gui_draw_icon(280, 18, 2, "Calc");
-  gui_draw_icon(280, 48, 12, "Mon");
-  gui_draw_icon(280, 78, 7, "Chat");
-  gui_draw_icon(280, 108, 22, "Web");
   gui_draw_icon(280, 138, 19, "Game");
 
   // 3. Open Windows in back-to-front z-order
@@ -151,22 +180,27 @@ void draw_desktop_scene() {
 
   // 4. Launcher Popup Menu (if open)
   if (g_launcher_open == 1) {
-    gui_bevel_rect(2, 12, 92, 158, thm_taskbar_bg, thm_btn_hi, thm_btn_sh);
-    hal_str(8, 16,  "1. Files",     15, -1);
-    hal_str(8, 26,  "2. Editor",    15, -1);
-    hal_str(8, 36,  "3. Shell",     15, -1);
-    hal_str(8, 46,  "4. Compiler",  14, -1);
-    hal_str(8, 56,  "5. Paint",     15, -1);
-    hal_str(8, 66,  "6. Calc",      15, -1);
-    hal_str(8, 76,  "7. SysMon",    15, -1);
-    hal_str(8, 86,  "8. Themes",    15, -1);
-    hal_str(8, 96,  "9. Viewer",    15, -1);
-    hal_str(8, 106, "10. Snake",    10, -1);
-    hal_str(8, 116, "11. Blocks",   10, -1);
-    hal_str(8, 126, "12. NetChat",  11, -1);
-    hal_str(8, 136, "13. FileBeam", 11, -1);
-    hal_str(8, 146, "14. SpiralWeb",11, -1);
-    hal_str(8, 158, "15. Reboot",   12, -1);
+    gui_set_win(0, 0, 320, 200);
+    gui_bevel_rect(2, 12, 104, 170, thm_taskbar_bg, thm_btn_hi, thm_btn_sh);
+    g_l_y = 15;
+    litem("1. Files",     15);
+    litem("2. Editor",    15);
+    litem("3. Shell",     15);
+    litem("4. Compiler",  14);
+    litem("5. Paint",     15);
+    litem("6. Calc",      15);
+    litem("7. SysMon",    15);
+    litem("8. Themes",    15);
+    litem("9. Viewer",    15);
+    litem("10. Snake",    10);
+    litem("11. Blocks",   10);
+    litem("12. NetChat",  11);
+    litem("13. FileBeam", 11);
+    litem("14. SpiralWeb",11);
+    litem("15. Notes",    14);
+    litem("16. Clock",    14);
+    litem("17. Solitaire",10);
+    litem("18. About",    11);
   }
 
   // 5. Bottom Helix Taskbar (y = 184..199)
@@ -203,10 +237,10 @@ void handle_mouse_down(int mx, int my) {
 
   if (g_launcher_open == 1) {
     g_launcher_open = 0;
-    if (mx >= 2 && mx < 94 && my >= 14 && my < 168) {
-      int item = (my - 14) / 10 + 1;
-      if (item >= 1 && item <= 14) open_app_by_id(item);
-      else if (item == 15) hal_reboot();
+    if (mx >= 2 && mx < 106 && my >= 14 && my < 183) {
+      int item = (my - 15) / 10 + 1;
+      if (my >= 155) item = 16 + (my - 155) / 7;
+      open_app_by_id(item);
       return;
     }
   }
@@ -263,19 +297,37 @@ void handle_mouse_down(int mx, int my) {
     }
   }
 
-  if (mx >= 4 && mx <= 40) {
-    if (my >= 16 && my < 44)  open_app_by_id(APP_FILES);
-    if (my >= 46 && my < 74)  open_app_by_id(APP_EDIT);
-    if (my >= 76 && my < 104) open_app_by_id(APP_SHELL);
-    if (my >= 106 && my < 134) open_app_by_id(APP_BUILD);
-    if (my >= 136 && my < 168) open_app_by_id(APP_PAINT);
-  }
+  if (my >= 16 && my < 168 && mx >= 4 && mx <= 40) open_app_by_id((my - 16) / 30 + 1);
   if (mx >= 276 && mx <= 316) {
-    if (my >= 16 && my < 44)  open_app_by_id(APP_CALC);
-    if (my >= 46 && my < 74)  open_app_by_id(APP_SYSMON);
-    if (my >= 76 && my < 104) open_app_by_id(APP_CHAT);
-    if (my >= 106 && my < 134) open_app_by_id(APP_BROWSER);
+    int slot = (my - 16) / 30;
+    if (slot == 0) open_app_by_id(APP_CALC);
+    if (slot == 1) open_app_by_id(APP_SYSMON);
+    if (slot == 2) open_app_by_id(APP_CHAT);
+    if (slot == 3) open_app_by_id(APP_BROWSER);
     if (my >= 136 && my < 168) open_app_by_id(APP_SNAKE);
+  }
+}
+
+void boot_splash() {
+  // Draw CNSW mark-over-wordmark lockup (from cnsw-lockup.svg:1-42 & /art/cnsw.pic)
+  hal_rect(0, 0, 320, 200, 16);
+  int fidx = fs_find("/art/cnsw.pic");
+  if (fidx >= 0) {
+    hal_blit(120, 24, 80, 80, fs_entry_data_ptr(fidx));
+  }
+  // Wordmark in ConsciousNode Sans (font 0)
+  hal_str(128, 114, "SpiralOS", 15, -1);
+  hal_str(44, 130, os_version_str(), 11, -1);
+  hal_str(48, 146, "ConsciousNode SoftWorks", 7, -1);
+  hal_yield();
+
+  int t0 = hal_time();
+  while ((hal_time() - t0) < 1500) {
+    int kev = hal_key();
+    if (kev != 0) {
+      int pressed = (kev >> 16) & 1;
+      if (pressed == 1) break;
+    }
   }
 }
 
@@ -298,6 +350,9 @@ int main() {
   w32(VMRAM_STATUS + 0x00, 0x53504F53);
   w32(VMRAM_STATUS + 0x1E * 4, wm_active_title_color());
 
+  // Show boot splash on Frame 1 for ~1.5 s or until a key is pressed
+  boot_splash();
+
   while (1) {
     net_poll();
     app_run_ticks();
@@ -311,29 +366,28 @@ int main() {
       if ((g_prev_btn & 1) == 0) {
         handle_mouse_down(g_mouse_x, g_mouse_y);
       } else if (g_drag_win >= 0) {
+        int dw = g_drag_win;
         if (g_drag_mode == 1) {
           int nx = g_mouse_x - g_drag_ox;
           int ny = g_mouse_y - g_drag_oy;
           if (nx < 0) nx = 0;
           if (ny < 12) ny = 12;
-          if (nx + win_w[g_drag_win] > 320) nx = 320 - win_w[g_drag_win];
-          if (ny + win_h[g_drag_win] > 184) ny = 184 - win_h[g_drag_win];
-          win_x[g_drag_win] = nx;
-          win_y[g_drag_win] = ny;
+          if (nx + win_w[dw] > 320) nx = 320 - win_w[dw];
+          if (ny + win_h[dw] > 184) ny = 184 - win_h[dw];
+          win_x[dw] = nx;
+          win_y[dw] = ny;
         } else if (g_drag_mode == 2) {
-          int nw = g_mouse_x - win_x[g_drag_win] + 2;
-          int nh = g_mouse_y - win_y[g_drag_win] + 2;
+          int nw = g_mouse_x - win_x[dw] + 2;
+          int nh = g_mouse_y - win_y[dw] + 2;
           if (nw < 80) nw = 80;
           if (nh < 50) nh = 50;
-          if (win_x[g_drag_win] + nw > 320) nw = 320 - win_x[g_drag_win];
-          if (win_y[g_drag_win] + nh > 184) nh = 184 - win_y[g_drag_win];
-          win_w[g_drag_win] = nw;
-          win_h[g_drag_win] = nh;
+          if (win_x[dw] + nw > 320) nw = 320 - win_x[dw];
+          if (win_y[dw] + nh > 184) nh = 184 - win_y[dw];
+          win_w[dw] = nw;
+          win_h[dw] = nh;
         }
       } else if (g_focused_win >= 0 && win_app[g_focused_win] == APP_PAINT) {
-        int rx = g_mouse_x - win_x[g_focused_win];
-        int ry = g_mouse_y - win_y[g_focused_win];
-        app_click_paint(g_focused_win, rx, ry);
+        app_click_paint(g_focused_win, g_mouse_x - win_x[g_focused_win], g_mouse_y - win_y[g_focused_win]);
       }
     } else {
       g_drag_win = -1;
@@ -344,11 +398,8 @@ int main() {
     while (1) {
       int kev = hal_key();
       if (kev == 0) break;
-      int pressed = (kev >> 16) & 1;
-      int vk = (kev >> 8) & 0xFF;
-      int ascii = kev & 0xFF;
-      if (pressed == 1) {
-        dispatch_focused_key(ascii, vk);
+      if ((kev >> 16) & 1) {
+        dispatch_focused_key(kev & 0xFF, (kev >> 8) & 0xFF, (kev >> 24) & 0xFF);
       }
     }
 
