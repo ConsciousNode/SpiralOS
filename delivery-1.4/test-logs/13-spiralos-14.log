@@ -1,2 +1,8 @@
 === SpiralOS 1.4 "Daily Driver" Comprehensive Verification Suite ===
   [PASS] 1. Build & Memory Map: SpiralFS usable = 768 KB, free = 380928 B (372.0 KB), WEB_PAGE_BUF_EXT (0x190000..0x19FFFF) verified non-overlapping
+  [PASS] 2.tabcomp: Fresh-boot write-headroom on TabComp TC-32 -> Notes 20 KB + Paint .pic + 16 KB SRRP inbox + SpiralEdit +4 KB /src/hello.sp + SpiralBuild self-host fixed point; free space 380928 B -> 330752 B (-50176 B exact)
+  [PASS] 2.hummingbird: Fresh-boot write-headroom on Hummingbird x86 -> Notes 20 KB + Paint .pic + 16 KB SRRP inbox + SpiralEdit +4 KB /src/hello.sp + SpiralBuild self-host fixed point; free space 380928 B -> 330752 B (-50176 B exact)
+  [PASS] 2.triton: Fresh-boot write-headroom on Triton T3 -> Notes 20 KB + Paint .pic + 16 KB SRRP inbox + SpiralEdit +4 KB /src/hello.sp + SpiralBuild self-host fixed point; free space 380928 B -> 330752 B (-50176 B exact)
+  [PASS] 3. StudioNet 1.0: SNS peer table (via studionet-ref.js snsFrame), NameAgent /etc/hostname persistence, and SpiralHttpd `share on|off` verified
+  [PASS] 4. Deals, Solver & Part D Fixes: `deals` matches shared/deals-ref.js verbatim; Solitaire solver (WINNABLE #1 / UNWINNABLE #11982 / UNKNOWN budget), x86 IDIV INT_MIN / -1 guard, and "Triton" machine label verified
+=== ALL SPIRALOS 1.4 "DAILY DRIVER" TESTS PASSED ===

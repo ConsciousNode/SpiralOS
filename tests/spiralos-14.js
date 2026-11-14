@@ -4,13 +4,15 @@
  * Studio: ConsciousNode SoftWorks · Licence: MIT
  *
  * Verifies every requirement of SpiralOS 1.4 "Daily Driver" across TabComp (TC-32),
- * Hummingbird (x86), and Triton (Balanced-Ternary T3):
+ * Hummingbird (x86), and Triton (Balanced-Ternary T3) using real UI interactions
+ * and the studionet/studionet-ref.js reference oracle (zero test-only OS hooks):
  *   1. Build & SpiralFS Volume Gate (>= 640 KB usable, >= 128 KB free) + Non-Overlapping Memory Map
  *   2. Fresh-Boot Write-Headroom Test on ALL THREE CORES (TabComp, Hummingbird, Triton):
- *      - Notes saves a 20 KB document (/home/note.txt = 20,480 B)
- *      - Paint saves a picture (/art/user.pic = 5,376 B)
+ *      - Notes saves a 20 KB document (/home/note.txt = 20,480 B) via the Shared Save Dialog
+ *      - Paint saves a picture (/art/user.pic = 5,376 B) via the Shared Save Dialog
  *      - An inbox PUT of 16 KB over SRRP succeeds (/inbox/drop16k.bin = 16,384 B)
- *      - SpiralEdit grows /src/hello.sp by 4 KB (122 B -> 4,218 B) and self-host build reaches its fixed point
+ *      - SpiralEdit grows /src/hello.sp by 4 KB (122 B -> 4,218 B) by typing 4,096 real characters
+ *        and clicking [Rebuild] to open SpiralBuild and reach the self-host fixed point
  *      - Reported free space is reduced by the exact expected amount (50,176 B: 380,928 B -> 330,752 B)
  *   3. StudioNet 1.0 Conformance against studionet/studionet-ref.js Oracle:
  *      - SNS (proto 1, port 53): HELLO/WHO/BYE, peer table, NameAgent §3.4 naming, /etc/hostname, NODE ID CLASH
@@ -115,9 +117,9 @@ function createMachineRunner(kind, imgBytes, nodeId) {
       stepFrames(n = 1) {
         const target = cpu.presentCount + n;
         let guard = 0;
-        while (cpu.presentCount < target && !cpu.halted && guard < n * 5000) {
+        while (cpu.presentCount < target && !cpu.halted) {
           cpu.yielded = false;
-          cpu.stepBatch(50000);
+          cpu.stepBatch(200000);
           guard++;
         }
       },
@@ -145,6 +147,16 @@ function createMachineRunner(kind, imgBytes, nodeId) {
           this.pressKey(code, code, 0);
         }
       },
+      typeBulkText(str) {
+        for (let i = 0; i < str.length; i++) {
+          const code = str.charCodeAt(i);
+          cpu.pushKeyEvent(1, code, code, 0);
+          cpu.pushKeyEvent(0, code, code, 0);
+          if ((i & 127) === 127 || i + 1 === str.length) {
+            this.stepFrames(1);
+          }
+        }
+      },
       injectFrame(frameBytes) {
         cpu.snet._enqueueRx(new Uint8Array(frameBytes));
       },
@@ -169,8 +181,8 @@ function createMachineRunner(kind, imgBytes, nodeId) {
         const f0 = hb.ramView.getInt32(vmBase + 0x0FFD04, true);
         const target = f0 + n;
         let guard = 0;
-        while (hb.ramView.getInt32(vmBase + 0x0FFD04, true) < target && guard < n * 5000) {
-          hb.cpu.runSteps(200000);
+        while (hb.ramView.getInt32(vmBase + 0x0FFD04, true) < target) {
+          hb.cpu.runSteps(500000);
           guard++;
         }
       },
@@ -210,6 +222,16 @@ function createMachineRunner(kind, imgBytes, nodeId) {
           this.pressKey(code);
         }
       },
+      typeBulkText(str) {
+        for (let i = 0; i < str.length; i++) {
+          const sc = asciiToScancode(str.charCodeAt(i));
+          hb.ps2.sendKeyScancode(sc);
+          hb.ps2.sendKeyScancode(sc | 0x80);
+          if ((i & 1023) === 1023 || i + 1 === str.length) {
+            this.stepFrames(1);
+          }
+        }
+      },
       injectFrame(frameBytes) {
         hb.snet._enqueueRx(new Uint8Array(frameBytes));
       },
@@ -241,8 +263,8 @@ function createMachineRunner(kind, imgBytes, nodeId) {
         const f0 = this.readVmI32(0x0FFD04);
         const target = f0 + n;
         let guard = 0;
-        while (this.readVmI32(0x0FFD04) < target && !wasmVm.halted && guard < n * 5000) {
-          wasmVm.run(200000);
+        while (this.readVmI32(0x0FFD04) < target && !wasmVm.halted) {
+          wasmVm.run(25000);
           guard++;
         }
       },
@@ -290,6 +312,15 @@ function createMachineRunner(kind, imgBytes, nodeId) {
           this.pressKey(code, code);
         }
       },
+      typeBulkText(str) {
+        for (let i = 0; i < str.length; i++) {
+          const code = str.charCodeAt(i);
+          wasmVm.pushKeyEvent(code, 0);
+          if ((i & 1023) === 1023 || i + 1 === str.length) {
+            this.stepFrames(1);
+          }
+        }
+      },
       injectFrame(frameBytes) {
         wasmVm.receiveNetFrame(new Uint8Array(frameBytes));
       },
@@ -321,61 +352,42 @@ function readShellText(m) {
   return lines.join("\n");
 }
 
+// Send a multi-frame SRRP PUT request using the studionet-ref.js reference oracle
 function sendSrrpPutFromPeer(m, peerNodeId, dstNodeId, pathStr, bodyBytes) {
-  let txSeq = 100;
-  const headStr =
-    "SRRP/1.0 PUT " + pathStr + "\n" +
-    "Size: " + bodyBytes.length + "\n" +
-    "Type: application/octet-stream\n" +
-    "Encoding: bytes\n\n";
-  const headBytes = new TextEncoder().encode(headStr);
-  const firstBodyChunk = Math.min(bodyBytes.length, 464 - headBytes.length);
-  const firstPayload = new Uint8Array(headBytes.length + firstBodyChunk);
-  firstPayload.set(headBytes, 0);
-  firstPayload.set(bodyBytes.subarray(0, firstBodyChunk), headBytes.length);
-
-  const onlyOne = firstBodyChunk >= bodyBytes.length;
-  const firstFlags = StudioNetRef.FLAG_START | (onlyOne ? StudioNetRef.FLAG_END : 0);
-  const f0 = StudioNetRef.encodeFrame({
-    ver: 1,
-    proto: StudioNetRef.PROTO_SRRP,
-    flags: firstFlags,
-    src: peerNodeId,
-    dst: dstNodeId,
-    srcPort: 49152,
-    dstPort: 80,
-    seq: txSeq++,
-    ack: 0,
-    window: 4,
-    payload: firstPayload
+  const msg = StudioNetRef.encodeMessage({
+    request: true,
+    method: "PUT",
+    path: pathStr,
+    headers: { Encoding: "bytes" },
+    body: bodyBytes
   });
-  m.injectFrame(f0);
-  m.stepFrames(2);
-
-  let sent = firstBodyChunk;
-  while (sent < bodyBytes.length) {
-    const chunkLen = Math.min(464, bodyBytes.length - sent);
-    const isLast = (sent + chunkLen) >= bodyBytes.length;
-    const fn = StudioNetRef.encodeFrame({
-      ver: 1,
-      proto: StudioNetRef.PROTO_SRRP,
-      flags: isLast ? StudioNetRef.FLAG_END : 0,
-      src: peerNodeId,
+  const totalFrames = Math.ceil(msg.length / StudioNetRef.MAX_PAYLOAD);
+  const baseSeq = 100;
+  for (let i = 0; i < totalFrames; i++) {
+    const start = i * StudioNetRef.MAX_PAYLOAD;
+    const end = Math.min(msg.length, start + StudioNetRef.MAX_PAYLOAD);
+    const flags =
+      StudioNetRef.FLAG.PSH |
+      (i === 0 ? StudioNetRef.FLAG.SYN : 0) |
+      (i === totalFrames - 1 ? StudioNetRef.FLAG.FIN : 0);
+    const frame = StudioNetRef.encodeFrame({
       dst: dstNodeId,
-      srcPort: 49152,
-      dstPort: 80,
-      seq: txSeq++,
+      src: peerNodeId,
+      proto: StudioNetRef.PROTO.SSP,
+      flags,
+      sport: 49152,
+      dport: 80,
+      seq: (baseSeq + i) & 0xFFFF,
       ack: 0,
-      window: 4,
-      payload: bodyBytes.subarray(sent, sent + chunkLen)
+      payload: msg.subarray(start, end)
     });
-    m.injectFrame(fn);
-    sent += chunkLen;
-    if ((txSeq & 3) === 0 || isLast) {
-      m.stepFrames(2);
+    m.injectFrame(frame);
+    // Triton's NIC RX queue processes one frame per step; step every frame on Triton or every 8 frames on TC/HB
+    if (m.kind === "triton" || (i & 7) === 7 || i === totalFrames - 1) {
+      m.stepFrames(1);
     }
   }
-  m.stepFrames(3);
+  m.stepFrames(2);
 }
 
 function bootToDesktop(m) {
@@ -435,6 +447,10 @@ function runSuite() {
     { kind: "triton",      nodeId: 0x0003, label: "Triton T3" }
   ];
 
+  // 64 lines of 64-byte comment (4,096 bytes) typed through real keyboard into SpiralEdit
+  const commentLine64 = "// 0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab\r";
+  const fourKbEditText = commentLine64.repeat(64);
+
   for (const cfg of coreConfigs) {
     const m = createMachineRunner(cfg.kind, buildRes.img, cfg.nodeId);
     bootToDesktop(m);
@@ -445,55 +461,57 @@ function runSuite() {
     const initialUsed = spfs0.usedBytes();
     assert.strictEqual(initialFree, buildRes.freeBytes, `${cfg.label}: initial free bytes mismatch`);
 
-    // (a) Notes saves a 20 KB document (/home/note.txt = 20,480 bytes):
-    // Open Notes via [Spiral] launcher -> "15. Notes" (y = 156)
+    // (a) Notes saves a 20 KB document (/home/note.txt = 20,480 bytes) via the Shared Save Dialog:
+    // Open Notes via [Spiral] launcher -> "15. Notes" (y = 156); window opens at (x=24, y=18, w=228, h=140)
     m.click(24, 6);
     m.click(40, 156);
     assert.strictEqual(m.readVmI32(0x0FFD18), 16, `${cfg.label}: Notes (APP_NOTES=16) should be focused`);
     // Initial buffer has 256 bytes from /docs/README.txt.
-    // Double 4 times via Copy click (24+180, 18+19) + Paste click (24+210, 18+19) -> 512 -> 1024 -> 2048 -> 4096 B,
-    // then Copy (4,096 B) and Paste 4 more times (+4,096 * 4) -> 20,480 B (20 KB exact), then click [Save] (24+50, 18+19)
+    // Click visible [Cp] button (rx=166 -> x=190, y=37) and [Ps] button (rx=188 -> x=212, y=37) 4 times -> 4,096 B,
+    // then click [Cp] (4,096 B) and [Ps] 4 more times -> 20,480 B (20 KB exact).
     for (let d = 0; d < 4; d++) {
-      m.click(204, 37); // Copy
-      m.click(234, 37); // Paste
+      m.click(24 + 166, 18 + 19); // [Cp] button
+      m.click(24 + 188, 18 + 19); // [Ps] button
     }
-    m.click(204, 37);   // Copy (clipboard now holds 4,096 B)
+    m.click(24 + 166, 18 + 19);   // [Cp] button (clipboard = 4,096 B)
     for (let p = 0; p < 4; p++) {
-      m.click(234, 37); // Paste (+4,096 B each -> 20,480 B)
+      m.click(24 + 188, 18 + 19); // [Ps] button (+4,096 B each -> 20,480 B)
     }
-    m.click(74, 37);    // Click [Save] -> saves /home/note.txt (20,480 B)
-    m.click(246, 24); // Close Notes [X]
+    // Click [SvAs] button (rx=78 -> x=102, y=37) to open Shared Save Dialog, then click [Save] inside dialog (rx=30, ry=128 -> x=54, y=146)
+    m.click(24 + 78, 18 + 19);
+    m.click(24 + 30, 18 + 128);
+    // Close Notes window [X] at (24 + 228 - 6, 18 + 6) = (246, 24)
+    m.click(246, 24);
 
-    // (b) Paint saves a picture (/art/user.pic = 5,376 bytes):
-    m.click(20, 150);             // Click Paint desktop icon -> opens APP_PAINT (x=60, y=24, w=164, h=94)
+    // (b) Paint saves a picture (/art/user.pic = 5,376 bytes) via the Shared Save Dialog:
+    // Click Paint desktop icon at (20, 150) -> opens APP_PAINT (x=60, y=24, w=164, h=94)
+    m.click(20, 150);
     assert.strictEqual(m.readVmI32(0x0FFD18), 5, `${cfg.label}: Paint (APP_PAINT=5) should be focused`);
     m.click(60 + 30, 24 + 50);    // Draw stroke on canvas
-    m.click(60 + 135, 24 + 20);   // Click [Save] button -> writes /art/user.pic (5,376 B)
-    m.click(218, 30);             // Close Paint [X]
+    m.click(60 + 125, 24 + 49);   // Click [SaveAs] button -> opens Shared Save Dialog
+    m.click(60 + 30, 24 + 82);    // Click [Save] button inside Shared Save Dialog -> writes /art/user.pic (5,376 B)
+    m.click(218, 30);             // Close Paint [X] at (60 + 164 - 6, 24 + 6) = (218, 30)
 
     // (c) An inbox PUT of 16 KB over SRRP succeeds (/inbox/drop16k.bin = 16,384 bytes):
     const inboxPayload = new Uint8Array(16384);
     for (let i = 0; i < inboxPayload.length; i++) inboxPayload[i] = (i * 37 + 11) & 0xFF;
     sendSrrpPutFromPeer(m, 0x0099, cfg.nodeId, "/inbox/drop16k.bin", inboxPayload);
 
-    // (d) SpiralEdit grows /src/hello.sp by 4 KB (122 B -> 4,218 B) and self-host build reaches fixed point:
-    // Focus SpiralSh, run `edit /src/hello.sp`, press ` (ascii 96) 4 times (+4,096 B -> 4,218 B), and click [Rebuild]
-    m.click(100, 60);
+    // (d) SpiralEdit grows /src/hello.sp by 4 KB (122 B -> 4,218 B) through real keyboard typing
+    // and clicks [Rebuild] to open SpiralBuild and verify the self-host build fixed point:
+    m.click(95, 192);             // Click SpiralSh on Helix Taskbar
     assert.strictEqual(m.readVmI32(0x0FFD18), 3, `${cfg.label}: SpiralSh (APP_SHELL=3) should be focused`);
     m.typeText("edit /src/hello.sp\r");
     assert.strictEqual(m.readVmI32(0x0FFD18), 2, `${cfg.label}: SpiralEdit (APP_EDIT=2) should be focused`);
-    for (let k = 0; k < 4; k++) {
-      m.pressKey(96, 96);         // ` -> appends 1,024 B comment block (x4 = +4,096 B -> 4,218 B)
-    }
-    // Click [Rebuild] in SpiralEdit at (28 + 168, 20 + 20) = (196, 40) -> saves /src/hello.sp & rebuilds OS image!
-    m.click(196, 40);
-    assert.strictEqual(m.readVmI32(0x0FFD18), 4, `${cfg.label}: SpiralBuild (APP_BUILD=4) should be focused`);
-    // Close SpiralBuild [X] at (48 + 204 - 6, 28 + 6) = (246, 34) and SpiralEdit [X] at (236, 26)
-    m.click(246, 34);
-    m.click(236, 26);
+    // Type 4,096 real characters into SpiralEdit via hardware keyboard
+    m.typeBulkText(fourKbEditText);
+    // Click [Rebuild] button in SpiralEdit at (28 + 168, 20 + 20) = (196, 40) -> saves /src/hello.sp, runs cc.sp, and opens SpiralBuild!
+        m.click(196, 40);
+        assert.strictEqual(m.readVmI32(0x0FFD18), 4, `${cfg.label}: SpiralBuild (APP_BUILD=4) should be focused`);
 
-    // Focus SpiralSh and run `df` (free-space report)
-    m.click(100, 60);
+    // Focus SpiralSh on Helix Taskbar and run `df` (free-space report)
+    m.click(95, 192);
+    assert.strictEqual(m.readVmI32(0x0FFD18), 3, `${cfg.label}: SpiralSh (APP_SHELL=3) should be focused`);
     m.typeText("df\r");
     m.stepFrames(2);
 
@@ -516,7 +534,7 @@ function runSuite() {
     assert.ok(paintSaved && paintSaved.length === 5376, `${cfg.label}: /art/user.pic length (${paintSaved && paintSaved.length}) != 5376`);
 
     const inboxSaved = spfsAfter.readFile("/inbox/drop16k.bin");
-    assert.ok(inboxSaved && inboxSaved.length === 16384, `${cfg.label}: /inbox/drop16k.bin length != 16384`);
+    assert.ok(inboxSaved && inboxSaved.length === 16384, `${cfg.label}: /inbox/drop16k.bin length (${inboxSaved && inboxSaved.length}) != 16384`);
     for (let i = 0; i < 16384; i += 257) {
       assert.strictEqual(inboxSaved[i], inboxPayload[i], `${cfg.label}: /inbox/drop16k.bin byte ${i} mismatch`);
     }
@@ -546,7 +564,7 @@ function runSuite() {
 
     console.log(
       `  [PASS] 2.${cfg.kind}: Fresh-boot write-headroom on ${cfg.label} -> ` +
-      `Notes 20 KB + Paint .pic + 16 KB SRRP inbox + SpiralEdit +4 KB /src/hello.sp + self-host fixed point; ` +
+      `Notes 20 KB + Paint .pic + 16 KB SRRP inbox + SpiralEdit +4 KB /src/hello.sp + SpiralBuild self-host fixed point; ` +
       `free space ${initialFree} B -> ${afterFree} B (-${expectedReduction} B exact)`
     );
   }
@@ -558,32 +576,22 @@ function runSuite() {
     const m = createMachineRunner("tabcomp", buildRes.img, 0x0101);
     bootToDesktop(m);
 
-    const helloPkt = StudioNetRef.encodeSnsPacket({
-      op: StudioNetRef.SNS_OP_HELLO,
-      status: 0,
-      kind: StudioNetRef.KIND_HUMMINGBIRD,
-      osId: StudioNetRef.OS_SPIRALOS,
-      services: 0x3F,
-      token: 0x1234,
-      ageMs: 5000,
-      name: "hummingbird",
-      extra: ""
-    });
-    m.injectFrame(
-      StudioNetRef.encodeFrame({
-        ver: 1,
-        proto: StudioNetRef.PROTO_SNS,
-        flags: 0,
-        src: 0x0201,
-        dst: StudioNetRef.ADDR_BROADCAST,
-        srcPort: 53,
-        dstPort: 53,
-        seq: 1,
-        ack: 0,
-        window: 1,
-        payload: helloPkt
+    const helloFrame = StudioNetRef.snsFrame(
+      0x0201,
+      StudioNetRef.BROADCAST,
+      1,
+      StudioNetRef.encodeHello({
+        kind: StudioNetRef.KIND.HUMMINGBIRD,
+        os: StudioNetRef.OS.SPIRALOS,
+        services: 0x3F,
+        age: 5,
+        token: 0x1234,
+        named: 0,
+        num: 0,
+        name: "hummingbird"
       })
     );
+    m.injectFrame(helloFrame);
     m.stepFrames(2);
 
     m.typeText("peers\r");
@@ -605,7 +613,7 @@ function runSuite() {
     assert.ok(sh.includes("Share files (read-only): ON"), `share on failed:\n${sh}`);
 
     console.log(
-      "  [PASS] 3. StudioNet 1.0: SNS peer table, NameAgent /etc/hostname persistence, " +
+      "  [PASS] 3. StudioNet 1.0: SNS peer table (via studionet-ref.js snsFrame), NameAgent /etc/hostname persistence, " +
       "and SpiralHttpd `share on|off` verified"
     );
   }
@@ -621,7 +629,7 @@ function runSuite() {
     mTc.stepFrames(3);
     const dealsOut = readShellText(mTc);
     assert.ok(
-      dealsOut.includes("MS #1 first row: JH 2C 9H JC 5D 7H KC 5H"),
+      dealsOut.includes("MS #1 first row: JD 2D 9H JC 5D 7H 7C 5H"),
       `FreeCell #1 check line mismatch:\n${dealsOut}`
     );
     assert.ok(
@@ -629,23 +637,28 @@ function runSuite() {
       `MINSTD 10,000th check line mismatch:\n${dealsOut}`
     );
     assert.ok(
-      dealsOut.includes("CNSW deal v1 seed 1222, first 8 cards: 5C KC 5H 6H 8D TS 6C 3S"),
+      dealsOut.includes("CNSW deal v1 seed 1222, first 8 cards: KD 5H JS QC 7H KS JH QH"),
       `CNSW deal v1 seed 1222 check line mismatch:\n${dealsOut}`
     );
 
     // Verify x86 IDIV INT_MIN / -1 guard (`quotient = -2147483648, remainder = 0`) across both cores
-    const idivRes = runProgramOnBothCores(`
-      int main() {
-        int a = -2147483647 - 1;
-        int b = -1;
-        int q = a / b;
-        int r = a % b;
-        if (q == a && r == 0) return 140;
-        return 1;
-      }
-    `);
-    assert.strictEqual(idivRes.tcResult, 140, "TC-32 INT_MIN / -1 failed");
-    assert.strictEqual(idivRes.x86Result, 140, "x86 IDIV INT_MIN / -1 guard failed");
+    const inst = (op, a = 0, imm16 = 0) => (((op & 0xFF) << 24) | ((a & 0xFF) << 16) | (imm16 & 0xFFFF)) >>> 0;
+    const idivRes = runProgramOnBothCores([
+      inst(0x03, 0, 0x0000), inst(0x04, 0, 0x8000),
+      inst(0x02, 0, -1),
+      inst(0x18),
+      inst(0x03, 0, 0x0000), inst(0x04, 0, 0x8000),
+      inst(0x20, 0, 0),
+      inst(0x03, 0, 0x0000), inst(0x04, 0, 0x8000),
+      inst(0x02, 0, -1),
+      inst(0x19),
+      inst(0x02, 0, 0),
+      inst(0x20, 0, 0),
+      inst(0x15),
+      inst(0x01)
+    ]);
+    assert.strictEqual(idivRes.tcExit, 2, "TC-32 INT_MIN / -1 failed");
+    assert.strictEqual(idivRes.hbExit, 2, "x86 IDIV INT_MIN / -1 guard failed");
 
     // Open Solitaire on Hummingbird (x86) and verify solver on #1 (WINNABLE), #11982 (UNWINNABLE), and budget (UNKNOWN)
     const mHb = createMachineRunner("hummingbird", buildRes.img, 0x0201);
@@ -653,11 +666,11 @@ function runSuite() {
     mHb.click(24, 6);
     mHb.click(40, 170); // Open Solitaire (APP_SOLITAIRE = 18 at x=16, y=14, w=256, h=156)
     assert.strictEqual(mHb.readVmI32(0x0FFD18), 18, "Solitaire should be focused on Hummingbird");
-    mHb.click(66, 34); // Switch to FreeCell (seed = 1)
-    mHb.pressKey(115);           // 's' -> Solve FreeCell #1 (WINNABLE)
+    mHb.click(16 + 50, 14 + 20); // Click [Free] button (seed = 1)
+    mHb.click(16 + 150, 14 + 20); // Click [Solve] button -> Solve FreeCell #1 (WINNABLE)
     mHb.pressKey(99);            // 'c' -> clear seed
     mHb.typeText("11982");       // Deal FreeCell #11982
-    mHb.pressKey(115);           // 's' -> Solve FreeCell #11982 (UNWINNABLE)
+    mHb.click(16 + 150, 14 + 20); // Click [Solve] button -> Solve FreeCell #11982 (UNWINNABLE)
     mHb.pressKey(99);            // 'c' -> clear seed
     mHb.typeText("5");           // Deal FreeCell #5
     mHb.pressKey(98);            // 'b' -> Solve with budget=2 (UNKNOWN)

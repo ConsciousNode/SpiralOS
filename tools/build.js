@@ -202,7 +202,7 @@ if (require.main === module) {
   const res = buildSpiralOSImage(rootDir);
   const outPath = path.join(rootDir, "spiralos.img");
   fs.writeFileSync(outPath, res.img);
-  const tritonImgPath = path.join(rootDir, "triton/spiralos-1.3.img");
+  const tritonImgPath = path.join(rootDir, "triton/spiralos-1.4.img");
   if (fs.existsSync(path.dirname(tritonImgPath))) {
     fs.writeFileSync(tritonImgPath, res.img);
   }

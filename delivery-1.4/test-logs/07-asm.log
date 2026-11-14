@@ -1,5 +1,5 @@
 === SpiralOS 1.1 In-OS Native Assemblers Suite (tests/asm.js) ===
-  JS-Built x86 Core (Sectors 0..31)   : d08231def67e68714e2f2b0def5e65f4... (11236 B)
+  JS-Built x86 Core (Sectors 0..31)   : 1ac2284c32859ff204f5a85e91cdf980... (11246 B)
   JS-Built TC-32 Core (Sectors 32..63): 589c2a9e0e441cc0229152eb3cfc63ab... (6104 B)
   [PASS] 1. In-OS Assemblers on TabComp: x86 Core (8,643 B) and TC-32 Core (4,360 B) are 100% byte-identical to JS-built cores!
   [PASS] 2. Edited /src/core_tc32.asm -> Assembled in-OS -> Rebooted TabComp -> Banner: "SpiralOS 1.2-X"

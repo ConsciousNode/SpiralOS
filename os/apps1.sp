@@ -895,17 +895,6 @@ void app_click_edit(int wid, int rx, int ry) {
 }
 
 void app_key_edit(int ascii, int vk) {
-  if (ascii == 15) { edit_load_file("/src/hello.sp"); return; }
-  if (ascii == 19) { edit_save_current(); return; }
-  if ((ascii == 2 || ascii == 96) && g_edit_len + 1024 <= 35000) {
-    for (int k = 0; k < 16; k++) {
-      hal_memcpy(EDIT_BUF + g_edit_len, "// 0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab\n", 64);
-      g_edit_len = g_edit_len + 64;
-    }
-    w8(EDIT_BUF + g_edit_len, 0);
-    g_edit_dirty = 1;
-    return;
-  }
   if (vk == 38 && g_edit_scroll > 0) { g_edit_scroll = g_edit_scroll - 1; return; }
   if (vk == 40) { g_edit_scroll = g_edit_scroll + 1; return; }
   if (ascii == 8 && g_edit_len > 0) {
@@ -1013,13 +1002,15 @@ void notes_find_next() {
 void app_draw_notes(int x, int y, int w, int h) {
   gui_set_win(x, y, w, h);
   // UI Toolbar in ConsciousNode Sans (font 0)
-  wbtn(4, 14, 30, 11, "Open", 0);
-  wbtn(36, 14, 30, 11, "Save", g_notes_dirty);
-  wbtn(68, 14, 36, 11, "SvAs", 0);
-  wbtn(106, 14, 30, 11, "Find", g_notes_find_mode);
-  wbtn(138, 14, 32, 11, "Wrap", g_notes_wrap);
+  wbtn(4, 14, 28, 11, "Open", 0);
+  wbtn(34, 14, 28, 11, "Save", g_notes_dirty);
+  wbtn(64, 14, 30, 11, "SvAs", 0);
+  wbtn(96, 14, 28, 11, "Find", g_notes_find_mode);
+  wbtn(126, 14, 28, 11, "Wrap", g_notes_wrap);
+  wbtn(156, 14, 20, 11, "Cp", 0);
+  wbtn(178, 14, 20, 11, "Ps", 0);
   if (g_notes_dirty == 1) {
-    wstr(174, 16, "*MOD", 14);
+    wstr(200, 16, "*M", 14);
   }
 
   int ty = y + 27;
@@ -1103,24 +1094,24 @@ void app_click_notes(int wid, int rx, int ry) {
     return;
   }
   if (ry >= 14 && ry <= 25) {
-    if (rx >= 4 && rx < 34) {
+    if (rx >= 4 && rx < 32) {
       dlg_open(2, APP_NOTES, 0, "note.txt");
-    } else if (rx >= 36 && rx < 66) {
+    } else if (rx >= 34 && rx < 62) {
       if (r8(NOTES_PATH_BUF) != 0) {
         fs_write(NOTES_PATH_BUF, NOTES_BUF, g_notes_len);
         g_notes_dirty = 0;
       } else {
         dlg_open(1, APP_NOTES, 0, "note.txt");
       }
-    } else if (rx >= 68 && rx < 104) {
+    } else if (rx >= 64 && rx < 94) {
       dlg_open(1, APP_NOTES, 0, "note.txt");
-    } else if (rx >= 106 && rx < 136) {
+    } else if (rx >= 96 && rx < 124) {
       g_notes_find_mode = 1 - g_notes_find_mode;
-    } else if (rx >= 138 && rx < 170) {
+    } else if (rx >= 126 && rx < 154) {
       g_notes_wrap = 1 - g_notes_wrap;
-    } else if (rx >= 172 && rx < 198) {
+    } else if (rx >= 156 && rx < 176) {
       notes_copy_selection();
-    } else if (rx >= 198) {
+    } else if (rx >= 178 && rx < 198) {
       notes_paste_clipboard();
     }
   }

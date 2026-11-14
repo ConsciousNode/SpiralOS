@@ -1258,6 +1258,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     stringBytes: strPos - SPIR_STR_BASE,
     globalWords: globalSlotCount,
     funcCount: funcs.size,
+    funcs,
     checksum: csum >>> 0
   };
 }

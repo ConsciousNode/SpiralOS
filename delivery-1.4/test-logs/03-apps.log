@@ -3,3 +3,10 @@
   [PASS] 2. Window Manager: dragged, minimized, and restored window from Helix Taskbar
   [PASS] 3. File Manager (SpiralFiles): created /home/note.txt (24 files on disk)
   [PASS] 4. Text Editor (SpiralEdit): typed comment and saved /src/wm.sp to SpiralFS
+  [PASS] 5. Calculator (SpiralCalc): evaluated 125 * 4 + 50 + 7 = 557 (52 display glyph pixels)
+  [PASS] 6. Paint Program (SpiralPaint): painted stroke in framebuffer & saved 5376-byte /art/user.pic
+  [PASS] 7. Theme Engine & Editor (SpiralTheme): switched plain-text themes (wallpaper color 16 -> 48 -> 16)
+  [PASS] 8. Image Viewer (SpiralView): rendered .pic bitmap art in window
+  [PASS] 9. Game 1 (SpiralSnake): snake moved across playfield (196 playfield pixels updated)
+  [PASS] 10. Game 2 (SpiralBlocks): tetromino dropped, locked & scored (513 playfield pixels updated)
+  [PASS] Saved multi-application showcase screenshot to screenshots/apps_showcase.png

@@ -1,7 +1,7 @@
 === SpiralOS 1.1 Three-Stage Bootstrap Fixed-Point Suite (tests/bootstrap.js) ===
-  Stage 1 (JS Stage-0 -> SPIR) : c224e72ec5790ca64231e861fde86ce54b1bf1229d06631a5de1461c15467941 (125100 code B, 5263 str B, 289 funcs)
-  TabComp Stage 2 (Stage 1->2) : c224e72ec5790ca64231e861fde86ce54b1bf1229d06631a5de1461c15467941 (8751 ms)
-  TabComp Stage 3 (Stage 2->3) : c224e72ec5790ca64231e861fde86ce54b1bf1229d06631a5de1461c15467941 (7980 ms)
-  Hummingbird Stage 2 (1 -> 2) : c224e72ec5790ca64231e861fde86ce54b1bf1229d06631a5de1461c15467941 (163813 ms)
-  Hummingbird Stage 3 (2 -> 3) : c224e72ec5790ca64231e861fde86ce54b1bf1229d06631a5de1461c15467941 (164015 ms)
+  Stage 1 (JS Stage-0 -> SPIR) : 697a08881c237e0c115640d2a1ab33e2c554000c7ff3372ec04041c7071d271d (124672 code B, 5186 str B, 290 funcs)
+  TabComp Stage 2 (Stage 1->2) : 697a08881c237e0c115640d2a1ab33e2c554000c7ff3372ec04041c7071d271d (5909 ms)
+  TabComp Stage 3 (Stage 2->3) : 697a08881c237e0c115640d2a1ab33e2c554000c7ff3372ec04041c7071d271d (5924 ms)
+  Hummingbird Stage 2 (1 -> 2) : 697a08881c237e0c115640d2a1ab33e2c554000c7ff3372ec04041c7071d271d (105080 ms)
+  Hummingbird Stage 3 (2 -> 3) : 697a08881c237e0c115640d2a1ab33e2c554000c7ff3372ec04041c7071d271d (105640 ms)
   [PASS] Bootstrap Fixed Point Verified: Stage 1 == Stage 2 == Stage 3 across TabComp & Hummingbird (131,072 / 131,072 bytes identical)!
