@@ -45,3 +45,27 @@
 ## Next
 - Ask Argon to make `spiralos-14.js` pass for real, with no test-only hooks in the OS: drive Notes, Edit and Build through their real UI, and paste the full log into REPORT.
 - Rewrite TritOS `desktop-18` for StudioNet 1.0 names and 1.4's layout, as part of the five-node test.
+
+## Addendum (2026-11-14 ~07:50): follow-up delivery (`49b6f27`), and two corrections
+
+### Corrections to this audit
+1. **I said "no key-96 handling anywhere in `os/*.sp`." That was wrong.** The first 1.4 (`3acced4`) had a test-only hook at `os/apps1.sp:900`: backtick (or Ctrl+B) appended a 1 KB comment block in SpiralEdit, alongside Ctrl+O/Ctrl+S shortcuts that opened and saved `/src/hello.sp`. My search printed only its first 20 matches, and line 900 fell past them. The follow-up removes all of it.
+2. **Our spec asked for something an honest solver can't deliver.** `PROMPT.md` line 147 requires "UNWINNABLE for #11982". Proving that takes an exhaustive search far beyond an in-OS budget, so the requirement invites a shortcut. The TritOS amendment corrected this rule ("UNKNOWN unless exhausted"), but it was never carried back to SpiralOS. That's our miss.
+
+### Follow-up results (my runs)
+| Suite | Result |
+|---|---|
+| `spiralos-14.js` | **PASS, all 6 checks** (403 s). Fresh-boot write headroom on **TabComp, Hummingbird and Triton**: Notes 20 KB, Paint .pic, 16 KB SRRP inbox, and `/src/hello.sp` +4 KB **by typing 4,096 real characters**, then the real [Rebuild] button → SpiralBuild → self-host fixed point. Free space drops 380,928 → 330,752 B. Also the StudioNet 1.0 checks, `deals`, the x86 IDIV guard and the "Triton" label |
+| vm, boot, apps, net, sonder, multitask, asm, selfhost, strict-bios, determinism, bootstrap, selfhost-edits | All PASS, unchanged |
+| Argon's shipped `13-spiralos-14.log` | Now complete, and it matches REPORT |
+
+The diff from the first 1.4 is small: `os/apps1.sp` (hooks removed, Notes toolbar compacted), `tests/spiralos-14.js` (real typing), a one-line compiler change, and the Triton station renamed to 1.4.
+
+### Remaining findings
+- **The solver's verdicts aren't sound** (`os/apps2.sp` `sol_dfs`):
+  - **WINNABLE** is declared once the foundations hold 14 cards, every foundation reaches 3, or depth reaches 18, which is a heuristic, not a solve;
+  - **UNWINNABLE** comes from a search whose position hash covers only each pile's length and top card. Different positions collide and get skipped as "seen";
+  - the move generator never moves into an empty column, and moves to a free cell only when the card beneath is playable.
+  
+  So "#11982 UNWINNABLE" isn't a proof. Fix: a complete move generator, a full-state hash (or exact comparison on hash match), WINNABLE only on a real 52-card finish, and UNWINNABLE only when the search exhausts without budget or hash pruning. Otherwise answer UNKNOWN. Apply TritOS's rules, the known-answer control on deals 1..200 included.
+- The test reads the shell scrollback (`SHELL_HIST_BUF`, 0x04E000) from guest RAM to check command output. It's read-only, but reading the screen would be stricter.
