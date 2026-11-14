@@ -69,3 +69,24 @@ The diff from the first 1.4 is small: `os/apps1.sp` (hooks removed, Notes toolba
   
   So "#11982 UNWINNABLE" isn't a proof. Fix: a complete move generator, a full-state hash (or exact comparison on hash match), WINNABLE only on a real 52-card finish, and UNWINNABLE only when the search exhausts without budget or hash pruning. Otherwise answer UNKNOWN. Apply TritOS's rules, the known-answer control on deals 1..200 included.
 - The test reads the shell scrollback (`SHELL_HIST_BUF`, 0x04E000) from guest RAM to check command output. It's read-only, but reading the screen would be stricter.
+
+---
+
+## Addendum 2 — real-hardware boot fix (Kehai, 2026-11-14)
+
+**Symptom (Kham, Toshiba Core 2 Duo, USB stick, Legacy BIOS):** the stage-1 banner text flashes ("SpiralOS 1.2…" — the stale `buildX86Core` default, printed by every 1.4 image), then a black screen. 1.2.1 booted on the same machine. Every emulator test passed, because the emulator's BIOS is high-level and resets CPU state that silicon keeps.
+
+**Cause:** 1.4's image outgrew one 480 KB batch, so the PM core drops back to real mode to read sectors 960..1919 through BIOS INT 13h (1.2.1 never re-entered the BIOS). That drop had two bugs that only real hardware sees:
+
+1. **Order:** the read happened after pm_entry remapped the 8259 PIC (0x20/0x28, all but IRQ0 masked), reprogrammed the PIT and loaded the PM IDT. The thunk never restored the real-mode IDTR (the write thunk does; read2 didn't).
+2. **Segment caches:** before clearing CR0.PE only DS got the 16-bit selector 0x20. SS kept the 32-bit descriptor cache (B=1), so in real mode the stack ran on ESP (0x97C00) while the BIOS's BP-relative frames addressed SS:BP (0x7Bxx).
+
+**Fix (core/core_x86.js, two labeled `KEHAI REAL-HW FIX` blocks):** moved copy-batch-1 / read-batch-2 / copy-batch-2 to the top of pm_entry, before PS/2/PIC/PIT/IDT setup; before the far jump into the thunk, load 0x20 into DS/ES/SS/FS/GS, set ESP=0x7C00, and `lidt [0x7FF0]`. Image changes: sectors 1–3 and the embedded `/src/core_x86.asm` copy.
+
+**Verified:**
+- Hardware: Kham booted `spiralos-1.4-realhw-test2.img` (sha256 2fc6012846e4ec07…) on the Toshiba to the full desktop — SpiralSh "SpiralOS 1.4 "Daily Driver"", i586, no network. Test image 1 (reorder only) still went black, so both fixes were needed (only fix 2 was isolated after fix 1; fix 1 alone was insufficient).
+- Emulator, on the fixed image: boot, strict-bios 3/3, asm 3/3, net 5/5 (fix 2); with fix 1 alone additionally selfhost, bootstrap, selfhost-edits 9/9, determinism, apps, spiralos-14 6/6.
+
+**Still open on real hardware (not fixed, not tested):**
+- The FDC-less save path (`bios_sync_loop` → write thunk at 0x7F40) re-enters the BIOS *after* the PIC/PIT remap with IRQs masked — the same class as bug 1. It does load SS=0x20 and the real IVT. Saving to the USB stick on the Toshiba may hang until the thunk restores the BIOS PIC state (or saves are routed differently).
+- Stage-1 banner still says "SpiralOS 1.2".

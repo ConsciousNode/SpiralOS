@@ -578,6 +578,49 @@ function buildProtectedModeCore() {
   x.u8(0x8E); x.u8(0xE8); // mov gs, ax
   x.movRegImm32(R.ESP, 0x00098000);
 
+  // KEHAI REAL-HW FIX (2026-11-14): read Batch 2 through the BIOS *before* the PIC/PIT are
+  // reprogrammed. The BIOS's real-mode INT 13h needs the 8259 at its power-on vectors
+  // (0x08/0x70) with IRQs unmasked; after the remap below, a real BIOS hangs (black screen).
+  // Copy Batch 1 (Sectors 0..959, 480 KB) from 0x00010000 to 0x00400000 (vmRam[0x200000..0x277FFF])
+  x.movRegImm32(R.ESI, 0x00010000);
+  x.movRegImm32(R.EDI, 0x00400000);
+  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
+  x.repMovsd();
+
+  // Read Batch 2 (Sectors 960..1919, 480 KB) via 16-bit Real-Mode Read Thunk at 0x0018:0x00007EC5
+  x.cli();
+  // KEHAI REAL-HW FIX 2: a real CPU keeps each segment's cached attributes across the drop to
+  // real mode. SS still held the 32-bit data descriptor (B=1), so the BIOS's stack ran on ESP
+  // (0x97C00) while its BP-relative frames addressed SS:BP (0x7Bxx) -> INT 13h crashed.
+  // Load 16-bit (B=0, 64 KB) selectors into every data segment, zero ESP's high half, and point
+  // IDTR at the real-mode IVT before leaving protected mode. Emulators reset these; silicon doesn't.
+  x.movRegImm32(R.EAX, 0x0020);
+  x.u8(0x8E); x.u8(0xD8); // mov ds, ax
+  x.u8(0x8E); x.u8(0xC0); // mov es, ax
+  x.u8(0x8E); x.u8(0xD0); // mov ss, ax
+  x.u8(0x8E); x.u8(0xE0); // mov fs, ax
+  x.u8(0x8E); x.u8(0xE8); // mov gs, ax
+  x.movRegImm32(R.ESP, 0x00007C00);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF0); // lidt [0x7FF0] (real-mode IVT)
+  x.movRegImm32(R.EAX, 0x00000011);
+  x.u8(0x0F); x.u8(0x22); x.u8(0xC0);
+  x.u8(0xEA); x.u32(0x00007EC5); x.u16(0x0018);
+  x.label("pm_bios_read2_ret");
+  x.movRegImm32(R.EAX, 0x0010);
+  x.u8(0x8E); x.u8(0xD8);
+  x.u8(0x8E); x.u8(0xC0);
+  x.u8(0x8E); x.u8(0xD0);
+  x.u8(0x8E); x.u8(0xE0);
+  x.u8(0x8E); x.u8(0xE8);
+  x.movRegImm32(R.ESP, 0x00098000);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8);
+  // Copy Batch 2 (Sectors 960..1919, 480 KB) from 0x00010000 to 0x00478000 (vmRam[0x278000..0x2EFFFF])
+  x.movRegImm32(R.ESI, 0x00010000);
+  x.movRegImm32(R.EDI, 0x00478000);
+  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
+  x.repMovsd();
+
+
   // 1.2 F2: Proper 8042 PS/2 mouse init handshake (replacing spiralos/core/core_x86.js:506-515)
   x.inAlImm8(0x64);
   x.andRegImm32(R.EAX, 0xFF);
@@ -810,32 +853,6 @@ function buildProtectedModeCore() {
   x.movRegImm32(R.EDI, 0x00006900);
   x.movMemReg32(R.EDI, 0, R.EAX);
   x.movMemReg32(R.EDI, 4, R.EBX);
-
-  // Copy Batch 1 (Sectors 0..959, 480 KB) from 0x00010000 to 0x00400000 (vmRam[0x200000..0x277FFF])
-  x.movRegImm32(R.ESI, 0x00010000);
-  x.movRegImm32(R.EDI, 0x00400000);
-  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
-  x.repMovsd();
-
-  // Read Batch 2 (Sectors 960..1919, 480 KB) via 16-bit Real-Mode Read Thunk at 0x0018:0x00007EC5
-  x.cli();
-  x.movRegImm32(R.EAX, 0x00000011);
-  x.u8(0x0F); x.u8(0x22); x.u8(0xC0);
-  x.u8(0xEA); x.u32(0x00007EC5); x.u16(0x0018);
-  x.label("pm_bios_read2_ret");
-  x.movRegImm32(R.EAX, 0x0010);
-  x.u8(0x8E); x.u8(0xD8);
-  x.u8(0x8E); x.u8(0xC0);
-  x.u8(0x8E); x.u8(0xD0);
-  x.u8(0x8E); x.u8(0xE0);
-  x.u8(0x8E); x.u8(0xE8);
-  x.movRegImm32(R.ESP, 0x00098000);
-  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8);
-  // Copy Batch 2 (Sectors 960..1919, 480 KB) from 0x00010000 to 0x00478000 (vmRam[0x278000..0x2EFFFF])
-  x.movRegImm32(R.ESI, 0x00010000);
-  x.movRegImm32(R.EDI, 0x00478000);
-  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
-  x.repMovsd();
 
   // Entry point for warm VM reboot (when vmRam[0x200000] already holds updated image)
   x.label("vm_warm_boot");
