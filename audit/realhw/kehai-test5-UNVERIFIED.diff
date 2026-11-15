@@ -1,0 +1,327 @@
+diff --git a/core/core_x86.js b/core/core_x86.js
+index d17ca9f..c14cf36 100644
+--- a/core/core_x86.js
++++ b/core/core_x86.js
+@@ -317,6 +317,31 @@ function buildBootSector(customBanner = "SpiralOS 1.2") {
+   return b;
+ }
+ 
++
++// KEHAI REAL-HW FIX 3 (2026-11-14): put the 8259s and PIT back the way the BIOS left them
++// (vectors 0x08/0x70, saved masks, 18.2 Hz) before re-entering BIOS INT 13h, and restore
++// SpiralOS's setup (0x20/0x28, IRQ0 only, 0x2E9B) afterwards. Interrupts must be off (cli).
++function emitPicPit(x, toBios) {
++  x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
++  x.movRegImm32(R.EAX, toBios ? 0x08 : 0x20); x.outImm8Al(0x21);
++  x.movRegImm32(R.EAX, toBios ? 0x70 : 0x28); x.outImm8Al(0xA1);
++  x.movRegImm32(R.EAX, 0x04); x.outImm8Al(0x21);
++  x.movRegImm32(R.EAX, 0x02); x.outImm8Al(0xA1);
++  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x21); x.outImm8Al(0xA1);
++  if (toBios) {
++    x.xorRegReg32(R.ECX, R.ECX); x.movRegMem32(R.EAX, R.ECX, 0x57E8); x.outImm8Al(0x21);
++    x.xorRegReg32(R.ECX, R.ECX); x.movRegMem32(R.EAX, R.ECX, 0x57EC); x.outImm8Al(0xA1);
++    x.movRegImm32(R.EAX, 0x36); x.outImm8Al(0x43);
++    x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x40); x.outImm8Al(0x40);
++  } else {
++    x.movRegImm32(R.EAX, 0xFE); x.outImm8Al(0x21);
++    x.movRegImm32(R.EAX, 0xFF); x.outImm8Al(0xA1);
++    x.movRegImm32(R.EAX, 0x36); x.outImm8Al(0x43);
++    x.movRegImm32(R.EAX, 0x9B); x.outImm8Al(0x40);
++    x.movRegImm32(R.EAX, 0x2E); x.outImm8Al(0x40);
++  }
++}
++
+ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000) {
+   const b = new Uint8Array(512);
+   const dv = new DataView(b.buffer);
+@@ -813,6 +838,12 @@ function buildProtectedModeCore() {
+   x.label("fdc_boot_ok");
+ 
+   // Reprogram 8259A Master & Slave PICs (vectors 0x20..0x27 and 0x28..0x2F, unmask IRQ0 timer)
++  // KEHAI REAL-HW FIX 3: remember the BIOS's PIC masks so BIOS calls made after the remap
++  // (FDC-less saves through INT 13h AH=03h) can run with the BIOS's own interrupt setup.
++  x.movRegImm32(R.EAX, 0); x.inAlImm8(0x21);
++  x.xorRegReg32(R.ECX, R.ECX); x.movMemReg32(R.ECX, 0x57E8, R.EAX);
++  x.movRegImm32(R.EAX, 0); x.inAlImm8(0xA1);
++  x.xorRegReg32(R.ECX, R.ECX); x.movMemReg32(R.ECX, 0x57EC, R.EAX);
+   x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
+   x.movRegImm32(R.EAX, 0x20); x.outImm8Al(0x21);
+   x.movRegImm32(R.EAX, 0x28); x.outImm8Al(0xA1);
+@@ -1704,14 +1735,12 @@ function buildProtectedModeCore() {
+ 
+   // SYS 2: TIME_MS() -> derive from irq0_ticks * 10 + frame counter * 16 + VM_ICNT / 512
+   x.label("sys_02");
+-  x.movRegMem32(R.EAX, R.EBP, 0x0FFD04);
+-  x.shlRegImm(R.EAX, 4);
++  // KEHAI REAL-HW FIX (2026-11-15): time comes from the 100 Hz PIT only (ticks * 10 ms).
++  // The old sum (frames*16 + ticks*8 + VM_ICNT/512) raced on fast real CPUs.
+   x.movRegMem32(R.ECX, R.EBP, 0x0FFF08); // irq0_ticks
+-  x.shlRegImm(R.ECX, 3);
+-  x.addRegReg32(R.EAX, R.ECX);
+-  x.xorRegReg32(R.EDX, R.EDX);
+-  x.movRegMem32(R.ECX, R.EDX, ADDR_VM_ICNT);
+-  x.shrRegImm(R.ECX, 9);
++  x.movRegReg32(R.EAX, R.ECX);
++  x.shlRegImm(R.EAX, 3);
++  x.shlRegImm(R.ECX, 1);
+   x.addRegReg32(R.EAX, R.ECX);
+   x.movMemReg32(R.EBP, 0x0FFD24, R.EAX);
+   x.jmpLabel("sys_push_eax");
+@@ -2056,6 +2085,7 @@ function buildProtectedModeCore() {
+   x.movMemReg32(R.ECX, 0x57F4, R.ESP);
+   // Disable interrupts, clear CR0.PG, far jump to 0x0018:0x7F40
+   x.cli();
++  emitPicPit(x, true);   // KEHAI REAL-HW FIX 3
+   x.movRegImm32(R.EAX, 0x00000011); // PE=1, PG=0
+   x.u8(0x0F); x.u8(0x22); x.u8(0xC0); // mov cr0, eax
+   x.u8(0xEA); x.u32(0x00007F40); x.u16(0x0018); // jmp 0x0018:0x00007F40
+@@ -2072,6 +2102,7 @@ function buildProtectedModeCore() {
+   x.movRegMem32(R.EDX, R.ECX, 0x57F8);
+   x.movRegMem32(R.EBX, R.ECX, 0x57FC);
+   x.movRegImm32(R.EBP, 0x00200000);
++  emitPicPit(x, false);  // KEHAI REAL-HW FIX 3
+   x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
+   x.u8(0xFB); // sti
+   x.addRegImm32(R.EBX, 1);
+diff --git a/os/os.sp b/os/os.sp
+index 50365d8..294c179 100644
+--- a/os/os.sp
++++ b/os/os.sp
+@@ -238,8 +238,11 @@ void handle_mouse_down(int mx, int my) {
+   if (g_launcher_open == 1) {
+     g_launcher_open = 0;
+     if (mx >= 2 && mx < 106 && my >= 14 && my < 183) {
+-      int item = (my - 15) / 10 + 1;
+-      if (my >= 155) item = 16 + (my - 155) / 7;
++      // KEHAI REAL-HW FIX (2026-11-15): litem() draws rows 9 px apart from y=15;
++      // the old hit math assumed 10 px rows, so clicks drifted onto the wrong app.
++      int item = (my - 15) / 9 + 1;
++      if (item > 18) item = 18;
++      if (item >= 15) item = item + 1; // app ids skip 15: Notes=16 .. About=19
+       open_app_by_id(item);
+       return;
+     }
+@@ -322,7 +325,7 @@ void boot_splash() {
+   hal_yield();
+ 
+   int t0 = hal_time();
+-  while ((hal_time() - t0) < 1500) {
++  while ((hal_time() - t0) < 3141) { // pi seconds, a little easter egg
+     int kev = hal_key();
+     if (kev != 0) {
+       int pressed = (kev >> 16) & 1;
+diff --git a/screenshots/apps_showcase.png b/screenshots/apps_showcase.png
+index 48e073e..04c4347 100644
+Binary files a/screenshots/apps_showcase.png and b/screenshots/apps_showcase.png differ
+diff --git a/screenshots/hummingbird_desktop.png b/screenshots/hummingbird_desktop.png
+index d204ccb..a88994a 100644
+Binary files a/screenshots/hummingbird_desktop.png and b/screenshots/hummingbird_desktop.png differ
+diff --git a/screenshots/hummingbird_selfhost_rebuilt.png b/screenshots/hummingbird_selfhost_rebuilt.png
+index 14b07da..7100e1e 100644
+Binary files a/screenshots/hummingbird_selfhost_rebuilt.png and b/screenshots/hummingbird_selfhost_rebuilt.png differ
+diff --git a/screenshots/hummingbird_strict_bios.png b/screenshots/hummingbird_strict_bios.png
+index 166368c..a88994a 100644
+Binary files a/screenshots/hummingbird_strict_bios.png and b/screenshots/hummingbird_strict_bios.png differ
+diff --git a/screenshots/studionet_browser.png b/screenshots/studionet_browser.png
+index 4dc73a0..21292f7 100644
+Binary files a/screenshots/studionet_browser.png and b/screenshots/studionet_browser.png differ
+diff --git a/screenshots/tabcomp_desktop.png b/screenshots/tabcomp_desktop.png
+index 7b8b7b3..ca5738f 100644
+Binary files a/screenshots/tabcomp_desktop.png and b/screenshots/tabcomp_desktop.png differ
+diff --git a/screenshots/tabcomp_selfhost_rebuilt.png b/screenshots/tabcomp_selfhost_rebuilt.png
+index b7052ba..50b803c 100644
+Binary files a/screenshots/tabcomp_selfhost_rebuilt.png and b/screenshots/tabcomp_selfhost_rebuilt.png differ
+diff --git a/spiralos.img b/spiralos.img
+index d8e68ef..dcb2aed 100644
+Binary files a/spiralos.img and b/spiralos.img differ
+diff --git a/tests/apps.js b/tests/apps.js
+index fabff62..7c6a071 100644
+--- a/tests/apps.js
++++ b/tests/apps.js
+@@ -78,7 +78,7 @@ function runAppsSuite() {
+ 
+   function openFromLauncher(itemNum) {
+     click(24, 6); // Open [Spiral] launcher menu
+-    click(40, 16 + (itemNum - 1) * 10 + 4);
++    click(40, 15 + (itemNum - 1) * 9 + 4);
+   }
+ 
+   stepFrames(3);
+diff --git a/tests/bootstrap.js b/tests/bootstrap.js
+index fd8026b..16c8607 100644
+--- a/tests/bootstrap.js
++++ b/tests/bootstrap.js
+@@ -107,6 +107,12 @@ function runBootstrapSuite() {
+   assert.strictEqual(tcStage2Hash, tcStage3Hash, "TabComp Stage 2 and Stage 3 must be 100% byte-identical");
+   assert.strictEqual(stage1Hash, tcStage2Hash, "Stage 1 and TabComp Stage 2 must be 100% byte-identical");
+ 
++
++  // KEHAI (2026-11-15): with TIME_MS from the PIT only, the 3.14 s boot splash lasts 3.14 s of emulated
++  // time and swallows the first key. Wait ~3.3 s of PIT ticks after boot before typing.
++  function waitSplashHb(pc) { const t0 = pc.ramView.getInt32(vmBase + 0x0FFF08, true);
++    while (pc.ramView.getInt32(vmBase + 0x0FFF08, true) < t0 + 330) pc.cpu.runSteps(200000); }
++  
+   // --------------------------------------------------------------------------
+   // 2. Hummingbird (i586): Stage 1 -> Stage 2 -> Reboot -> Stage 3
+   // --------------------------------------------------------------------------
+@@ -116,6 +122,7 @@ function runBootstrapSuite() {
+     hbPc.cpu.runSteps(200000);
+   }
+ 
++  waitSplashHb(hbPc);
+   // Clear SPIR sectors on floppy and mounted image before compiling Stage 2 on Hummingbird
+   hbPc.ram.fill(0, 0x00408000, 0x00428000);
+   hbPc.floppyImage.fill(0, 0x8000, 0x28000);
+@@ -140,6 +147,7 @@ function runBootstrapSuite() {
+     guard++;
+   }
+ 
++  waitSplashHb(hbPc);
+   // Clear SPIR sectors on floppy and mounted image before Stage 2 compiles Stage 3
+   hbPc.ram.fill(0, 0x00408000, 0x00428000);
+   hbPc.floppyImage.fill(0, 0x8000, 0x28000);
+diff --git a/tests/bringup.js b/tests/bringup.js
+index 12a7a3a..04e4c9f 100644
+--- a/tests/bringup.js
++++ b/tests/bringup.js
+@@ -262,7 +262,7 @@ function runContainmentOnTabComp(img, label) {
+ 
+     // Open app via Launcher menu
+     clickTabComp(cpu, 24, 6);
+-    clickTabComp(cpu, 40, 16 + (appId - 1) * 10 + 4);
++    clickTabComp(cpu, 40, 15 + (appId - 1) * 9 + 4);
+     cpu.setMouseState(160, 192, 0);
+     stepTabCompFrames(cpu, 2);
+ 
+@@ -351,7 +351,7 @@ function runContainmentOnHummingbird(img, label) {
+ 
+     // Open app via Launcher menu
+     clickHummingbird(pc, 24, 6);
+-    clickHummingbird(pc, 40, 16 + (appId - 1) * 10 + 4);
++    clickHummingbird(pc, 40, 15 + (appId - 1) * 9 + 4);
+     moveMouseHummingbird(pc, 160, 192, 0);
+     stepHummingbirdFrames(pc, 1);
+ 
+diff --git a/tests/multitask.js b/tests/multitask.js
+index dbc3163..4ad401b 100644
+--- a/tests/multitask.js
++++ b/tests/multitask.js
+@@ -128,7 +128,7 @@ function runMultitaskSuite() {
+ 
+     // Open SpiralSnake via Launcher (item 10)
+     clickTabComp(tcCpu, 24, 6);
+-    clickTabComp(tcCpu, 40, 16 + 9 * 10 + 4);
++    clickTabComp(tcCpu, 40, 15 + 9 * 9 + 4);
+     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 10, "SpiralSnake should be open");
+ 
+     const snakeSteps0 = tcCpu.ramDV.getInt32(vmBase + 0x0FFD60, true);
+@@ -153,7 +153,7 @@ function runMultitaskSuite() {
+ 
+     // Open SpiralBlocks via Launcher (item 11) and verify blocks fall automatically!
+     clickTabComp(tcCpu, 24, 6);
+-    clickTabComp(tcCpu, 40, 16 + 10 * 10 + 4);
++    clickTabComp(tcCpu, 40, 15 + 10 * 9 + 4);
+     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 11, "SpiralBlocks should be open");
+ 
+     const blkSteps0 = tcCpu.ramDV.getInt32(vmBase + 0x0FFD64, true);
+diff --git a/tests/net.js b/tests/net.js
+index 63e6782..9650203 100644
+--- a/tests/net.js
++++ b/tests/net.js
+@@ -65,7 +65,7 @@ function runNetSuite() {
+ 
+   function openLauncherTabComp(itemNum) {
+     clickTabComp(24, 6);
+-    clickTabComp(40, 16 + (itemNum - 1) * 10 + 4);
++    clickTabComp(40, 15 + (itemNum - 1) * 9 + 4);
+   }
+ 
+   stepBoth(3);
+diff --git a/tests/sonder.js b/tests/sonder.js
+index b83ea56..7eb4640 100644
+--- a/tests/sonder.js
++++ b/tests/sonder.js
+@@ -91,7 +91,7 @@ function runSonderSuite() {
+   {
+     // Open SpiralWeb on TabComp via Launcher (item 14)
+     clickTabComp(24, 6);
+-    clickTabComp(40, 16 + 13 * 10 + 4);
++    clickTabComp(40, 15 + 13 * 9 + 4);
+     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 14, "SpiralWeb should be focused");
+ 
+     // Verify initial local page (/www/index.hts) rendered its inline <img src='/art/spiral.pic'>!
+@@ -132,7 +132,7 @@ function runSonderSuite() {
+   {
+     // Open SpiralSnake on TabComp via Launcher (item 10)
+     clickTabComp(24, 6);
+-    clickTabComp(40, 16 + 9 * 10 + 4);
++    clickTabComp(40, 15 + 9 * 9 + 4);
+     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 10, "SpiralSnake open on TabComp");
+ 
+     // Open SpiralSnake on Hummingbird by clicking its desktop "Game" icon at (292, 148)
+diff --git a/tests/spiralos-14.js b/tests/spiralos-14.js
+index 7ebffa2..fc987fe 100644
+--- a/tests/spiralos-14.js
++++ b/tests/spiralos-14.js
+@@ -462,9 +462,9 @@ function runSuite() {
+     assert.strictEqual(initialFree, buildRes.freeBytes, `${cfg.label}: initial free bytes mismatch`);
+ 
+     // (a) Notes saves a 20 KB document (/home/note.txt = 20,480 bytes) via the Shared Save Dialog:
+-    // Open Notes via [Spiral] launcher -> "15. Notes" (y = 156); window opens at (x=24, y=18, w=228, h=140)
++    // Open Notes via [Spiral] launcher -> "15. Notes" (drawn y = 141); window opens at (x=24, y=18, w=228, h=140)
+     m.click(24, 6);
+-    m.click(40, 156);
++    m.click(40, 145); // KEHAI: "15. Notes" is drawn at y=141..149 (old 156 hit the drawn Clock row)
+     assert.strictEqual(m.readVmI32(0x0FFD18), 16, `${cfg.label}: Notes (APP_NOTES=16) should be focused`);
+     // Initial buffer has 256 bytes from /docs/README.txt.
+     // Click visible [Cp] button (rx=166 -> x=190, y=37) and [Ps] button (rx=188 -> x=212, y=37) 4 times -> 4,096 B,
+@@ -664,7 +664,7 @@ function runSuite() {
+     const mHb = createMachineRunner("hummingbird", buildRes.img, 0x0201);
+     bootToDesktop(mHb);
+     mHb.click(24, 6);
+-    mHb.click(40, 170); // Open Solitaire (APP_SOLITAIRE = 18 at x=16, y=14, w=256, h=156)
++    mHb.click(40, 163); // KEHAI: "17. Solitaire" drawn at y=159..167. Open Solitaire (APP_SOLITAIRE = 18 at x=16, y=14, w=256, h=156)
+     assert.strictEqual(mHb.readVmI32(0x0FFD18), 18, "Solitaire should be focused on Hummingbird");
+     mHb.click(16 + 50, 14 + 20); // Click [Free] button (seed = 1)
+     mHb.click(16 + 150, 14 + 20); // Click [Solve] button -> Solve FreeCell #1 (WINNABLE)
+diff --git a/tests/strict-bios.js b/tests/strict-bios.js
+index 8bffdf1..74c485b 100644
+--- a/tests/strict-bios.js
++++ b/tests/strict-bios.js
+@@ -100,6 +100,12 @@ function runStrictBiosSuite() {
+   assert.strictEqual(hasSnet, 0, "Strict BIOS: StudioNet presence flag (0x0FFD30) must be 0 when card is absent");
+ 
+   // Run `net` in SpiralSh to verify it reports "no network" and 0 bogus packets
++  // KEHAI (2026-11-15): with TIME_MS from the PIT only, the 3.14 s splash really lasts 3.14 s of
++  // emulated time and swallows the first key press. Wait for the splash to finish before typing.
++  { const f0 = pc.ramView.getInt32(vmBase + 0x0FFD04, true);
++    while (pc.ramView.getInt32(vmBase + 0x0FFD08, true) === 0 && pc.ramView.getInt32(vmBase + 0x0FFD04, true) < f0 + 400) pc.cpu.runSteps(200000);
++    const t0 = pc.ramView.getInt32(vmBase + 0x0FFF08, true); // irq0 ticks
++    while (pc.ramView.getInt32(vmBase + 0x0FFF08, true) < t0 + 330) pc.cpu.runSteps(200000); }
+   const scNet = [0x31, 0x12, 0x14, 0x1C]; // "net\r"
+   for (const sc of scNet) {
+     pc.ps2.sendKeyScancode(sc);
+diff --git a/tools/build.js b/tools/build.js
+index c50e442..1ac9ced 100644
+--- a/tools/build.js
++++ b/tools/build.js
+@@ -130,10 +130,12 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
+   // Add sample .pic bitmap art files + build-time rasterized CNSW splash logo (/art/cnsw.pic)
+   spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 6144);
+   spfs.writeFile("/art/prism.pic", createProceduralPic(1), 6144);
+-  const svgMarkPath = path.resolve(rootDir, "../cnsw-mark.svg");
+-  const splashBmp = fs.existsSync(svgMarkPath)
+-    ? rasterizeCnswMark(svgMarkPath, 80, 80)
+-    : new Uint8Array(6400);
++  // KEHAI FIX (2026-11-15): the mark lived outside the repo (../cnsw-mark.svg), so every
++  // in-repo build silently shipped an all-zero (black) logo. Look in the repo too, and fail loudly.
++  const svgMarkPath = [path.resolve(rootDir, "../cnsw-mark.svg"), path.resolve(rootDir, "delivery-1.4/cnsw-mark.svg")]
++    .find(p => fs.existsSync(p));
++  if (!svgMarkPath) throw new Error("cnsw-mark.svg not found: the splash logo would be blank");
++  const splashBmp = rasterizeCnswMark(svgMarkPath, 80, 80);
+   spfs.writeFile("/art/cnsw.pic", splashBmp, 8192);
+ 
+   // Add on-disk documentation using the single canonical version string
+diff --git a/triton/spiralos-1.4.img b/triton/spiralos-1.4.img
+index d8e68ef..dcb2aed 100644
+Binary files a/triton/spiralos-1.4.img and b/triton/spiralos-1.4.img differ
