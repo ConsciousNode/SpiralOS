@@ -130,10 +130,12 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, "..")) {
   // Add sample .pic bitmap art files + build-time rasterized CNSW splash logo (/art/cnsw.pic)
   spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 6144);
   spfs.writeFile("/art/prism.pic", createProceduralPic(1), 6144);
-  const svgMarkPath = path.resolve(rootDir, "../cnsw-mark.svg");
-  const splashBmp = fs.existsSync(svgMarkPath)
-    ? rasterizeCnswMark(svgMarkPath, 80, 80)
-    : new Uint8Array(6400);
+  // KEHAI FIX (2026-11-15): the mark lived outside the repo (../cnsw-mark.svg), so every
+  // in-repo build silently shipped an all-zero (black) logo. Look in the repo too, and fail loudly.
+  const svgMarkPath = [path.resolve(rootDir, "../cnsw-mark.svg"), path.resolve(rootDir, "delivery-1.4/cnsw-mark.svg")]
+    .find(p => fs.existsSync(p));
+  if (!svgMarkPath) throw new Error("cnsw-mark.svg not found: the splash logo would be blank");
+  const splashBmp = rasterizeCnswMark(svgMarkPath, 80, 80);
   spfs.writeFile("/art/cnsw.pic", splashBmp, 8192);
 
   // Add on-disk documentation using the single canonical version string

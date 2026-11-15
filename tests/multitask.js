@@ -128,7 +128,7 @@ function runMultitaskSuite() {
 
     // Open SpiralSnake via Launcher (item 10)
     clickTabComp(tcCpu, 24, 6);
-    clickTabComp(tcCpu, 40, 16 + 9 * 10 + 4);
+    clickTabComp(tcCpu, 40, 15 + 9 * 9 + 4);
     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 10, "SpiralSnake should be open");
 
     const snakeSteps0 = tcCpu.ramDV.getInt32(vmBase + 0x0FFD60, true);
@@ -153,7 +153,7 @@ function runMultitaskSuite() {
 
     // Open SpiralBlocks via Launcher (item 11) and verify blocks fall automatically!
     clickTabComp(tcCpu, 24, 6);
-    clickTabComp(tcCpu, 40, 16 + 10 * 10 + 4);
+    clickTabComp(tcCpu, 40, 15 + 10 * 9 + 4);
     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 11, "SpiralBlocks should be open");
 
     const blkSteps0 = tcCpu.ramDV.getInt32(vmBase + 0x0FFD64, true);

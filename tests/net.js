@@ -65,7 +65,7 @@ function runNetSuite() {
 
   function openLauncherTabComp(itemNum) {
     clickTabComp(24, 6);
-    clickTabComp(40, 16 + (itemNum - 1) * 10 + 4);
+    clickTabComp(40, 15 + (itemNum - 1) * 9 + 4);
   }
 
   stepBoth(3);

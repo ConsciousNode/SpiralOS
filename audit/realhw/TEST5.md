@@ -1,4 +1,4 @@
-# Real-hardware test image 5 (unverified on hardware)
+# Real-hardware test image 5: VERIFIED on the Toshiba, merged
 
 `spiralos-1.4-realhw-test5.img` (sha `db1e6b665dbe936f5203bec3070a1cff0eb19b849557d649c124bb0cbe87cd4d`). This is test 4 plus three fixes:
 
@@ -22,3 +22,5 @@
 - Solitaire's stock pile and foundations are missing; 7 tableau piles is the correct count.
 - Snake has no collision, and its 80 ms tick may be too fast.
 - `ls`, the shell commands, history, and clock entry from the keyboard. See `WISHLIST-1.5.md`.
+
+**Toshiba, test 5 (2026-11-15):** every launcher item opens the right app, the CNSW logo shows on the π-second splash, and saving was already confirmed with test 4. Merged into main.

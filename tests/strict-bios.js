@@ -100,6 +100,12 @@ function runStrictBiosSuite() {
   assert.strictEqual(hasSnet, 0, "Strict BIOS: StudioNet presence flag (0x0FFD30) must be 0 when card is absent");
 
   // Run `net` in SpiralSh to verify it reports "no network" and 0 bogus packets
+  // KEHAI (2026-11-15): with TIME_MS from the PIT only, the 3.14 s splash really lasts 3.14 s of
+  // emulated time and swallows the first key press. Wait for the splash to finish before typing.
+  { const f0 = pc.ramView.getInt32(vmBase + 0x0FFD04, true);
+    while (pc.ramView.getInt32(vmBase + 0x0FFD08, true) === 0 && pc.ramView.getInt32(vmBase + 0x0FFD04, true) < f0 + 400) pc.cpu.runSteps(200000);
+    const t0 = pc.ramView.getInt32(vmBase + 0x0FFF08, true); // irq0 ticks
+    while (pc.ramView.getInt32(vmBase + 0x0FFF08, true) < t0 + 330) pc.cpu.runSteps(200000); }
   const scNet = [0x31, 0x12, 0x14, 0x1C]; // "net\r"
   for (const sc of scNet) {
     pc.ps2.sendKeyScancode(sc);

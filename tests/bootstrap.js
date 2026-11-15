@@ -107,6 +107,12 @@ function runBootstrapSuite() {
   assert.strictEqual(tcStage2Hash, tcStage3Hash, "TabComp Stage 2 and Stage 3 must be 100% byte-identical");
   assert.strictEqual(stage1Hash, tcStage2Hash, "Stage 1 and TabComp Stage 2 must be 100% byte-identical");
 
+
+  // KEHAI (2026-11-15): with TIME_MS from the PIT only, the 3.14 s boot splash lasts 3.14 s of emulated
+  // time and swallows the first key. Wait ~3.3 s of PIT ticks after boot before typing.
+  function waitSplashHb(pc) { const t0 = pc.ramView.getInt32(vmBase + 0x0FFF08, true);
+    while (pc.ramView.getInt32(vmBase + 0x0FFF08, true) < t0 + 330) pc.cpu.runSteps(200000); }
+  
   // --------------------------------------------------------------------------
   // 2. Hummingbird (i586): Stage 1 -> Stage 2 -> Reboot -> Stage 3
   // --------------------------------------------------------------------------
@@ -116,6 +122,7 @@ function runBootstrapSuite() {
     hbPc.cpu.runSteps(200000);
   }
 
+  waitSplashHb(hbPc);
   // Clear SPIR sectors on floppy and mounted image before compiling Stage 2 on Hummingbird
   hbPc.ram.fill(0, 0x00408000, 0x00428000);
   hbPc.floppyImage.fill(0, 0x8000, 0x28000);
@@ -140,6 +147,7 @@ function runBootstrapSuite() {
     guard++;
   }
 
+  waitSplashHb(hbPc);
   // Clear SPIR sectors on floppy and mounted image before Stage 2 compiles Stage 3
   hbPc.ram.fill(0, 0x00408000, 0x00428000);
   hbPc.floppyImage.fill(0, 0x8000, 0x28000);

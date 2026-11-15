@@ -78,7 +78,7 @@ function runAppsSuite() {
 
   function openFromLauncher(itemNum) {
     click(24, 6); // Open [Spiral] launcher menu
-    click(40, 16 + (itemNum - 1) * 10 + 4);
+    click(40, 15 + (itemNum - 1) * 9 + 4);
   }
 
   stepFrames(3);

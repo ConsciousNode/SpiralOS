@@ -317,6 +317,31 @@ function buildBootSector(customBanner = "SpiralOS 1.2") {
   return b;
 }
 
+
+// KEHAI REAL-HW FIX 3 (2026-11-14): put the 8259s and PIT back the way the BIOS left them
+// (vectors 0x08/0x70, saved masks, 18.2 Hz) before re-entering BIOS INT 13h, and restore
+// SpiralOS's setup (0x20/0x28, IRQ0 only, 0x2E9B) afterwards. Interrupts must be off (cli).
+function emitPicPit(x, toBios) {
+  x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
+  x.movRegImm32(R.EAX, toBios ? 0x08 : 0x20); x.outImm8Al(0x21);
+  x.movRegImm32(R.EAX, toBios ? 0x70 : 0x28); x.outImm8Al(0xA1);
+  x.movRegImm32(R.EAX, 0x04); x.outImm8Al(0x21);
+  x.movRegImm32(R.EAX, 0x02); x.outImm8Al(0xA1);
+  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0x21); x.outImm8Al(0xA1);
+  if (toBios) {
+    x.xorRegReg32(R.ECX, R.ECX); x.movRegMem32(R.EAX, R.ECX, 0x57E8); x.outImm8Al(0x21);
+    x.xorRegReg32(R.ECX, R.ECX); x.movRegMem32(R.EAX, R.ECX, 0x57EC); x.outImm8Al(0xA1);
+    x.movRegImm32(R.EAX, 0x36); x.outImm8Al(0x43);
+    x.movRegImm32(R.EAX, 0x00); x.outImm8Al(0x40); x.outImm8Al(0x40);
+  } else {
+    x.movRegImm32(R.EAX, 0xFE); x.outImm8Al(0x21);
+    x.movRegImm32(R.EAX, 0xFF); x.outImm8Al(0xA1);
+    x.movRegImm32(R.EAX, 0x36); x.outImm8Al(0x43);
+    x.movRegImm32(R.EAX, 0x9B); x.outImm8Al(0x40);
+    x.movRegImm32(R.EAX, 0x2E); x.outImm8Al(0x40);
+  }
+}
+
 function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000) {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
@@ -813,6 +838,12 @@ function buildProtectedModeCore() {
   x.label("fdc_boot_ok");
 
   // Reprogram 8259A Master & Slave PICs (vectors 0x20..0x27 and 0x28..0x2F, unmask IRQ0 timer)
+  // KEHAI REAL-HW FIX 3: remember the BIOS's PIC masks so BIOS calls made after the remap
+  // (FDC-less saves through INT 13h AH=03h) can run with the BIOS's own interrupt setup.
+  x.movRegImm32(R.EAX, 0); x.inAlImm8(0x21);
+  x.xorRegReg32(R.ECX, R.ECX); x.movMemReg32(R.ECX, 0x57E8, R.EAX);
+  x.movRegImm32(R.EAX, 0); x.inAlImm8(0xA1);
+  x.xorRegReg32(R.ECX, R.ECX); x.movMemReg32(R.ECX, 0x57EC, R.EAX);
   x.movRegImm32(R.EAX, 0x11); x.outImm8Al(0x20); x.outImm8Al(0xA0);
   x.movRegImm32(R.EAX, 0x20); x.outImm8Al(0x21);
   x.movRegImm32(R.EAX, 0x28); x.outImm8Al(0xA1);
@@ -1704,14 +1735,12 @@ function buildProtectedModeCore() {
 
   // SYS 2: TIME_MS() -> derive from irq0_ticks * 10 + frame counter * 16 + VM_ICNT / 512
   x.label("sys_02");
-  x.movRegMem32(R.EAX, R.EBP, 0x0FFD04);
-  x.shlRegImm(R.EAX, 4);
+  // KEHAI REAL-HW FIX (2026-11-15): time comes from the 100 Hz PIT only (ticks * 10 ms).
+  // The old sum (frames*16 + ticks*8 + VM_ICNT/512) raced on fast real CPUs.
   x.movRegMem32(R.ECX, R.EBP, 0x0FFF08); // irq0_ticks
-  x.shlRegImm(R.ECX, 3);
-  x.addRegReg32(R.EAX, R.ECX);
-  x.xorRegReg32(R.EDX, R.EDX);
-  x.movRegMem32(R.ECX, R.EDX, ADDR_VM_ICNT);
-  x.shrRegImm(R.ECX, 9);
+  x.movRegReg32(R.EAX, R.ECX);
+  x.shlRegImm(R.EAX, 3);
+  x.shlRegImm(R.ECX, 1);
   x.addRegReg32(R.EAX, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD24, R.EAX);
   x.jmpLabel("sys_push_eax");
@@ -2056,6 +2085,7 @@ function buildProtectedModeCore() {
   x.movMemReg32(R.ECX, 0x57F4, R.ESP);
   // Disable interrupts, clear CR0.PG, far jump to 0x0018:0x7F40
   x.cli();
+  emitPicPit(x, true);   // KEHAI REAL-HW FIX 3
   x.movRegImm32(R.EAX, 0x00000011); // PE=1, PG=0
   x.u8(0x0F); x.u8(0x22); x.u8(0xC0); // mov cr0, eax
   x.u8(0xEA); x.u32(0x00007F40); x.u16(0x0018); // jmp 0x0018:0x00007F40
@@ -2072,6 +2102,7 @@ function buildProtectedModeCore() {
   x.movRegMem32(R.EDX, R.ECX, 0x57F8);
   x.movRegMem32(R.EBX, R.ECX, 0x57FC);
   x.movRegImm32(R.EBP, 0x00200000);
+  emitPicPit(x, false);  // KEHAI REAL-HW FIX 3
   x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
   x.u8(0xFB); // sti
   x.addRegImm32(R.EBX, 1);

@@ -91,7 +91,7 @@ function runSonderSuite() {
   {
     // Open SpiralWeb on TabComp via Launcher (item 14)
     clickTabComp(24, 6);
-    clickTabComp(40, 16 + 13 * 10 + 4);
+    clickTabComp(40, 15 + 13 * 9 + 4);
     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 14, "SpiralWeb should be focused");
 
     // Verify initial local page (/www/index.hts) rendered its inline <img src='/art/spiral.pic'>!
@@ -132,7 +132,7 @@ function runSonderSuite() {
   {
     // Open SpiralSnake on TabComp via Launcher (item 10)
     clickTabComp(24, 6);
-    clickTabComp(40, 16 + 9 * 10 + 4);
+    clickTabComp(40, 15 + 9 * 9 + 4);
     assert.strictEqual(tcCpu.ramDV.getInt32(vmBase + 0x0FFD18, true), 10, "SpiralSnake open on TabComp");
 
     // Open SpiralSnake on Hummingbird by clicking its desktop "Game" icon at (292, 148)

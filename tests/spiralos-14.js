@@ -462,9 +462,9 @@ function runSuite() {
     assert.strictEqual(initialFree, buildRes.freeBytes, `${cfg.label}: initial free bytes mismatch`);
 
     // (a) Notes saves a 20 KB document (/home/note.txt = 20,480 bytes) via the Shared Save Dialog:
-    // Open Notes via [Spiral] launcher -> "15. Notes" (y = 156); window opens at (x=24, y=18, w=228, h=140)
+    // Open Notes via [Spiral] launcher -> "15. Notes" (drawn y = 141); window opens at (x=24, y=18, w=228, h=140)
     m.click(24, 6);
-    m.click(40, 156);
+    m.click(40, 145); // KEHAI: "15. Notes" is drawn at y=141..149 (old 156 hit the drawn Clock row)
     assert.strictEqual(m.readVmI32(0x0FFD18), 16, `${cfg.label}: Notes (APP_NOTES=16) should be focused`);
     // Initial buffer has 256 bytes from /docs/README.txt.
     // Click visible [Cp] button (rx=166 -> x=190, y=37) and [Ps] button (rx=188 -> x=212, y=37) 4 times -> 4,096 B,
@@ -664,7 +664,7 @@ function runSuite() {
     const mHb = createMachineRunner("hummingbird", buildRes.img, 0x0201);
     bootToDesktop(mHb);
     mHb.click(24, 6);
-    mHb.click(40, 170); // Open Solitaire (APP_SOLITAIRE = 18 at x=16, y=14, w=256, h=156)
+    mHb.click(40, 163); // KEHAI: "17. Solitaire" drawn at y=159..167. Open Solitaire (APP_SOLITAIRE = 18 at x=16, y=14, w=256, h=156)
     assert.strictEqual(mHb.readVmI32(0x0FFD18), 18, "Solitaire should be focused on Hummingbird");
     mHb.click(16 + 50, 14 + 20); // Click [Free] button (seed = 1)
     mHb.click(16 + 150, 14 + 20); // Click [Solve] button -> Solve FreeCell #1 (WINNABLE)

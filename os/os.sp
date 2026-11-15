@@ -238,8 +238,11 @@ void handle_mouse_down(int mx, int my) {
   if (g_launcher_open == 1) {
     g_launcher_open = 0;
     if (mx >= 2 && mx < 106 && my >= 14 && my < 183) {
-      int item = (my - 15) / 10 + 1;
-      if (my >= 155) item = 16 + (my - 155) / 7;
+      // KEHAI REAL-HW FIX (2026-11-15): litem() draws rows 9 px apart from y=15;
+      // the old hit math assumed 10 px rows, so clicks drifted onto the wrong app.
+      int item = (my - 15) / 9 + 1;
+      if (item > 18) item = 18;
+      if (item >= 15) item = item + 1; // app ids skip 15: Notes=16 .. About=19
       open_app_by_id(item);
       return;
     }
@@ -322,7 +325,7 @@ void boot_splash() {
   hal_yield();
 
   int t0 = hal_time();
-  while ((hal_time() - t0) < 1500) {
+  while ((hal_time() - t0) < 3141) { // pi seconds, a little easter egg
     int kev = hal_key();
     if (kev != 0) {
       int pressed = (kev >> 16) & 1;

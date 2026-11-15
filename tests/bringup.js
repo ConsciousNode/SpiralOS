@@ -262,7 +262,7 @@ function runContainmentOnTabComp(img, label) {
 
     // Open app via Launcher menu
     clickTabComp(cpu, 24, 6);
-    clickTabComp(cpu, 40, 16 + (appId - 1) * 10 + 4);
+    clickTabComp(cpu, 40, 15 + (appId - 1) * 9 + 4);
     cpu.setMouseState(160, 192, 0);
     stepTabCompFrames(cpu, 2);
 
@@ -351,7 +351,7 @@ function runContainmentOnHummingbird(img, label) {
 
     // Open app via Launcher menu
     clickHummingbird(pc, 24, 6);
-    clickHummingbird(pc, 40, 16 + (appId - 1) * 10 + 4);
+    clickHummingbird(pc, 40, 15 + (appId - 1) * 9 + 4);
     moveMouseHummingbird(pc, 160, 192, 0);
     stepHummingbirdFrames(pc, 1);
 
