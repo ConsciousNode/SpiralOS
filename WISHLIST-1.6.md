@@ -37,3 +37,16 @@ Facts below were checked against the 1.4 source (`TRITON-CORE.md` §3, `core/cor
 
 - **Timer test reads the clock properly.** The fast-CPU vs CMOS RTC test aligns its start and stop to a seconds rollover, and the test script prints the table itself.
 - **Dropped timer interrupts.** Investigate the 24 ticks missing in the 4× run, unless the final 1.5 delivery explains them.
+
+## Later: the App Shelf (after loadable apps exist)
+
+Kham's take (2026-11-16): the shelf answers system bloat. Every app can live on the shelf without anyone having it preinstalled. Install what you want, delete what you don't.
+
+**The idea.**
+- A StudioNet service lists the available `.spir` apps.
+- Any SpiralOS machine can browse the list and download an app, then run it on any of the three architectures.
+
+**Needs.**
+- Each listing carries a SHA-256 hash, checked before the app is installed. A tampered or half-sent app is refused.
+- An uninstall that really frees the disk space.
+- Works offline-first: installed apps never need the shelf to run.
