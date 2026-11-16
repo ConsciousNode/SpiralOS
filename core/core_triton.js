@@ -124,11 +124,7 @@ function getTritonSystem() {
     _cachedTritonSystem = ctx.TritonSystem;
     return _cachedTritonSystem;
   }
-  const t3CommonPath = path.resolve(__dirname, "../../triton/tests/t3-common.js");
-  const { loadHtmlModule } = require(t3CommonPath);
-  const { T } = loadHtmlModule("triton3.html");
-  _cachedTritonSystem = T;
-  return _cachedTritonSystem;
+  throw new Error("Missing required in-repo Triton machine host: " + localTritonHtml);
 }
 
 // Physical memory constants in Triton 3
@@ -153,6 +149,7 @@ const VAR_QUANTUM       = 100; // 1 tryte: instruction quantum countdown (256..0
 const VAR_HAS_DISK      = 101; // 1 tryte: 1 if booted from Triton disk image, 0 if standalone test
 const VAR_INITIALIZED   = 102; // 1 tryte: 1 once bitwise lookup tables are initialized
 const VAR_HAS_SNET      = 103; // 1 tryte: 1 if StudioNet NIC detected on Port 22
+const VAR_KEY_MODS      = 104; // 1 tryte: held modifier mask (1=Shift, 2=Ctrl, 4=Alt)
 const VAR_LOCAL_NODE    = 105; // 3 trytes: StudioNet station node ID
 const VAR_NET_TX_CNT    = 108; // 3 trytes: StudioNet TX frame count
 const VAR_NET_RX_CNT    = 111; // 3 trytes: StudioNet RX frame count
@@ -582,6 +579,7 @@ function buildTritonCore(options = {}) {
   // Entry point for warm VM reboot (SYS 11)
   label("vm_warm_boot");
   emit("LI R0, #0");
+  emit(`ST R0, R0, #${VAR_KEY_MODS}`);
   emit("MTSPR R0, #2"); // disable interrupts during init
   emit(`LT R1, R0, #${VAR_HAS_DISK}`);
   emit("JZX warm_boot_skip_disk");
@@ -1331,10 +1329,27 @@ function buildTritonCore(options = {}) {
   label("sar_done");
   emit("JMP vm_loop");
 
-  // 0x20: CMP (sub-opcode cc = [R8-4] & 7)
+  // 0x20: CMP (a==0: stack rhs, cc=[R8-4]&7; a!=0: imm16 rhs, cc=a&7)
   label("op_20_cmp");
+  emit("LT R4, R8, #-2");
+  emit("CMPI R4, #0");
+  emit("JNZX cmp_imm16");
   emit("SUBI R7, R7, #4");
   emit("LT R4, R8, #-4");
+  emit("JMPX cmp_do");
+  label("cmp_imm16");
+  emit("LT R0, R8, #-4");
+  emit("LT R1, R8, #-3");
+  emit("ST R0, R7, #0");
+  emit("ST R1, R7, #1");
+  emit("LI R2, #0");
+  emit("CMPI R1, #128");
+  emit("JNX cmp_imm_pos");
+  emit("LI R2, #255");
+  label("cmp_imm_pos");
+  emit("ST R2, R7, #2");
+  emit("ST R2, R7, #3");
+  label("cmp_do");
   emit("LI R3, #8");
   emit("MOD R4, R4, R3"); // R4 = cc (0..7)
   emit("MULI R4, R4, #3");
@@ -1455,10 +1470,24 @@ function buildTritonCore(options = {}) {
   emitImm27(0, TRITON_VM_BASE);
   emit("SUB R1, R6, R0");            // saved VM_FP
   emitStoreU32(1, 4, 4, 2, 3);
+  emit("LT R1, R8, #-2");
+  emit("CMPI R1, #128");
+  emit("JNX call_no_drop");
+  emit("LI R2, #128");
+  emit("ST R2, R4, #7");
+  emit("SUBI R1, R1, #128");
+  label("call_no_drop");
   emit("ADDI R4, R4, #8");
   emit("LI R0, #0");
   emit(`SW R4, R0, #${VAR_EA_CSP}`);
-  emitJumpToAddr24();
+  emit("MULI R1, R1, #256");
+  emit("LT R0, R8, #-3");
+  emit("ADD R1, R1, R0");
+  emit("MULI R1, R1, #256");
+  emit("LT R0, R8, #-4");
+  emit("ADD R1, R1, R0");
+  emitImm27(8, TRITON_VM_BASE);
+  emit("ADD R8, R8, R1");
   emit("JMP vm_loop");
 
   // 0x25: ENTER [nargs:8 at R8-2][nlocals:16 at R8-4..R8-3]
@@ -1472,17 +1501,39 @@ function buildTritonCore(options = {}) {
 
   // 0x26: RET
   label("op_26_ret");
-  // Copy return value at [R7 - 4 .. R7 - 1] to [R6 + 0 .. R6 + 3], set R7 = R6 + 4
+  emit("LT R2, R8, #-2");
+  emit("CMPI R2, #0");
+  emit("JZX ret_from_stk");
+  emit("LT R0, R8, #-4");
+  emit("LT R1, R8, #-3");
+  emit("ST R0, R6, #0");
+  emit("ST R1, R6, #1");
+  emit("LI R2, #0");
+  emit("CMPI R1, #128");
+  emit("JNX ret_imm_pos");
+  emit("LI R2, #255");
+  label("ret_imm_pos");
+  emit("ST R2, R6, #2");
+  emit("ST R2, R6, #3");
+  emit("JMPX ret_pop_csp");
+  label("ret_from_stk");
   emit("LW R0, R7, #-4");
   emit("LT R1, R7, #-1");
   emit("SW R0, R6, #0");
   emit("ST R1, R6, #3");
+  label("ret_pop_csp");
   emit("ADDI R7, R6, #4");
   // Pop (VM_PC, VM_FP) from EA_CSP
   emit("LI R0, #0");
   emit(`LW R4, R0, #${VAR_EA_CSP}`);
   emit("SUBI R4, R4, #8");
   emit(`SW R4, R0, #${VAR_EA_CSP}`);
+  emit("LT R1, R4, #7");
+  emit("ST R0, R4, #7");
+  emit("CMPI R1, #0");
+  emit("JZX ret_keep_val");
+  emit("SUBI R7, R7, #4");
+  label("ret_keep_val");
   emitImm27(0, TRITON_VM_BASE);
   emitLoadU32(8, 4, 0, 1);
   emit("ADD R8, R8, R0");
@@ -1699,6 +1750,43 @@ function buildTritonCore(options = {}) {
   emit("JNPX key_poll_empty");
   emit("IN R2, #11"); // KBD_DATA
   emit("IN R3, #12"); // KBD_TYPE (0 = down, 1 = up)
+  emit("CMPI R2, #0");
+  emit("JNNX key_pos_ok");
+  emitImm27(4, 19683);
+  emit("ADD R2, R2, R4");
+  label("key_pos_ok");
+  // Check modifier keys: Shift (16 or 4096 -> 1), Ctrl (17 or 4352 -> 2), Alt (18 or 4608 -> 4)
+  emit("LI R1, #1");
+  emit("CMPI R2, #16");   emit("JZX key_is_mod");
+  emit("CMPI R2, #4096"); emit("JZX key_is_mod");
+  emit("LI R1, #2");
+  emit("CMPI R2, #17");   emit("JZX key_is_mod");
+  emit("CMPI R2, #4352"); emit("JZX key_is_mod");
+  emit("LI R1, #4");
+  emit("CMPI R2, #18");   emit("JZX key_is_mod");
+  emit("CMPI R2, #4608"); emit("JZX key_is_mod");
+  emit("JMPX key_not_mod");
+  label("key_is_mod");
+  emit("LI R0, #0");
+  emit(`LT R4, R0, #${VAR_KEY_MODS}`);
+  emit("MULI R4, R4, #16");
+  emitImm27(2, TAB_BASE);
+  emit("ADD R4, R4, R2");
+  emit("CMPI R3, #0");
+  emit("JNZX key_mod_up");
+  emit("ADD R4, R4, R1");
+  emit(`LT R4, R4, #${OFF_OR_LO}`);
+  emit(`ST R4, R0, #${VAR_KEY_MODS}`);
+  emit("JMPX key_poll_lp");
+  label("key_mod_up");
+  emit("LI R2, #7");
+  emit("SUB R1, R2, R1");
+  emit("ADD R4, R4, R1");
+  emit(`LT R4, R4, #${OFF_AND_LO}`);
+  emit(`ST R4, R0, #${VAR_KEY_MODS}`);
+  emit("JMPX key_poll_lp");
+  label("key_not_mod");
+  emit("CMPI R3, #0");
   emit("JNZX key_poll_lp"); // skip key-up events
   emit("CMPI R2, #10");
   emit("JNZX key_not_lf");
@@ -1717,7 +1805,12 @@ function buildTritonCore(options = {}) {
   emit("MULI R3, R3, #256");
   emit("ADD R2, R2, R3");
   label("key_already_packed");
-  emitImm27(0, 0x01010000);
+  emit("LI R0, #0");
+  emit(`LT R4, R0, #${VAR_KEY_MODS}`);
+  emitImm27(0, 16777216);
+  emit("MUL R0, R4, R0");
+  emitImm27(1, 0x00010000);
+  emit("ADD R0, R0, R1");
   emit("ADD R0, R0, R2");
   emit("JMP sys_push_r0");
   label("key_poll_empty");

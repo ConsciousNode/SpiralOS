@@ -1,0 +1,4 @@
+=== SpiralOS Determinism & Emulator Regression Suite (tests/determinism.js) ===
+  [PASS] 1. TabComp Determinism: Run 1 == Run 2 bit-identical (VM inst=436110, VRAM SHA-256=7be76c0dbe0f98560ca9f34b...)
+  [PASS] 2. Hummingbird Determinism: Run 1 == Run 2 bit-identical (x86 inst=320300000, LFB SHA-256=bf5941ed742455d009ea9be0...)
+  [PASS] 3. Existing TabComp Regression Suite: 19/19 passed

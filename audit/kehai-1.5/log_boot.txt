@@ -1,0 +1,15 @@
+=== SpiralOS Dual-Machine Boot Suite (tests/boot.js) ===
+  [TabComp TC-32] Booted to Desktop in 79 ms:
+    - Native TC-32 Instructions : 9,831,067
+    - Spiral VM Instructions    : 181,007
+    - Frames Presented          : 3
+    - Open Windows              : 2 (Title Bar Color: 68)
+    - Saved Screenshot          : screenshots/tabcomp_desktop.png (3812 bytes, 320x200)
+  [Hummingbird i586] Booted to Desktop in 8167 ms:
+    - Native x86 Instructions   : 150,000,000 (150,000,000 cycles)
+    - Spiral VM Instructions    : 3,985,972
+    - Frames Presented          : 1 (VBE 640x480x32)
+    - Open Windows              : 2 (Title Bar Color: 68)
+    - Milestones Reached        : boot_sector (@13 inst), protected_mode_paging (@3,617 inst), desktop_drawn (@1,900,545 inst), apps_work (@1,900,545 inst), mouse_moved (@1,900,545 inst)
+    - Saved Screenshot          : screenshots/hummingbird_desktop.png (6578 bytes, 640x480)
+  [PASS] Both machines booted unchanged spiralos.img to desktop (47381/64000 non-zero pixels)!

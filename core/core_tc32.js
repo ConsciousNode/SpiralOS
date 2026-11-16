@@ -148,6 +148,8 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   emitImm32(11, 0x00100000);  // R11 = VM_FP = 0x00100000
   emitImm32(12, 0x00170000);  // R12 = VM_CSP = 0x00170000
   emitImm32(13, 0);           // R13 = VM_ICNT = 0
+  emitImm32(1, 0x000DF408);
+  emitI(0x23, 13, 1, 0);
 
   emitImm32(1, 0x002FFD1C);
   emitImm32(2, 1);
@@ -572,11 +574,23 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   label("op_1f_sar"); emitBinOp(0x11);
 
   label("op_20_cmp");
+  emitI(0x18, 5, 4, 16);
+  emitI(0x14, 5, 5, 0xFF);
+  emitI(0x1B, 0, 5, 0);
+  emitJ(0x28, "cmp_imm16");
   emitI(0x13, 10, 10, 4);
   emitR(0x05, 2, 8, 10);
   emitI(0x20, 1, 2, -4);
   emitI(0x20, 3, 2, 0);
-  emitI(0x14, 5, 4, 0x07);
+  emitI(0x01, 5, 4, 0);
+  emitJ(0x26, "cmp_do");
+  label("cmp_imm16");
+  emitR(0x05, 2, 8, 10);
+  emitI(0x20, 1, 2, -4);
+  emitI(0x17, 3, 4, 16);
+  emitI(0x19, 3, 3, 16);
+  label("cmp_do");
+  emitI(0x14, 5, 5, 0x07);
   emitAddrLabel(6, "cmp_table");
   emitI(0x17, 5, 5, 2);
   emitR(0x05, 6, 6, 5);
@@ -621,9 +635,12 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   label("op_24_call");
   emitR(0x05, 1, 8, 12);
   emitI(0x23, 9, 1, 0);
-  emitI(0x23, 11, 1, 4);
+  emitImm32(2, 0x00800000);
+  emitR(0x0C, 2, 4, 2);
+  emitR(0x0D, 2, 11, 2);
+  emitI(0x23, 2, 1, 4);
   emitI(0x12, 12, 12, 8);
-  emitImm32(1, 0x00FFFFFF);
+  emitImm32(1, 0x007FFFFF);
   emitR(0x0C, 9, 4, 1);
   emitJ(0x26, "vm_loop");
 
@@ -640,6 +657,13 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   label("op_26_ret");
   emitR(0x05, 2, 8, 10);
   emitI(0x20, 1, 2, -4);
+  emitI(0x18, 3, 4, 16);
+  emitI(0x14, 3, 3, 0xFF);
+  emitI(0x1B, 0, 3, 0);
+  emitJ(0x27, "ret_from_stk");
+  emitI(0x17, 1, 4, 16);
+  emitI(0x19, 1, 1, 16);
+  label("ret_from_stk");
   emitI(0x01, 10, 11, 0);
   emitR(0x05, 2, 8, 10);
   emitI(0x23, 1, 2, 0);
@@ -648,6 +672,11 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   emitR(0x05, 2, 8, 12);
   emitI(0x20, 9, 2, 0);
   emitI(0x20, 11, 2, 4);
+  emitI(0x18, 3, 11, 21);
+  emitI(0x14, 3, 3, 4);
+  emitR(0x06, 10, 10, 3);
+  emitImm32(3, 0x007FFFFF);
+  emitR(0x0C, 11, 11, 3);
   emitJ(0x26, "vm_loop");
 
   // ==========================================================================
@@ -742,6 +771,53 @@ function buildTC32Core(customBanner = "SpiralOS 1.2") {
   emitImm32(0, 0x000DF400);
   emitImm32(1, 0x000DF404);
   emitSys(27);
+  emitI(0x1B, 0, 0, 0);
+  emitJ(0x27, "sys_push_r0");
+  emitImm32(1, 0x000DF400);
+  emitI(0x20, 2, 1, 0);
+  emitI(0x20, 3, 1, 4);
+  emitI(0x20, 4, 1, 8);
+  emitI(0x18, 5, 3, 8);
+  emitI(0x14, 5, 5, 0xFF);
+  emitI(0x13, 5, 5, 16);
+  emitI(0x1B, 0, 5, 0);
+  emitJ(0x29, "key_not_mod");
+  emitI(0x1B, 0, 5, 2);
+  emitJ(0x2C, "key_not_mod");
+  emitImm32(6, 1);
+  emitR(0x0F, 6, 6, 5);
+  emitI(0x1B, 0, 2, 0);
+  emitJ(0x27, "key_mod_up");
+  emitR(0x0D, 4, 4, 6);
+  emitI(0x23, 4, 1, 8);
+  emitJ(0x26, "sys_03_key");
+  label("key_mod_up");
+  emitImm32(5, 7);
+  emitR(0x06, 6, 5, 6);
+  emitR(0x0C, 4, 4, 6);
+  emitI(0x23, 4, 1, 8);
+  emitJ(0x26, "sys_03_key");
+  label("key_not_mod");
+  emitI(0x1B, 0, 2, 0);
+  emitJ(0x27, "sys_03_key");
+  emitI(0x18, 5, 3, 16);
+  emitI(0x14, 5, 5, 0xFF);
+  emitR(0x0D, 4, 4, 5);
+  emitI(0x14, 0, 3, 0xFFFF);
+  emitI(0x14, 5, 4, 1);
+  emitI(0x1B, 0, 5, 0);
+  emitJ(0x27, "key_no_upcase");
+  emitI(0x14, 5, 0, 0xFF);
+  emitI(0x1B, 0, 5, 97);
+  emitJ(0x29, "key_no_upcase");
+  emitI(0x1B, 0, 5, 122);
+  emitJ(0x2C, "key_no_upcase");
+  emitI(0x13, 0, 0, 32);
+  label("key_no_upcase");
+  emitImm32(5, 0x00010000);
+  emitR(0x0D, 0, 0, 5);
+  emitI(0x17, 4, 4, 24);
+  emitR(0x0D, 0, 0, 4);
   emitJ(0x26, "sys_push_r0");
 
   label("sys_04_mouse");

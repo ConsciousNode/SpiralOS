@@ -72,6 +72,7 @@ void wm_focus(int wid) {
     }
     win_zorder[g_win_count - 1] = wid;
   }
+  if (g_focused_win != wid) g_focus_ctl = 0;
   g_focused_win = wid;
   w32(VMRAM_STATUS + 0x18, win_app[wid]);
 }
@@ -100,6 +101,7 @@ int wm_open(int app_id, int x, int y, int w, int h, int title_str) {
   win_title[wid] = title_str;
   win_zorder[g_win_count] = wid;
   g_win_count = g_win_count + 1;
+  if (app_id >= 0 && app_id < 16) app_tick_last_ms[app_id] = hal_time();
   task_spawn(app_id, wid);
   wm_focus(wid);
   w32(VMRAM_STATUS + 0x14, g_win_count);
@@ -182,4 +184,20 @@ void wm_draw_window_frame(int wid, int is_focused) {
 
   // Bottom-right resize grip corner
   hal_rect(x + w - 5, y + h - 5, 4, 4, thm_accent);
+}
+
+int g_viewer_idx;
+int g_paint_dirty;
+
+int wm_hit_win(int mx, int my) {
+  for (int zi = g_win_count - 1; zi >= 0; zi = zi - 1) {
+    int wid = win_zorder[zi];
+    if (wid >= 0 && win_used[wid] == 1 && win_min[wid] == 0) {
+      if (mx >= win_x[wid] && mx < win_x[wid] + win_w[wid] && my >= win_y[wid] && my < win_y[wid] + win_h[wid]) {
+        wm_focus(wid);
+        return wid;
+      }
+    }
+  }
+  return -1;
 }

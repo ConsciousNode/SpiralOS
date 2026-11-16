@@ -207,7 +207,7 @@ function rasterizeCnswMark(svgPath, width = 80, height = 80) {
 }
 
 if (require.main === module) {
-  const svgPath = path.resolve(__dirname, "../../cnsw-mark.svg");
+  const svgPath = path.resolve(__dirname, "../delivery-1.4/cnsw-mark.svg");
   const bmp = rasterizeCnswMark(svgPath, 80, 80);
   let nonZero = 0;
   let bright = 0;

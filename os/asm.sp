@@ -10,10 +10,10 @@
 // Both produce binaries 100% byte-identical to the stage-0 JS core builders.
 // ============================================================================
 
-const ASM_LBL_TAB   = 0x080000; // 256 entries * 36B: [name:32][addr:4]
-const ASM_FIX_TAB   = 0x083000; // 512 entries * 48B: [name:32][pos:4][type:4][op:4][rd:4]
-const ASM_TOK_BUF   = 0x089000; // 128B token scratch
-const ASM_WORK_BUF  = 0x0D0000; // 16 KB output machine code buffer
+const ASM_LBL_TAB   = 0x025400; // 256 entries * 36B: [name:32][addr:4]
+const ASM_FIX_TAB   = 0x027800; // 512 entries * 48B: [name:32][pos:4][type:4][op:4][rd:4]
+const ASM_TOK_BUF   = 0x02D800; // 128B token scratch
+const ASM_WORK_BUF  = 0x040000; // 16 KB output machine code buffer
 
 int g_asm_tc32_bytes;
 int g_asm_x86_bytes;
@@ -127,106 +127,90 @@ void asm_emit32(int w) {
   g_asm_out_len = g_asm_out_len + 4;
 }
 
-int asm_assemble_tc32() {
-  int fidx = fs_find("/src/core_tc32.asm");
-  if (fidx < 0) return -1;
-  int src = fs_entry_data_ptr(fidx);
-  int slen = fs_entry_size(fidx);
+void asm_emit_str16(int src, int lp, int line_end) {
+  while (lp < line_end && r8(src + lp) != 34) lp = lp + 1;
+  if (lp < line_end) lp = lp + 1;
+  hal_memset(ASM_WORK_BUF + g_asm_out_len, 0, 16);
+  int bi = 0;
+  while (lp < line_end && r8(src + lp) != 34 && bi < 15) {
+    w8(ASM_WORK_BUF + g_asm_out_len + bi, r8(src + lp));
+    lp = lp + 1; bi = bi + 1;
+  }
+  g_asm_out_len = g_asm_out_len + 16;
+}
 
+void asm_read_ops(int src, int lp, int line_end) {
+  for (int i = 1; i <= 3; i++) {
+    lp = asm_read_word(src, lp, line_end, ASM_TOK_BUF + i * 32);
+  }
+}
+
+int asm_init_pass1(int path_str) {
+  int fidx = fs_find(path_str);
+  if (fidx < 0) return -1;
   g_asm_lbl_cnt = 0;
   g_asm_fix_cnt = 0;
   g_asm_out_len = 0;
   hal_memset(ASM_WORK_BUF, 0, 16384);
+  return fidx;
+}
+
+int asm_assemble_tc32() {
+  int fidx = asm_init_pass1("/src/core_tc32.asm");
+  if (fidx < 0) return -1;
+  int src = fs_entry_data_ptr(fidx);
+  int slen = fs_entry_size(fidx);
+  int tok1 = ASM_TOK_BUF;
+  int tok2 = ASM_TOK_BUF + 32;
+  int tok3 = ASM_TOK_BUF + 64;
+  int tok4 = ASM_TOK_BUF + 96;
 
   int p = 0;
   while (p < slen) {
     int line_end = p;
     while (line_end < slen && r8(src + line_end) != 10) line_end = line_end + 1;
-
     int lp = asm_skip_ws(src, p, line_end);
     if (lp < line_end && r8(src + lp) != 59) {
-      int tok1 = ASM_TOK_BUF;
-      int tok2 = ASM_TOK_BUF + 32;
-      int tok3 = ASM_TOK_BUF + 64;
-      int tok4 = ASM_TOK_BUF + 96;
       lp = asm_read_word(src, lp, line_end, tok1);
       int tlen = hal_strlen(tok1);
-
       if (tlen > 1 && r8(tok1 + tlen - 1) == 58) {
         w8(tok1 + tlen - 1, 0);
         asm_add_label(tok1, g_asm_out_len);
-      } else if (hal_strcmp(tok1, ".dd")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_add_fixup(g_asm_out_len, tok2, 3, 0, 0);
-        asm_emit32(0);
       } else if (hal_strcmp(tok1, ".hex")) {
         lp = asm_skip_ws(src, lp, line_end);
-        int w_acc = 0;
-        int b_idx = 0;
-        while (lp + 1 < line_end) {
-          int h1 = r8(src + lp);
-          int h2 = r8(src + lp + 1);
-          if (cc_is_hex(h1) == 0 || cc_is_hex(h2) == 0) break;
-          int bv = (cc_hex_val(h1) << 4) | cc_hex_val(h2);
+        int w_acc = 0; int b_idx = 0;
+        while (lp + 1 < line_end && cc_is_hex(r8(src + lp)) == 1 && cc_is_hex(r8(src + lp + 1)) == 1) {
+          int bv = (cc_hex_val(r8(src + lp)) << 4) | cc_hex_val(r8(src + lp + 1));
           w_acc = w_acc | (bv << (b_idx * 8));
           b_idx = b_idx + 1;
-          if (b_idx == 4) {
-            asm_emit32(w_acc);
-            w_acc = 0;
-            b_idx = 0;
-          }
+          if (b_idx == 4) { asm_emit32(w_acc); w_acc = 0; b_idx = 0; }
           lp = lp + 2;
         }
       } else if (hal_strcmp(tok1, ".ascii")) {
-        while (lp < line_end && r8(src + lp) != 34) lp = lp + 1;
-        if (lp < line_end && r8(src + lp) == 34) lp = lp + 1;
-        for (int b = 0; b < 16; b++) w8(ASM_WORK_BUF + g_asm_out_len + b, 0);
-        int bi = 0;
-        while (lp < line_end && r8(src + lp) != 34 && bi < 15) {
-          w8(ASM_WORK_BUF + g_asm_out_len + bi, r8(src + lp));
-          lp = lp + 1;
-          bi = bi + 1;
-        }
-        g_asm_out_len = g_asm_out_len + 16;
-      } else if (hal_strcmp(tok1, "LA")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        int rd = asm_parse_tc_reg(tok2);
-        asm_add_fixup(g_asm_out_len, tok3, 2, 0, rd);
-        asm_emit32((0x03 << 24) | ((rd & 15) << 20));
-        asm_emit32((0x04 << 24) | ((rd & 15) << 20));
-      } else if (hal_strcmp(tok1, "SYS")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        int snum = asm_parse_int(tok2);
-        asm_emit32((0x2F << 24) | (snum & 0xFFFF));
+        asm_emit_str16(src, lp, line_end);
       } else {
+        asm_read_ops(src, lp, line_end);
+        int rd = asm_parse_tc_reg(tok2);
+        int ra = asm_parse_tc_reg(tok3);
         int jop = asm_tc32_j_op(tok1);
-        if (jop >= 0) {
-          lp = asm_read_word(src, lp, line_end, tok2);
+        int rop = asm_tc32_r_op(tok1);
+        int iop = asm_tc32_i_op(tok1);
+        if (hal_strcmp(tok1, ".dd")) {
+          asm_add_fixup(g_asm_out_len, tok2, 3, 0, 0);
+          asm_emit32(0);
+        } else if (hal_strcmp(tok1, "LA")) {
+          asm_add_fixup(g_asm_out_len, tok3, 2, 0, rd);
+          asm_emit32((0x03 << 24) | ((rd & 15) << 20));
+          asm_emit32((0x04 << 24) | ((rd & 15) << 20));
+        } else if (hal_strcmp(tok1, "SYS")) {
+          asm_emit32((0x2F << 24) | (asm_parse_int(tok2) & 0xFFFF));
+        } else if (jop >= 0) {
           asm_add_fixup(g_asm_out_len, tok2, 1, jop, 0);
           asm_emit32((jop & 0x3F) << 24);
-        } else {
-          int rop = asm_tc32_r_op(tok1);
-          if (rop >= 0) {
-            lp = asm_read_word(src, lp, line_end, tok2);
-            lp = asm_read_word(src, lp, line_end, tok3);
-            lp = asm_read_word(src, lp, line_end, tok4);
-            int rd = asm_parse_tc_reg(tok2);
-            int ra = asm_parse_tc_reg(tok3);
-            int rb = asm_parse_tc_reg(tok4);
-            asm_emit32(((rop & 0x3F) << 24) | ((rd & 15) << 20) | ((ra & 15) << 16) | ((rb & 15) << 12));
-          } else {
-            int iop = asm_tc32_i_op(tok1);
-            if (iop >= 0) {
-              lp = asm_read_word(src, lp, line_end, tok2);
-              lp = asm_read_word(src, lp, line_end, tok3);
-              lp = asm_read_word(src, lp, line_end, tok4);
-              int rd = asm_parse_tc_reg(tok2);
-              int ra = asm_parse_tc_reg(tok3);
-              int imm = asm_parse_int(tok4);
-              asm_emit32(((iop & 0x3F) << 24) | ((rd & 15) << 20) | ((ra & 15) << 16) | (imm & 0xFFFF));
-            }
-          }
+        } else if (rop >= 0) {
+          asm_emit32(((rop & 0x3F) << 24) | ((rd & 15) << 20) | ((ra & 15) << 16) | ((asm_parse_tc_reg(tok4) & 15) << 12));
+        } else if (iop >= 0) {
+          asm_emit32(((iop & 0x3F) << 24) | ((rd & 15) << 20) | ((ra & 15) << 16) | (asm_parse_int(tok4) & 0xFFFF));
         }
       }
     }
@@ -238,16 +222,12 @@ int asm_assemble_tc32() {
     int target = asm_find_label(fx);
     int fpos = r32(fx + 32);
     int ftype = r32(fx + 36);
-    int fop = r32(fx + 40);
-    int frd = r32(fx + 44);
-    if (ftype == 1) {
-      w32(ASM_WORK_BUF + fpos, ((fop & 0x3F) << 24) | (target & 0x00FFFFFF));
-    } else if (ftype == 2) {
-      w32(ASM_WORK_BUF + fpos, (0x03 << 24) | ((frd & 15) << 20) | (target & 0xFFFF));
-      w32(ASM_WORK_BUF + fpos + 4, (0x04 << 24) | ((frd & 15) << 20) | ((target >>> 16) & 0xFFFF));
-    } else if (ftype == 3) {
-      w32(ASM_WORK_BUF + fpos, target);
-    }
+    int frd = (r32(fx + 44) & 15) << 20;
+    if (ftype == 1) w32(ASM_WORK_BUF + fpos, ((r32(fx + 40) & 0x3F) << 24) | (target & 0x00FFFFFF));
+    else if (ftype == 2) {
+      w32(ASM_WORK_BUF + fpos, (0x03 << 24) | frd | (target & 0xFFFF));
+      w32(ASM_WORK_BUF + fpos + 4, (0x04 << 24) | frd | ((target >>> 16) & 0xFFFF));
+    } else if (ftype == 3) w32(ASM_WORK_BUF + fpos, target);
   }
 
   hal_memset(VMRAM_IMG_BASE + 0x4000, 0, 16384);
@@ -255,7 +235,6 @@ int asm_assemble_tc32() {
   w32(VMRAM_IMG_BASE + 0x4004, g_asm_out_len);
   hal_memcpy(VMRAM_IMG_BASE + 0x4008, ASM_WORK_BUF, g_asm_out_len);
   hal_disk_sync(32, 32);
-
   g_asm_tc32_bytes = g_asm_out_len;
   return g_asm_out_len;
 }
@@ -272,30 +251,21 @@ int asm_parse_x86_reg(int s_ptr) {
 }
 
 void asm_x86_mem_disp(int reg_field, int base_reg, int disp) {
-  if (disp == 0 && base_reg != 5) {
-    asm_emit8(((reg_field & 7) << 3) | (base_reg & 7));
-    if (base_reg == 4) asm_emit8(0x24);
-  } else if (disp >= -128 && disp <= 127) {
-    asm_emit8(0x40 | ((reg_field & 7) << 3) | (base_reg & 7));
-    if (base_reg == 4) asm_emit8(0x24);
-    asm_emit8(disp & 0xFF);
-  } else {
-    asm_emit8(0x80 | ((reg_field & 7) << 3) | (base_reg & 7));
-    if (base_reg == 4) asm_emit8(0x24);
-    asm_emit32(disp);
-  }
+  int mod = 0x80;
+  if (disp == 0 && base_reg != 5) mod = 0;
+  else if (disp >= -128 && disp <= 127) mod = 0x40;
+  asm_emit8(mod | ((reg_field & 7) << 3) | (base_reg & 7));
+  if (base_reg == 4) asm_emit8(0x24);
+  if (mod == 0x40) asm_emit8(disp & 0xFF);
+  else if (mod == 0x80) asm_emit32(disp);
 }
 
 void asm_x86_alu_ri(int subop, int reg, int imm) {
-  if (imm >= -128 && imm <= 127) {
-    asm_emit8(0x83);
-    asm_emit8(0xC0 | ((subop & 7) << 3) | (reg & 7));
-    asm_emit8(imm & 0xFF);
-  } else {
-    asm_emit8(0x81);
-    asm_emit8(0xC0 | ((subop & 7) << 3) | (reg & 7));
-    asm_emit32(imm);
-  }
+  int is8 = (imm >= -128 && imm <= 127);
+  asm_emit8(0x81 + is8 * 2);
+  asm_emit8(0xC0 | ((subop & 7) << 3) | (reg & 7));
+  if (is8 == 1) asm_emit8(imm & 0xFF);
+  else asm_emit32(imm);
 }
 
 void asm_x86_shift_ri(int subop, int reg, int count) {
@@ -313,163 +283,81 @@ int asm_x86_rr_op(int m) {
 }
 
 int asm_assemble_x86() {
-  int fidx = fs_find("/src/core_x86.asm");
+  int fidx = asm_init_pass1("/src/core_x86.asm");
   if (fidx < 0) return -1;
   int src = fs_entry_data_ptr(fidx);
   int slen = fs_entry_size(fidx);
-
-  g_asm_lbl_cnt = 0;
-  g_asm_fix_cnt = 0;
-  g_asm_out_len = 0;
-  hal_memset(ASM_WORK_BUF, 0, 16384);
+  int tok1 = ASM_TOK_BUF;
+  int tok2 = ASM_TOK_BUF + 32;
+  int tok3 = ASM_TOK_BUF + 64;
+  int tok4 = ASM_TOK_BUF + 96;
 
   int base_addr = 0x7C00;
   int p = 0;
   while (p < slen) {
     int line_end = p;
     while (line_end < slen && r8(src + line_end) != 10) line_end = line_end + 1;
-
     int lp = asm_skip_ws(src, p, line_end);
     if (lp < line_end && r8(src + lp) != 59) {
-      int tok1 = ASM_TOK_BUF;
-      int tok2 = ASM_TOK_BUF + 32;
-      int tok3 = ASM_TOK_BUF + 64;
-      int tok4 = ASM_TOK_BUF + 96;
       lp = asm_read_word(src, lp, line_end, tok1);
       int tlen = hal_strlen(tok1);
-
       if (tlen > 1 && r8(tok1 + tlen - 1) == 58) {
         w8(tok1 + tlen - 1, 0);
         asm_add_label(tok1, base_addr + g_asm_out_len);
-      } else if (hal_strcmp(tok1, ".org")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        base_addr = asm_parse_int(tok2);
       } else if (hal_strcmp(tok1, ".hex")) {
         lp = asm_skip_ws(src, lp, line_end);
-        while (lp + 1 < line_end) {
-          int h1 = r8(src + lp);
-          int h2 = r8(src + lp + 1);
-          if (cc_is_hex(h1) == 0 || cc_is_hex(h2) == 0) break;
-          asm_emit8((cc_hex_val(h1) << 4) | cc_hex_val(h2));
+        while (lp + 1 < line_end && cc_is_hex(r8(src + lp)) == 1 && cc_is_hex(r8(src + lp + 1)) == 1) {
+          asm_emit8((cc_hex_val(r8(src + lp)) << 4) | cc_hex_val(r8(src + lp + 1)));
           lp = lp + 2;
         }
       } else if (hal_strcmp(tok1, ".banner")) {
-        while (lp < line_end && r8(src + lp) != 34) lp = lp + 1;
-        if (lp < line_end && r8(src + lp) == 34) lp = lp + 1;
-        for (int b = 0; b < 16; b++) w8(ASM_WORK_BUF + g_asm_out_len + b, 0);
-        int bi = 0;
-        while (lp < line_end && r8(src + lp) != 34 && bi < 15) {
-          w8(ASM_WORK_BUF + g_asm_out_len + bi, r8(src + lp));
-          lp = lp + 1;
-          bi = bi + 1;
-        }
-        g_asm_out_len = g_asm_out_len + 16;
-      } else if (hal_strcmp(tok1, ".dd")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_add_fixup(g_asm_out_len, tok2, 1, 0, 0);
-        asm_emit32(0);
-      } else if (asm_find_tok(tok1, "cdq|ret|cld|cli|hlt", "99c3fcfaf4") >= 0) {
-        asm_emit8(asm_find_tok(tok1, "cdq|ret|cld|cli|hlt", "99c3fcfaf4"));
-      } else if (asm_find_tok(tok1, "rep_movsd|rep_movsb|rep_stosd|rep_stosb", "a5a4abaa") >= 0) {
-        asm_emit8(0xF3);
-        asm_emit8(asm_find_tok(tok1, "rep_movsd|rep_movsb|rep_stosd|rep_stosb", "a5a4abaa"));
-      } else if (hal_strcmp(tok1, "push")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_emit8(0x50 + asm_parse_x86_reg(tok2));
-      } else if (hal_strcmp(tok1, "pop")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_emit8(0x58 + asm_parse_x86_reg(tok2));
-      } else if (hal_strcmp(tok1, "jmp")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_emit8(0xE9);
-        asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0);
-        asm_emit32(0);
-      } else if (hal_strcmp(tok1, "call")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        asm_emit8(0xE8);
-        asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0);
-        asm_emit32(0);
-      } else if (hal_strcmp(tok1, "mov_ri")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_emit8(0xB8 + asm_parse_x86_reg(tok2));
-        asm_emit32(asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_rl")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_emit8(0xB8 + asm_parse_x86_reg(tok2));
-        asm_add_fixup(g_asm_out_len, tok3, 1, 0, 0);
-        asm_emit32(0);
-      } else if (asm_find_tok(tok1, "add_ri|sub_ri|and_ri|cmp_ri", "00050407") >= 0) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_alu_ri(asm_find_tok(tok1, "add_ri|sub_ri|and_ri|cmp_ri", "00050407"), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (asm_find_tok(tok1, "shl_ri|shr_ri|sar_ri", "040507") >= 0) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        asm_x86_shift_ri(asm_find_tok(tok1, "shl_ri|shr_ri|sar_ri", "040507"), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_rm")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        lp = asm_read_word(src, lp, line_end, tok4);
-        asm_emit8(0x8B);
-        asm_x86_mem_disp(asm_parse_x86_reg(tok2), asm_parse_x86_reg(tok3), asm_parse_int(tok4));
-      } else if (hal_strcmp(tok1, "mov_mr")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        lp = asm_read_word(src, lp, line_end, tok4);
-        asm_emit8(0x89);
-        asm_x86_mem_disp(asm_parse_x86_reg(tok4), asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-      } else if (hal_strcmp(tok1, "mov_mi")) {
-        lp = asm_read_word(src, lp, line_end, tok2);
-        lp = asm_read_word(src, lp, line_end, tok3);
-        lp = asm_read_word(src, lp, line_end, tok4);
-        asm_emit8(0xC7);
-        asm_x86_mem_disp(0, asm_parse_x86_reg(tok2), asm_parse_int(tok3));
-        asm_emit32(asm_parse_int(tok4));
+        asm_emit_str16(src, lp, line_end);
       } else {
+        asm_read_ops(src, lp, line_end);
+        int r2 = asm_parse_x86_reg(tok2);
+        int r3 = asm_parse_x86_reg(tok3);
+        int i3 = asm_parse_int(tok3);
+        int i4 = asm_parse_int(tok4);
+        int op1 = asm_find_tok(tok1, "cdq|ret|cld|cli|hlt", "99c3fcfaf4");
+        int op2 = asm_find_tok(tok1, "rep_movsd|rep_movsb|rep_stosd|rep_stosb", "a5a4abaa");
+        int alu = asm_find_tok(tok1, "add_ri|sub_ri|and_ri|cmp_ri", "00050407");
+        int shf = asm_find_tok(tok1, "shl_ri|shr_ri|sar_ri", "040507");
         int jcc = asm_x86_jcc_code(tok1);
-        if (jcc >= 0) {
-          lp = asm_read_word(src, lp, line_end, tok2);
-          asm_emit8(0x0F);
-          asm_emit8(jcc);
-          asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0);
-          asm_emit32(0);
-        } else {
-          int rrop = asm_x86_rr_op(tok1);
-          if (rrop >= 0) {
-            lp = asm_read_word(src, lp, line_end, tok2);
-            lp = asm_read_word(src, lp, line_end, tok3);
-            int dst = asm_parse_x86_reg(tok2);
-            int srg = asm_parse_x86_reg(tok3);
-            asm_emit8(rrop);
-            asm_emit8(0xC0 | ((srg & 7) << 3) | (dst & 7));
-          }
-        }
+        int rrop = asm_x86_rr_op(tok1);
+        if (hal_strcmp(tok1, ".org")) base_addr = asm_parse_int(tok2);
+        else if (hal_strcmp(tok1, ".dd")) { asm_add_fixup(g_asm_out_len, tok2, 1, 0, 0); asm_emit32(0); }
+        else if (op1 >= 0) asm_emit8(op1);
+        else if (op2 >= 0) { asm_emit8(0xF3); asm_emit8(op2); }
+        else if (hal_strcmp(tok1, "push")) asm_emit8(0x50 + r2);
+        else if (hal_strcmp(tok1, "pop")) asm_emit8(0x58 + r2);
+        else if (hal_strcmp(tok1, "jmp") || hal_strcmp(tok1, "call")) {
+          if (r8(tok1) == 106) asm_emit8(0xE9); else asm_emit8(0xE8);
+          asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0); asm_emit32(0);
+        } else if (hal_strcmp(tok1, "mov_ri")) { asm_emit8(0xB8 + r2); asm_emit32(i3); }
+        else if (hal_strcmp(tok1, "mov_rl")) { asm_emit8(0xB8 + r2); asm_add_fixup(g_asm_out_len, tok3, 1, 0, 0); asm_emit32(0); }
+        else if (alu >= 0) asm_x86_alu_ri(alu, r2, i3);
+        else if (shf >= 0) asm_x86_shift_ri(shf, r2, i3);
+        else if (hal_strcmp(tok1, "mov_rm")) { asm_emit8(0x8B); asm_x86_mem_disp(r2, r3, i4); }
+        else if (hal_strcmp(tok1, "mov_mr")) { asm_emit8(0x89); asm_x86_mem_disp(asm_parse_x86_reg(tok4), r2, i3); }
+        else if (hal_strcmp(tok1, "mov_mi")) { asm_emit8(0xC7); asm_x86_mem_disp(0, r2, i3); asm_emit32(i4); }
+        else if (jcc >= 0) { asm_emit8(0x0F); asm_emit8(jcc); asm_add_fixup(g_asm_out_len, tok2, 2, 0, 0); asm_emit32(0); }
+        else if (rrop >= 0) { asm_emit8(rrop); asm_emit8(0xC0 | ((r3 & 7) << 3) | (r2 & 7)); }
       }
     }
     p = line_end + 1;
   }
 
-  // Pass 2: Resolve ABS32 (type 1) and REL32 (type 2) Fixups
   for (int i = 0; i < g_asm_fix_cnt; i++) {
     int fx = ASM_FIX_TAB + i * 48;
     int target = asm_find_label(fx);
     int fpos = r32(fx + 32);
-    int ftype = r32(fx + 36);
-    if (ftype == 1) {
-      w32(ASM_WORK_BUF + fpos, target);
-    } else if (ftype == 2) {
-      int next_pc = base_addr + fpos + 4;
-      w32(ASM_WORK_BUF + fpos, target - next_pc);
-    }
+    if (r32(fx + 36) == 1) w32(ASM_WORK_BUF + fpos, target);
+    else w32(ASM_WORK_BUF + fpos, target - (base_addr + fpos + 4));
   }
 
-  // Write assembled x86 Core into Sectors 0..31 (VMRAM_IMG_BASE + 0x0000)
-  hal_memset(VMRAM_IMG_BASE + 0x0000, 0, 16384);
-  hal_memcpy(VMRAM_IMG_BASE + 0x0000, ASM_WORK_BUF, g_asm_out_len);
+  hal_memset(VMRAM_IMG_BASE, 0, 16384);
+  hal_memcpy(VMRAM_IMG_BASE, ASM_WORK_BUF, g_asm_out_len);
   hal_disk_sync(0, 32);
-
   g_asm_x86_bytes = g_asm_out_len;
   return g_asm_out_len;
 }

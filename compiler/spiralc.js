@@ -90,7 +90,7 @@ const OP_SYSCALL     = 0x27;
 
 const SPIR_MAGIC     = 0x52495053; // 'SPIR'
 const SPIR_STR_BASE  = 0x000020;
-const SPIR_CODE_BASE = 0x001580;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
+const SPIR_CODE_BASE = 0x001890;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
 const SPIR_MAX_SIZE  = 0x020000;   // 128 KB total SPIR image size
 
 function expandImports(entryPath, readFileTextFn) {
@@ -157,9 +157,15 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     if (codePos >= SPIR_CODE_BASE + 8) {
       const last1 = outDV.getUint32(codePos - 4, true);
       const last2 = outDV.getUint32(codePos - 8, true);
-      if (last1 === (OP_ADD << 24) && ((last2 >>> 24) & 0xFF) === OP_PUSH_I16) {
-        codePos -= 8;
-        return last2 & 0xFFFF;
+      if (((last2 >>> 24) & 0xFF) === OP_PUSH_I16) {
+        if (last1 === (OP_ADD << 24)) {
+          codePos -= 8;
+          return last2 & 0xFFFF;
+        }
+        if (last1 === (OP_SUB << 24) && (last2 & 0xFFFF) !== 0x8000) {
+          codePos -= 8;
+          return (0 - (last2 & 0xFFFF)) & 0xFFFF;
+        }
       }
     }
     return 0;
@@ -171,6 +177,10 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       const last2 = outDV.getUint32(codePos - 8, true);
       const op1 = (last1 >>> 24) & 0xFF;
       const op2 = (last2 >>> 24) & 0xFF;
+      if (op1 === OP_CALL) {
+        outDV.setUint32(codePos - 4, (last1 | 0x00800000) >>> 0, true);
+        return;
+      }
       if (last1 === (OP_PUSH_I16 << 24) && op2 >= OP_STORE8 && op2 <= OP_STORE32) {
         codePos -= 4;
         return;
@@ -185,6 +195,40 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   }
 
   function emitOp(op, a = 0, imm16 = 0) {
+    if (op === OP_RET && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
+      const rw = outDV.getUint32(codePos - 4, true);
+      if (((rw >>> 24) & 0xFF) === OP_PUSH_I16) {
+        outDV.setUint32(codePos - 4, ((OP_RET << 24) | 0x00010000 | (rw & 0xFFFF)) >>> 0, true);
+        return codePos - 4;
+      }
+    }
+    if (op === OP_CMP && a === 0 && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
+      const w1 = outDV.getUint32(codePos - 4, true);
+      if (((w1 >>> 24) & 0xFF) === OP_PUSH_I16) {
+        if (codePos >= SPIR_CODE_BASE + 8) {
+          const w2 = outDV.getUint32(codePos - 8, true);
+          if (((w2 >>> 24) & 0xFF) === OP_CMP) {
+            if ((w1 === ((OP_PUSH_I16 << 24) | 1) && imm16 === 0) || (w1 === (OP_PUSH_I16 << 24) && imm16 === 1)) {
+              codePos -= 4;
+              return codePos - 4;
+            }
+            if (w1 === (OP_PUSH_I16 << 24) && imm16 === 0) {
+              const wa = (w2 >>> 16) & 0xFF;
+              const cc = wa ? (wa & 7) : (w2 & 7);
+              const inv = cc < 2 ? (cc ^ 1) : (cc < 6 ? (7 - cc) : cc);
+              if (inv !== cc) {
+                const nw2 = wa ? ((OP_CMP << 24) | ((8 | inv) << 16) | (w2 & 0xFFFF)) : ((OP_CMP << 24) | inv);
+                outDV.setUint32(codePos - 8, nw2 >>> 0, true);
+                codePos -= 4;
+                return codePos - 4;
+              }
+            }
+          }
+        }
+        outDV.setUint32(codePos - 4, ((OP_CMP << 24) | ((8 | (imm16 & 7)) << 16) | (w1 & 0xFFFF)) >>> 0, true);
+        return codePos - 4;
+      }
+    }
     if ((op === OP_ADD || op === OP_SUB || op === OP_MUL || op === OP_SHL) && codePos >= SPIR_CODE_BASE + 8) {
       const w1 = outDV.getUint32(codePos - 4, true);
       if (((w1 >>> 24) & 0xFF) === OP_PUSH_I16) {
@@ -196,6 +240,12 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           codePos -= 8;
           const r = (op === OP_ADD) ? (c1 + c2) : (op === OP_SUB) ? (c1 - c2) : (op === OP_MUL) ? Math.imul(c1, c2) : (c1 << (c2 & 31));
           return emitPushConst(r | 0);
+        }
+        if ((op === OP_ADD || op === OP_SUB) && op2 === OP_ADDR_GLOBAL && (c2 & 3) === 0) {
+          const dSlot = (op === OP_ADD) ? (c2 >> 2) : -(c2 >> 2);
+          outDV.setUint32(codePos - 8, ((OP_ADDR_GLOBAL << 24) | (((w2 & 0xFFFF) + dSlot) & 0xFFFF)) >>> 0, true);
+          codePos -= 4;
+          return codePos - 4;
         }
         if ((op === OP_ADD || op === OP_SUB) && op2 === OP_PUSH_HI && codePos >= SPIR_CODE_BASE + 12) {
           const w3 = outDV.getUint32(codePos - 12, true);
@@ -211,13 +261,10 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   }
 
   function emitJump(op, addr24 = 0) {
-    if (op === OP_JZ && addr24 === 0 && codePos >= SPIR_CODE_BASE + 8 && lastPatchPos !== codePos) {
+    if ((op === OP_JZ || op === OP_JNZ) && addr24 === 0 && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
       const w1 = outDV.getUint32(codePos - 4, true);
-      const w2 = outDV.getUint32(codePos - 8, true);
-      if (w2 === (OP_PUSH_I16 << 24)) {
-        if (w1 === (OP_CMP << 24)) { codePos -= 8; op = OP_JNZ; }
-        else if (w1 === ((OP_CMP << 24) | 1)) { codePos -= 8; op = OP_JZ; }
-      }
+      if (w1 === (((OP_CMP << 24) | (8 << 16)) >>> 0)) { codePos -= 4; op = (op === OP_JZ) ? OP_JNZ : OP_JZ; }
+      else if (w1 === (((OP_CMP << 24) | (9 << 16)) >>> 0)) { codePos -= 4; }
     }
     return emitWord((((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF)) >>> 0);
   }
@@ -225,8 +272,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   function patchJump(instByteAddr, targetByteAddr) {
     lastPatchPos = targetByteAddr;
     const prev = outDV.getUint32(instByteAddr, true);
-    const op = (prev >>> 24) & 0xFF;
-    outDV.setUint32(instByteAddr, ((op << 24) | (targetByteAddr & 0x00FFFFFF)) >>> 0, true);
+    outDV.setUint32(instByteAddr, ((prev & 0xFF800000) | (targetByteAddr & 0x007FFFFF)) >>> 0, true);
   }
 
   function emitPushConst(val) {
@@ -235,6 +281,8 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       emitOp(OP_PUSH_I16, 0, v & 0xFFFF);
     } else if (v >= 0 && v <= 65535) {
       emitOp(OP_PUSH_U16, 0, v & 0xFFFF);
+    } else if ((v & 3) === 0 && v >= 0x020000 && v <= 0x05FFFC) {
+      emitOp(OP_ADDR_GLOBAL, 0, ((v - 0x020000) >> 2) & 0xFFFF);
     } else {
       emitOp(OP_PUSH_U16, 0, v & 0xFFFF);
       emitOp(OP_PUSH_HI, 0, (v >>> 16) & 0xFFFF);
@@ -540,6 +588,26 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   // Expression Parser
   function parseExpr() {
     return parseLor();
+  }
+  function parseCond(jList) {
+    parseBitOr();
+    if (tok === TK_LOR) {
+      const jTrueList = [];
+      while (tok === TK_LOR) {
+        nextToken();
+        jTrueList.push(emitJump(OP_JNZ, 0));
+        parseLand();
+      }
+      jList.push(emitJump(OP_JZ, 0));
+      for (const jt of jTrueList) patchJump(jt, codePos);
+      return;
+    }
+    while (tok === TK_LAND) {
+      nextToken();
+      jList.push(emitJump(OP_JZ, 0));
+      parseBitOr();
+    }
+    jList.push(emitJump(OP_JZ, 0));
   }
 
   function parseLor() {
@@ -936,20 +1004,20 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     if (tok === TK_IF) {
       nextToken();
       expect(40);
-      parseExpr();
+      const jList = [];
+      parseCond(jList);
       expect(41);
-      const jFalse = emitJump(OP_JZ, 0);
       parseStmt();
       if (tok === TK_ELSE) {
         nextToken();
         const prevOp = (outDV.getUint32(codePos - 4, true) >>> 24) & 0xFF;
         const noFall = (lastPatchPos !== codePos && (prevOp === OP_RET || prevOp === OP_JMP));
         const jEnd = noFall ? -1 : emitJump(OP_JMP, 0);
-        patchJump(jFalse, codePos);
+        for (const jf of jList) patchJump(jf, codePos);
         parseStmt();
         if (jEnd >= 0) patchJump(jEnd, codePos);
       } else {
-        patchJump(jFalse, codePos);
+        for (const jf of jList) patchJump(jf, codePos);
       }
       return;
     }
@@ -964,14 +1032,14 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       continueStack.push(cList);
 
       expect(40);
-      parseExpr();
+      const jList = [];
+      parseCond(jList);
       expect(41);
-      const jExit = emitJump(OP_JZ, 0);
       parseStmt();
       for (const cAddr of cList) patchJump(cAddr, loopStart);
       emitJump(OP_JMP, loopStart);
       const loopEnd = codePos;
-      patchJump(jExit, loopEnd);
+      for (const je of jList) patchJump(je, loopEnd);
       for (const bAddr of bList) patchJump(bAddr, loopEnd);
 
       breakStack.pop();
@@ -1002,10 +1070,9 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       }
 
       const condStart = codePos;
-      let jExit = -1;
+      const jExitList = [];
       if (tok !== 59) {
-        parseExpr();
-        jExit = emitJump(OP_JZ, 0);
+        parseCond(jExitList);
       }
       expect(59);
       const jBody = emitJump(OP_JMP, 0);
@@ -1032,7 +1099,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       emitJump(OP_JMP, stepStart);
 
       const loopEnd = codePos;
-      if (jExit >= 0) patchJump(jExit, loopEnd);
+      for (const je of jExitList) patchJump(je, loopEnd);
       for (const bAddr of bList) patchJump(bAddr, loopEnd);
 
       breakStack.pop();
@@ -1176,7 +1243,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         );
 
         // Fallback return 0 (omit if function already ended with OP_RET)
-        if (outDV.getUint32(codePos - 4, true) !== ((OP_RET << 24) >>> 0)) {
+        if (((outDV.getUint32(codePos - 4, true) >>> 24) & 0xFF) !== OP_RET) {
           emitPushConst(0);
           emitOp(OP_RET);
         }

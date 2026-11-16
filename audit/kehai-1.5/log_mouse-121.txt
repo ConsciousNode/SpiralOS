@@ -1,0 +1,8 @@
+=== SpiralOS 1.2.1 PS/2 Mouse Probes (tests/mouse-121.js) ===
+  current build:
+    PASS  clean       (160,100) -> (210,100)
+    PASS  strayByte   (160,100) -> (210,100)
+    PASS  nineBit     (160,100) -> (0,100)
+    PASS  overflow    (160,100) -> (160,100)
+    PASS  slowDevice  (160,100) -> (210,100)
+  [PASS] All mouse probes pass on the current build.

@@ -27,11 +27,11 @@ const WEB_IMG_SRC   = 0x04A280; // 64B scratch img src attribute
 const WEB_LINK_TAB  = 0x04A300; // 12 entries * 48B: [rx0:4][ry0:4][rx1:4][ry1:4][href:32]
 
 // Solitaire buffers in high VM RAM (0x1BE000..0x1CFFFF)
-const SOL_PILES_BUF = 0x1D0000; // 16 piles * 64 cards (1024 B)
-const SOL_LEN_BUF   = 0x1D0400; // 16 pile lengths (64 B)
-const SOL_UP_BUF    = 0x1D0440; // 16 pile first-face-up index (64 B)
+const SOL_PILES_BUF = 0x038000; // 16 piles * 64 cards (1024 B)
+const SOL_LEN_BUF   = 0x038400; // 16 pile lengths (64 B)
+const SOL_UP_BUF    = 0x038440; // 16 pile first-face-up index (64 B)
 const SOL_UNDO_BUF  = 0x1D1000; // 32 undo snapshots * 1152 B
-const SOL_TT_BUF    = 0x1DA000; // 1024-entry transposition table (4 KB)
+const SOL_TT_BUF    = 0x039000; // 1024-entry transposition table (4 KB)
 
 int g_viewer_idx;
 
@@ -46,6 +46,11 @@ int g_snake_fy;
 int g_snake_score;
 int g_snake_steps;
 int g_snake_net_mode;
+int g_snake_game_over;
+const PC_SNAKE_NO_SELF = 0;
+int g_web_scroll;
+int g_web_sel_link;
+int g_chat_scroll;
 
 // Game 2: SpiralBlocks upgraded state (10x16 board, 7-bag, 3-next, hold, ghost, kicks, lock delay, seed)
 int blocks_grid[160]; // 10 cols x 16 rows
@@ -396,12 +401,17 @@ void app_key_blocks(int ascii, int vk) {
     g_blk_px = g_blk_px - 1;
   } else if ((vk == 39 || ascii == 'd') && blk_collides(g_blk_px + 1, g_blk_py, g_blk_type, g_blk_rot) == 0) {
     g_blk_px = g_blk_px + 1;
+  } else if (vk == 40 || ascii == 's') {
+    if (blk_collides(g_blk_px, g_blk_py + 1, g_blk_type, g_blk_rot) == 0) {
+      g_blk_py = g_blk_py + 1;
+      g_blk_score = g_blk_score + 1;
+    } else {
+      blk_lock_piece();
+    }
   } else if (ascii == 32) {
     g_blk_py = blk_ghost_y();
     blk_lock_piece();
-    return;
   }
-  blocks_step();
 }
 
 void app_click_blocks(int wid, int rx, int ry) {
@@ -435,14 +445,8 @@ void sol_deal_game(int mode, int seed) {
   if (seed <= 0) seed = 1;
   g_sol_mode = mode;
   g_sol_seed = seed;
-  g_sol_cursor = 0;
+  hal_memset(&g_sol_cursor, 0, 32);
   g_sol_sel_pile = -1;
-  g_sol_undo_cnt = 0;
-  g_sol_moves = 0;
-  g_sol_won = 0;
-  g_sol_solver_res = 0;
-  g_sol_solver_moves = 0;
-  g_sol_solver_nodes = 0;
   hal_memset(SOL_PILES_BUF, 0, 1152);
 
   if (mode == 0) {
@@ -747,19 +751,19 @@ void sol_print_deal_checks() {
 
   int s = 1;
   for (int i = 0; i < 10000; i++) s = cnsw_next_rand(s);
-  hal_memset(line, 0, 64);
-  srrp_kv(line, 0, "MINSTD(48271) 10,000th value from seed 1: ", s);
-  shell_print(line);
+  int lb2 = sh_buf();
+  srrp_kv(lb2, 0, "MINSTD(48271) 10,000th value from seed 1: ", s);
+  shell_print(lb2);
 
   byte deck[52];
   cnsw_shuffle(deck, 52, 1222);
-  hal_memset(line, 0, 64);
-  int p3 = srrp_append_str(line, 0, "CNSW deal v1 seed 1222, first 8 cards:");
+  int lb = sh_buf();
+  int p3 = srrp_append_str(lb, 0, "CNSW deal v1 seed 1222, first 8 cards:");
   for (int k = 0; k < 8; k++) {
-    w8(line + p3, 32);
-    p3 = sol_append_card(line, p3 + 1, deck[k]);
+    w8(lb + p3, 32);
+    p3 = sol_append_card(lb, p3 + 1, deck[k]);
   }
-  shell_print(line);
+  shell_print(lb);
 }
 
 void sol_draw_card(int cx, int cy, int card, int face_up, int is_sel) {
@@ -781,9 +785,20 @@ void sol_draw_card(int cx, int cy, int card, int face_up, int is_sel) {
   hal_char(cx + 8, cy + 9, sch, fg, -1, 0);
 }
 
+void sol_draw_pile_slot(int px, int py, int p_idx, int face_up_top) {
+  int plen = r32(SOL_LEN_BUF + p_idx * 4);
+  if (p_idx == g_sol_cursor) hal_rect(px - 1, py - 2, 18, 2, 14);
+  if (plen <= 0) {
+    hal_rect(px, py, 16, 18, 80);
+  } else {
+    int card = r8(SOL_PILES_BUF + p_idx * 64 + plen - 1);
+    sol_draw_card(px, py, card, face_up_top, p_idx == g_sol_sel_pile);
+  }
+}
+
 void app_draw_solitaire(int x, int y, int w, int h) {
   gui_set_win(x, y, w, h);
-  hal_rect(x + 4, y + 14, w - 8, h - 18, 82); // Emerald felt table
+  hal_rect(x + 4, y + 14, w - 8, h - 18, 82);
   wbtn(6, 15, 30, 10, "Klon", g_sol_mode == 0);
   wbtn(38, 15, 32, 10, "Free", g_sol_mode == 1);
   wbtn(72, 15, 30, 10, "Spid", g_sol_mode == 2);
@@ -793,33 +808,68 @@ void app_draw_solitaire(int x, int y, int w, int h) {
   wstr(174, 16, "#", 14);
   wnum(182, 16, g_sol_seed, 15);
 
+  // Top row (y + 27): Stock / Waste / Foundations / FreeCells
+  if (y + 46 <= y + h - 4) {
+    if (g_sol_mode == 0) {
+      sol_draw_pile_slot(x + 6, y + 27, 11, 0);
+      sol_draw_pile_slot(x + 26, y + 27, 12, 1);
+      for (int fi = 0; fi < 4; fi++) {
+        sol_draw_pile_slot(x + 66 + fi * 20, y + 27, 7 + fi, 1);
+      }
+    } else if (g_sol_mode == 1) {
+      for (int fc = 0; fc < 4; fc++) {
+        sol_draw_pile_slot(x + 6 + fc * 19, y + 27, 8 + fc, 1);
+      }
+      for (int ff = 0; ff < 4; ff++) {
+        sol_draw_pile_slot(x + 88 + ff * 19, y + 27, 12 + ff, 1);
+      }
+    } else {
+      sol_draw_pile_slot(x + 186, y + 27, 10, 0);
+    }
+  }
+
   int cols = 7;
   if (g_sol_mode == 1) cols = 8;
   else if (g_sol_mode == 2) cols = 10;
 
+  int py = y + 48;
+  int max_col_h = (y + h - 16) - py;
+  if (max_col_h < 20) max_col_h = 20;
+
   for (int c = 0; c < cols; c++) {
     int px = x + 6 + c * 20;
-    int py = y + 30;
+    if (px + 16 > x + w - 4) break;
     int plen = r32(SOL_LEN_BUF + c * 4);
     int pup  = r32(SOL_UP_BUF + c * 4);
     if (c == g_sol_cursor) {
-      hal_rect(px - 1, py - 2, 18, 3, 14);
+      hal_rect(px - 1, py - 2, 18, 2, 14);
     }
     if (plen == 0) {
-      hal_rect(px, py, 16, 18, 80);
+      if (py + 18 <= y + h - 4) hal_rect(px, py, 16, 18, 80);
     } else {
-      for (int r = 0; r < plen && r < 6; r++) {
+      int step_y = 8;
+      if (plen > 1 && (plen - 1) * step_y + 18 > max_col_h) {
+        step_y = (max_col_h - 18) / (plen - 1);
+        if (step_y < 3) step_y = 3;
+      }
+      for (int r = 0; r < plen; r++) {
+        int cy = py + r * step_y;
+        if (cy + 18 > y + h - 4) cy = y + h - 22;
         int card = r8(SOL_PILES_BUF + c * 64 + r);
         int is_up = 1;
         if (g_sol_mode != 1 && r < pup) is_up = 0;
-        sol_draw_card(px, py + r * 11, card, is_up, c == g_sol_sel_pile && r == plen - 1);
+        sol_draw_card(px, cy, card, is_up, c == g_sol_sel_pile && r == plen - 1);
       }
     }
   }
 
-  if (g_sol_solver_res == 1) wstr(8, h - 14, "WINNABLE (52 moves)", 14);
-  if (g_sol_solver_res == 2) wstr(8, h - 14, "UNWINNABLE", 12);
-  if (g_sol_solver_res == 3) wstr(8, h - 14, "UNKNOWN", 11);
+  if (g_sol_solver_res == 1) {
+    int wb = sh_buf();
+    srrp_append_str(wb, srrp_kv(wb, 0, "WINNABLE (", g_sol_solver_moves), " moves)");
+    wstr(8, h - 12, wb, 14);
+  }
+  if (g_sol_solver_res == 2) wstr(8, h - 12, "UNWINNABLE", 12);
+  if (g_sol_solver_res == 3) wstr(8, h - 12, "UNKNOWN", 11);
 }
 
 void app_click_solitaire(int wid, int rx, int ry) {
@@ -831,7 +881,18 @@ void app_click_solitaire(int wid, int rx, int ry) {
     else if (rx >= 136 && rx < 170) sol_run_solver(500);
     return;
   }
-  if (ry >= 30) {
+  if (ry >= 27 && ry < 46) {
+    if (g_sol_mode == 0) {
+      if (rx >= 6 && rx < 24) { g_sol_cursor = 11; sol_clickwheel_select(); return; }
+      if (rx >= 26 && rx < 44) { g_sol_cursor = 12; sol_clickwheel_select(); return; }
+      if (rx >= 66 && rx < 146) { g_sol_cursor = 7 + (rx - 66) / 20; sol_clickwheel_select(); return; }
+    } else if (g_sol_mode == 1) {
+      if (rx >= 6 && rx < 82) { g_sol_cursor = 8 + (rx - 6) / 19; sol_clickwheel_select(); return; }
+      if (rx >= 88 && rx < 164) { g_sol_cursor = 12 + (rx - 88) / 19; sol_clickwheel_select(); return; }
+    }
+    return;
+  }
+  if (ry >= 47) {
     int col = (rx - 6) / 20;
     if (col >= 0 && col < 10) {
       g_sol_cursor = col;
@@ -916,9 +977,9 @@ void web_go_back() {
 void apps2_init() {
   g_viewer_idx = 0;
 
-  // Initialize Snake
-  g_snake_len = 4;
-  for (int i = 0; i < 4; i++) {
+  // Initialize Snake (len 5 so U-turn self-collision is testable in 3 moves)
+  g_snake_len = 5;
+  for (int i = 0; i < 5; i++) {
     snake_x[i] = 8 - i;
     snake_y[i] = 5;
   }
@@ -929,6 +990,10 @@ void apps2_init() {
   g_snake_score = 0;
   g_snake_steps = 0;
   g_snake_net_mode = 1;
+  g_snake_game_over = 0;
+  g_web_scroll = 0;
+  g_web_sel_link = 0;
+  g_chat_scroll = 0;
 
   // Initialize upgraded SpiralBlocks with seed 1
   blk_init_with_seed(1);
@@ -938,9 +1003,9 @@ void apps2_init() {
   g_sol_spider_suits = 1;
   sol_deal_game(0, 1);
 
-  // Register real-time app timer ticks (§3)
-  app_register_tick(APP_SNAKE, 80);
-  app_register_tick(APP_BLOCKS, 120);
+  // Register real-time app timer ticks (125 ms Snake, 500 ms Blocks per 1.5 spec)
+  app_register_tick(APP_SNAKE, 125);
+  app_register_tick(APP_BLOCKS, 500);
 
   g_chat_in_len = 0;
   g_chat_peer_idx = 0;
@@ -1012,9 +1077,36 @@ void app_click_viewer(int wid, int rx, int ry) {
 }
 
 // 10. Game 1: SpiralSnake
+void snake_reset() {
+  g_snake_len = 5;
+  for (int i = 0; i < 5; i++) {
+    snake_x[i] = 8 - i;
+    snake_y[i] = 5;
+  }
+  g_snake_dx = 1;
+  g_snake_dy = 0;
+  g_snake_fx = 12;
+  g_snake_fy = 6;
+  g_snake_score = 0;
+  g_snake_game_over = 0;
+}
+
 void snake_step() {
-  int nx = (snake_x[0] + g_snake_dx + 18) % 18;
-  int ny = (snake_y[0] + g_snake_dy + 10) % 10;
+  if (g_snake_game_over == 1) return;
+  int nx = snake_x[0] + g_snake_dx;
+  int ny = snake_y[0] + g_snake_dy;
+  if (nx < 0 || nx >= 18 || ny < 0 || ny >= 10) {
+    g_snake_game_over = 1;
+    return;
+  }
+  if (PC_SNAKE_NO_SELF == 0) {
+    for (int ci = 0; ci < g_snake_len - 1; ci++) {
+      if (snake_x[ci] == nx && snake_y[ci] == ny) {
+        g_snake_game_over = 1;
+        return;
+      }
+    }
+  }
   for (int i = g_snake_len - 1; i > 0; i = i - 1) {
     snake_x[i] = snake_x[i - 1];
     snake_y[i] = snake_y[i - 1];
@@ -1035,7 +1127,7 @@ void snake_step() {
 }
 
 void snake_cell(int x, int y, int pw, int ph, int sx, int sy, int col) {
-  if ((sx + 1) * 8 <= pw && (sy + 1) * 8 <= ph) {
+  if (sx >= 0 && sy >= 0 && (sx + 1) * 8 <= pw && (sy + 1) * 8 <= ph) {
     hal_rect(x + 4 + sx * 8, y + 16 + sy * 8, 7, 7, col);
   }
 }
@@ -1062,6 +1154,9 @@ void app_draw_snake(int x, int y, int w, int h) {
     if (i == 0) col = 14;
     snake_cell(x, y, pw, ph, snake_x[i], snake_y[i], col);
   }
+  if (g_snake_game_over == 1) {
+    wstr(32, 48, "GAME OVER", 12);
+  }
   wstr(4, 98, "Sc:", 11);
   wnum(28, 98, g_snake_score, 15);
   if (g_peer_snake_active == 1) {
@@ -1072,6 +1167,8 @@ void app_draw_snake(int x, int y, int w, int h) {
 }
 
 void app_key_snake(int ascii, int vk) {
+  if (ascii == 'r' || ascii == 'R') { snake_reset(); return; }
+  if (g_snake_game_over == 1 && ascii == 13) { snake_reset(); return; }
   if (vk == 38 || ascii == 'w') { g_snake_dx = 0; g_snake_dy = -1; }
   else if (vk == 40 || ascii == 's') { g_snake_dx = 0; g_snake_dy = 1; }
   else if (vk == 37 || ascii == 'a') { g_snake_dx = -1; g_snake_dy = 0; }
@@ -1080,18 +1177,18 @@ void app_key_snake(int ascii, int vk) {
 }
 
 void app_click_snake(int wid, int rx, int ry) {
+  if (g_snake_game_over == 1) { snake_reset(); return; }
   snake_step();
 }
 
 // 12. StudioNet Chat (SpiralChat) with Peer Picker
 void app_draw_chat(int x, int y, int w, int h) {
   gui_set_win(x, y, w, h);
+  gui_reg_ctl(4, h - 17, w - 52, 13, 0);
   // Peer picker bar at top of chat window
   wbtn(4, 14, 42, 10, "Peer>", 0);
-  int pnode = sns_resolve("peer");
-  byte pname_lbl[20];
-  hal_memset(pname_lbl, 0, 20);
-  sns_lookup_peer_name(pnode, pname_lbl);
+  int pname_lbl = sh_buf();
+  sns_lookup_peer_name(sns_resolve("peer"), pname_lbl);
   wstr(50, 15, pname_lbl, 14);
 
   if (h > 46 && w > 8) {
@@ -1121,8 +1218,12 @@ void app_draw_chat(int x, int y, int w, int h) {
       if (vis_len > 0) {
         gui_str_clip(x + 6, y + h - 15, CHAT_IN_BUF + in_start, vis_len, 15, -1);
       }
+      if (gui_caret_on()) {
+        hal_rect(x + 6 + vis_len * 8, y + h - 7, 6, 2, 14);
+      }
     }
   }
+  gui_draw_vscroll(w - 8, 25, h - 44, g_chat_scroll, max_rows, g_chat_count + 1);
   wbtn(w - 44, h - 17, 40, 13, "Send", 0);
 }
 
@@ -1156,24 +1257,14 @@ void app_click_chat(int wid, int rx, int ry) {
 
 void app_key_chat(int ascii) {
   if (ascii == 13) {
-    int peer = sns_resolve("peer");
     if (g_chat_in_len > 0) {
-      net_send_chat(peer, CHAT_IN_BUF);
+      net_send_chat(sns_resolve("peer"), CHAT_IN_BUF);
       g_chat_in_len = 0;
       hal_memset(CHAT_IN_BUF, 0, 128);
     }
     return;
   }
-  if (ascii == 8 && g_chat_in_len > 0) {
-    g_chat_in_len = g_chat_in_len - 1;
-    w8(CHAT_IN_BUF + g_chat_in_len, 0);
-    return;
-  }
-  if (ascii >= 32 && ascii <= 126 && g_chat_in_len < 96) {
-    w8(CHAT_IN_BUF + g_chat_in_len, ascii);
-    g_chat_in_len = g_chat_in_len + 1;
-    w8(CHAT_IN_BUF + g_chat_in_len, 0);
-  }
+  g_chat_in_len = field_key_common(CHAT_IN_BUF, g_chat_in_len, 96, ascii);
 }
 
 // 13. StudioNet File Transfer (SpiralSend: SRRP + legacy 4300/4301)
@@ -1289,20 +1380,14 @@ void app_draw_browser(int x, int y, int w, int h) {
   int in_link = 0;
 
   while (r8(WEB_PAGE_BUF_EXT + p) != 0 && ry <= y + h - 12) {
-    if (r8(WEB_PAGE_BUF_EXT + p) == 60) {
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "<h1>")) {
-        col = 14; p = p + 4; cx = x + 8; continue;
-      }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "</h1>")) {
-        col = 15; p = p + 5; ry = ry + 10; cx = x + 8; continue;
-      }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "<p>")) {
-        col = 15; p = p + 3; cx = x + 8; continue;
-      }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "</p>")) {
-        p = p + 4; ry = ry + 9; cx = x + 8; continue;
-      }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "<img ")) {
+    int wp = WEB_PAGE_BUF_EXT + p;
+    int ch = r8(wp);
+    if (ch == 60) {
+      if (match_prefix(wp, "<h1>")) { col = 14; p = p + 4; cx = x + 8; continue; }
+      if (match_prefix(wp, "</h1>")) { col = 15; p = p + 5; ry = ry + 10; cx = x + 8; continue; }
+      if (match_prefix(wp, "<p>")) { col = 15; p = p + 3; cx = x + 8; continue; }
+      if (match_prefix(wp, "</p>")) { p = p + 4; ry = ry + 9; cx = x + 8; continue; }
+      if (match_prefix(wp, "<img ")) {
         p = web_extract_attr(p + 5, "src=", 4, WEB_IMG_SRC, 58);
         if (cx > x + 8) { ry = ry + 9; cx = x + 8; }
         if (ry + 16 <= y + h - 4) {
@@ -1310,47 +1395,31 @@ void app_draw_browser(int x, int y, int w, int h) {
           g_web_img_drawn = g_web_img_drawn + 1;
           w32(VMRAM_STATUS + 0x68, g_web_img_drawn);
         }
-        ry = ry + 16;
-        cx = x + 8;
-        continue;
+        ry = ry + 16; cx = x + 8; continue;
       }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "<a ")) {
+      if (match_prefix(wp, "<a ")) {
         int lslot = WEB_LINK_TAB + g_web_link_cnt * 48;
         hal_memset(lslot, 0, 48);
         p = web_extract_attr(p + 3, "href=", 5, lslot + 16, 30);
-        if (g_web_link_cnt < 12) {
-          w32(lslot + 0, cx - x);
-          w32(lslot + 4, ry - y);
-          in_link = 1;
-        }
-        col = 11;
-        continue;
+        if (g_web_link_cnt < 12) { w32(lslot, cx - x); w32(lslot + 4, ry - y); in_link = 1; }
+        col = 11; continue;
       }
-      if (match_prefix(WEB_PAGE_BUF_EXT + p, "</a>")) {
+      if (match_prefix(wp, "</a>")) {
         if (in_link == 1 && g_web_link_cnt < 12) {
           int lslot = WEB_LINK_TAB + g_web_link_cnt * 48;
-          int rx0 = r32(lslot + 0);
-          int ry0 = r32(lslot + 4);
-          int rx1 = cx - x;
+          int rx0 = r32(lslot); int ry0 = r32(lslot + 4); int rx1 = cx - x;
           if (rx1 <= rx0) rx1 = rx0 + 32;
           if (rx1 > w - 6) rx1 = w - 6;
-          w32(lslot + 8, rx1);
-          w32(lslot + 12, (ry - y) + 9);
-          if (rx1 > rx0 && y + ry0 + 8 < y + h - 4) {
-            hal_rect(x + rx0, y + ry0 + 8, rx1 - rx0, 1, 11);
-          }
+          w32(lslot + 8, rx1); w32(lslot + 12, (ry - y) + 9);
+          if (rx1 > rx0 && y + ry0 + 8 < y + h - 4) hal_rect(x + rx0, y + ry0 + 8, rx1 - rx0, 1, 11);
           g_web_link_cnt = g_web_link_cnt + 1;
         }
-        in_link = 0;
-        col = 15;
-        p = p + 4;
-        continue;
+        in_link = 0; col = 15; p = p + 4; continue;
       }
       while (r8(WEB_PAGE_BUF_EXT + p) != 0 && r8(WEB_PAGE_BUF_EXT + p) != 62) p = p + 1;
       if (r8(WEB_PAGE_BUF_EXT + p) == 62) p = p + 1;
       continue;
     }
-    int ch = r8(WEB_PAGE_BUF_EXT + p);
     if (ch == 10) {
       if (cx > x + 8) {
         ry = ry + 9;
@@ -1400,12 +1469,53 @@ void app_click_browser(int wid, int rx, int ry) {
       if (ry >= ry0 - 2 && ry <= ry1 + 2 && rx >= rx0 - 4 && rx <= rx1 + 12) {
         int dst = g_web_cur_node;
         if (dst == 0) dst = sns_resolve("sonder.gw");
-        byte target_href[36];
-        hal_memset(target_href, 0, 36);
-        hal_memcpy(target_href, lslot + 16, 31);
-        web_navigate(dst, target_href, 1);
+        web_navigate(dst, lslot + 16, 1);
         return;
       }
     }
+  }
+}
+
+void app_key_theme(int ascii, int vk) {
+  if (ascii >= 49 && ascii <= 52) theme_select(ascii - 49);
+  else if (vk == 37 || vk == 38) theme_select((g_current_theme_idx + 3) & 3);
+  else if (vk == 39 || vk == 40) theme_select((g_current_theme_idx + 1) & 3);
+  else if (ascii == 't' || ascii == 'T') thm_title_active = (thm_title_active + 4) & 127;
+  else if (ascii == 'w' || ascii == 'W') thm_wallpaper_style = (thm_wallpaper_style + 1) & 3;
+}
+
+void app_key_viewer(int ascii, int vk) {
+  if ((vk >= 37 && vk <= 40) || ascii == 'n' || ascii == 32 || ascii == 13) {
+    g_viewer_idx = (g_viewer_idx + 1) & 1;
+  }
+}
+
+void app_key_transfer(int ascii, int vk) {
+  if ((vk >= 37 && vk <= 40) || ascii == 'n') g_ftx_sel_idx = (g_ftx_sel_idx + 1) % fs_count();
+  else if (ascii == 'b' || ascii == 13) {
+    int fidx = fs_nth_index(g_ftx_sel_idx);
+    if (fidx >= 0) net_send_file(sns_resolve("peer"), fs_entry_ptr(fidx));
+  }
+}
+
+void app_key_browser(int ascii, int vk) {
+  if (vk == 38 || vk == 33) { if (g_web_scroll > 0) g_web_scroll = g_web_scroll - 1; }
+  else if (vk == 40 || vk == 34) g_web_scroll = g_web_scroll + 1;
+  else if (vk == 36) g_web_scroll = 0;
+  else if (ascii == 8 || ascii == 'b') web_go_back();
+  else if (ascii == '1') web_navigate(sns_resolve("peer"), "/index.hts", 1);
+  else if (ascii == '2') web_navigate(sns_resolve("sonder.gw"), "/atlas", 1);
+  else if (ascii == '3') web_navigate(0, "/www/index.hts", 1);
+  else if (ascii == 13 && g_web_link_cnt > 0) {
+    int lslot = WEB_LINK_TAB + (g_web_sel_link % g_web_link_cnt) * 48;
+    int dst = g_web_cur_node;
+    if (dst == 0) dst = sns_resolve("sonder.gw");
+    web_navigate(dst, lslot + 16, 1);
+  }
+}
+
+void app_key_about(int ascii, int vk) {
+  if (vk == 27 || ascii == 13 || ascii == 32 || ascii == 'q') {
+    if (g_focused_win >= 0) wm_close(g_focused_win);
   }
 }

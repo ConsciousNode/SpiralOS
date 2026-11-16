@@ -58,7 +58,7 @@ const SNS_PEER_TAB     = 0x049900; // 8 entries * 64B (0x049900..0x049AFF)
 const WEB_PAGE_BUF_EXT = 0x190000; // 64 KB enlarged SpiralWeb page buffer (0x190000..0x19FFFF)
 const SRRP_RX_BUF      = 0x1A0000; // 64 KB SRRP reassembly buffer (0x1A0000..0x1AFFFF)
 const SRRP_TX_BUF      = 0x1B0000; // 64 KB SRRP transmit buffer (0x1B0000..0x1BFFFF)
-const SRRP_SCRATCH_BUF = 0x1C0000; // 4 KB scratch for headers/listings (0x1C0000..0x1C0FFF)
+const SRRP_SCRATCH_BUF = 0x044000; // 4 KB scratch for headers/listings (0x1C0000..0x1C0FFF)
 
 int g_net_tx_pkts;
 int g_net_rx_pkts;
@@ -128,11 +128,7 @@ int sns_is_valid_name(int s_ptr) {
   if (len < 1 || len > 12) return 0;
   for (int i = 0; i < len; i++) {
     int c = r8(s_ptr + i);
-    int ok = 0;
-    if (c >= 97 && c <= 122) ok = 1;
-    else if (c >= 48 && c <= 57) ok = 1;
-    else if (c == 45) ok = 1;
-    if (ok == 0) return 0;
+    if ((c < 97 || c > 122) && (c < 48 || c > 57) && c != 45) return 0;
   }
   return 1;
 }
@@ -154,24 +150,15 @@ void sns_short_prefix(int kind, int dst_ptr) {
 
 void sns_format_display(int kind, int base_ptr, int named, int num, int out_ptr) {
   hal_memset(out_ptr, 0, 16);
-  if (named == 1) {
+  if (named == 1 || num <= 0) {
     int blen = hal_strlen(base_ptr);
     if (blen > 12) blen = 12;
     hal_memcpy(out_ptr, base_ptr, blen);
-    if (num >= 2) {
-      hal_itoa(num, out_ptr + blen, 10);
-    }
-    return;
-  }
-  if (num <= 0) {
-    int blen2 = hal_strlen(base_ptr);
-    if (blen2 > 12) blen2 = 12;
-    hal_memcpy(out_ptr, base_ptr, blen2);
+    if (named == 1 && num >= 2) hal_itoa(num, out_ptr + blen, 10);
     return;
   }
   sns_short_prefix(kind, out_ptr);
-  int plen = hal_strlen(out_ptr);
-  hal_itoa(num, out_ptr + plen, 10);
+  hal_itoa(num, out_ptr + hal_strlen(out_ptr), 10);
 }
 
 int sns_my_age_sec() {
@@ -203,65 +190,42 @@ int sns_outranks(int ageA, int tokA, int nodeA, int ageB, int tokB, int nodeB) {
 
 void sns_recompute_display() {
   int my_age = sns_my_age_sec();
-  if (g_sns_named == 1) {
-    int clash_older = 0;
-    for (int i = 0; i < 8; i++) {
-      int pe = SNS_PEER_TAB + i * 64;
-      int pnode = r32(pe + 0);
-      if (pnode != 0 && pnode != g_local_node_id && sns_peer_is_stale(pe) == 0) {
-        if (hal_strcmp(pe + 36, SNS_MY_NAME_BUF)) {
-          int page = sns_peer_extrap_age(pe);
-          int ptok = r32(pe + 20);
-          if (sns_outranks(page, ptok, pnode, my_age, g_sns_token, g_local_node_id) == 1) {
-            clash_older = clash_older + 1;
-          }
+  int clash_older = 0;
+  int same_kind_cnt = 0;
+  int used_mask = 0;
+  for (int i = 0; i < 8; i++) {
+    int pe = SNS_PEER_TAB + i * 64;
+    int pnode = r32(pe);
+    if (pnode != 0 && pnode != g_local_node_id && sns_peer_is_stale(pe) == 0) {
+      int outr = sns_outranks(sns_peer_extrap_age(pe), r32(pe + 20), pnode, my_age, g_sns_token, g_local_node_id);
+      if (g_sns_named == 1) {
+        if (hal_strcmp(pe + 36, SNS_MY_NAME_BUF) && outr == 1) clash_older = clash_older + 1;
+      } else if (r32(pe + 4) == g_machine_id && r32(pe + 24) == 0) {
+        same_kind_cnt = same_kind_cnt + 1;
+        int pnum2 = r32(pe + 28);
+        if (outr == 1) {
+          if (pnum2 <= 0) pnum2 = 1;
+          if (pnum2 >= 1 && pnum2 <= 16) used_mask = used_mask | (1 << pnum2);
         }
       }
     }
+  }
+  if (g_sns_named == 1) {
+    g_sns_num = 0;
+    if (clash_older > 0) g_sns_num = clash_older + 1;
+    sns_format_display(g_machine_id, SNS_MY_NAME_BUF, 1, g_sns_num, SNS_DISP_BUF);
     if (clash_older > 0) {
-      g_sns_num = clash_older + 1;
-      sns_format_display(g_machine_id, SNS_MY_NAME_BUF, 1, g_sns_num, SNS_DISP_BUF);
       hal_memset(SNS_CLASH_BUF, 0, 64);
-      hal_memcpy(SNS_CLASH_BUF, "NAME TAKEN: using ", 18);
-      hal_memcpy(SNS_CLASH_BUF + 18, SNS_DISP_BUF, hal_strlen(SNS_DISP_BUF));
-    } else {
-      g_sns_num = 0;
-      sns_format_display(g_machine_id, SNS_MY_NAME_BUF, 1, 0, SNS_DISP_BUF);
+      srrp_append_str(SNS_CLASH_BUF, srrp_append_str(SNS_CLASH_BUF, 0, "NAME TAKEN: using "), SNS_DISP_BUF);
     }
     return;
   }
-
-  // Default name: check if any live peer shares our kind and is also unnamed
-  int same_kind_cnt = 0;
-  int used_mask = 0;
-  for (int j = 0; j < 8; j++) {
-    int pe2 = SNS_PEER_TAB + j * 64;
-    int pnode2 = r32(pe2 + 0);
-    if (pnode2 != 0 && pnode2 != g_local_node_id && sns_peer_is_stale(pe2) == 0) {
-      if (r32(pe2 + 4) == g_machine_id && r32(pe2 + 24) == 0) {
-        same_kind_cnt = same_kind_cnt + 1;
-        int page2 = sns_peer_extrap_age(pe2);
-        int ptok2 = r32(pe2 + 20);
-        int pnum2 = r32(pe2 + 28);
-        if (sns_outranks(page2, ptok2, pnode2, my_age, g_sns_token, g_local_node_id) == 1) {
-          if (pnum2 <= 0) pnum2 = 1;
-          if (pnum2 >= 1 && pnum2 <= 16) {
-            used_mask = used_mask | (1 << pnum2);
-          }
-        }
-      }
-    }
-  }
-
   if (same_kind_cnt == 0 && g_sns_num == 0) {
     sns_format_display(g_machine_id, SNS_MY_NAME_BUF, 0, 0, SNS_DISP_BUF);
     return;
   }
-
   int pick = 1;
-  while (pick <= 16 && (used_mask & (1 << pick)) != 0) {
-    pick = pick + 1;
-  }
+  while (pick <= 16 && (used_mask & (1 << pick)) != 0) pick = pick + 1;
   g_sns_num = pick;
   sns_format_display(g_machine_id, SNS_MY_NAME_BUF, 0, g_sns_num, SNS_DISP_BUF);
 }
@@ -435,49 +399,16 @@ void web_set_page_buf(int src_ptr, int len) {
 }
 
 void net_init() {
-  g_net_tx_pkts = 0;
-  g_net_rx_pkts = 0;
-  g_net_rx_accepted = 0;
-  g_net_rx_dropped = 0;
   g_net_seq = 100;
-  g_net_last_ack = 0;
-  g_chat_count = 0;
-  g_ftx_rx_count = 0;
-  g_httpd_hits = 0;
-  g_web_status = 0;
-  g_web_page_len = 0;
-  g_web_is_snap = 0;
-
   g_sns_boot_ms = hal_time();
   g_sns_last_hello_ms = -10000;
   g_sns_token = ((g_local_node_id * 1103515245 + 12345) ^ (g_machine_id * 2654435761)) & 0x7FFFFFFF;
   if (g_sns_token == 0) g_sns_token = 0x13572468;
-  g_sns_named = 0;
-  g_sns_num = 0;
-  g_sns_share_on = 0;
   g_sns_services = 0x17;
-  g_sns_chosen_peer = 0;
-  g_sns_last_live_peer = 0;
-  g_sns_clash_active = 0;
-
-  g_ping_pending = 0;
-  g_ping_seq = 0;
-  g_ping_sent_ms = 0;
   g_ping_rtt_ms = -1;
-
-  g_srrp_tx_active = 0;
-  g_srrp_tx_resends = 0;
-  g_srrp_tx_timeouts = 0;
-  g_srrp_tx_status = 0;
-  g_srrp_rx_active = 0;
-
-  g_peer_snake_active = 0;
   g_peer_snake_x = 4;
   g_peer_snake_y = 2;
   g_peer_snake_dx = 1;
-  g_peer_snake_dy = 0;
-  g_peer_snake_score = 0;
-  g_peer_snake_pkts = 0;
 
   hal_memset(CHAT_LOG_BUF, 0, 256);
   hal_memset(WEB_PAGE_BUF, 0, 2048);
@@ -525,16 +456,11 @@ void chat_append_line(int prefix_str, int msg_str) {
 }
 
 int net_send_chat(int dst_node, int msg_str) {
-  int mlen = hal_strlen(msg_str);
-  byte pfx[20];
-  hal_memset(pfx, 0, 20);
-  int dlen = hal_strlen(SNS_DISP_BUF);
-  if (dlen > 12) dlen = 12;
-  hal_memcpy(pfx, SNS_DISP_BUF, dlen);
-  w8(pfx + dlen, 62);     // '>'
-  w8(pfx + dlen + 1, 32); // ' '
+  int pfx = SRRP_SCRATCH_BUF + 0xC90;
+  hal_memset(pfx, 0, 24);
+  srrp_append_str(pfx, srrp_append_str(pfx, 0, SNS_DISP_BUF), "> ");
   chat_append_line(pfx, msg_str);
-  return net_send_frame(dst_node, PROTO_SDP, FLAG_PSH, PORT_CHAT, PORT_CHAT, g_net_seq++, 0, msg_str, mlen + 1);
+  return net_send_frame(dst_node, PROTO_SDP, FLAG_PSH, PORT_CHAT, PORT_CHAT, g_net_seq++, 0, msg_str, hal_strlen(msg_str) + 1);
 }
 
 int net_send_ping(int dst_node) {
@@ -563,18 +489,23 @@ int srrp_is_safe_name(int s_ptr) {
   if (len < 1 || len > 31) return 0;
   for (int i = 0; i < len; i++) {
     int c = r8(s_ptr + i);
-    if (c == 46 && r8(s_ptr + i + 1) == 46) return 0; // ".."
-    int ok = 0;
-    if (c >= 65 && c <= 90) ok = 1;
-    else if (c >= 97 && c <= 122) ok = 1;
-    else if (c >= 48 && c <= 57) ok = 1;
-    else if (c == 46 || c == 95 || c == 45) ok = 1;
-    if (ok == 0) return 0;
+    if (c == 46 && r8(s_ptr + i + 1) == 46) return 0;
+    if ((c < 65 || c > 90) && (c < 97 || c > 122) && (c < 48 || c > 57) && c != 46 && c != 95 && c != 45) return 0;
   }
   return 1;
 }
 
-// Start multi-frame SRRP transmission from SRRP_TX_BUF (total_len bytes)
+void srrp_send_frame_idx(int k) {
+  if (k < 0 || k >= g_srrp_tx_frames) return;
+  int off = k * 480;
+  int chunk = g_srrp_tx_total_len - off;
+  if (chunk > 480) chunk = 480;
+  int fl = FLAG_PSH;
+  if (k == 0) fl = fl | FLAG_SYN;
+  if (k == g_srrp_tx_frames - 1) fl = fl | FLAG_FIN;
+  net_send_frame(g_srrp_tx_peer, PROTO_SSP, fl, g_srrp_tx_sport, g_srrp_tx_dport, (g_srrp_tx_base_seq + k) & 0xFFFF, 0, SRRP_TX_BUF + off, chunk);
+}
+
 void srrp_start_tx(int dst_node, int sport, int dport, int total_len) {
   g_srrp_tx_peer = dst_node;
   g_srrp_tx_sport = sport;
@@ -591,32 +522,9 @@ void srrp_start_tx(int dst_node, int sport, int dport, int total_len) {
   g_srrp_tx_sack_bits = 0;
   g_srrp_tx_last_ms = hal_time();
   g_srrp_tx_timeouts = 0;
-  g_srrp_tx_status = 1; // in progress
+  g_srrp_tx_status = 1;
   g_srrp_tx_active = 1;
-
-  // Send initial window of frames (up to cwnd)
-  int limit = g_srrp_tx_cwnd;
-  if (limit > nframes) limit = nframes;
-  for (int k = 0; k < limit; k++) {
-    int off = k * 480;
-    int chunk = total_len - off;
-    if (chunk > 480) chunk = 480;
-    int fl = FLAG_PSH;
-    if (k == 0) fl = fl | FLAG_SYN;
-    if (k == nframes - 1) fl = fl | FLAG_FIN;
-    net_send_frame(dst_node, PROTO_SSP, fl, sport, dport, (g_srrp_tx_base_seq + k) & 0xFFFF, 0, SRRP_TX_BUF + off, chunk);
-  }
-}
-
-void srrp_send_frame_idx(int k) {
-  if (k < 0 || k >= g_srrp_tx_frames) return;
-  int off = k * 480;
-  int chunk = g_srrp_tx_total_len - off;
-  if (chunk > 480) chunk = 480;
-  int fl = FLAG_PSH;
-  if (k == 0) fl = fl | FLAG_SYN;
-  if (k == g_srrp_tx_frames - 1) fl = fl | FLAG_FIN;
-  net_send_frame(g_srrp_tx_peer, PROTO_SSP, fl, g_srrp_tx_sport, g_srrp_tx_dport, (g_srrp_tx_base_seq + k) & 0xFFFF, 0, SRRP_TX_BUF + off, chunk);
+  for (int k = 0; k < 2 && k < nframes; k++) srrp_send_frame_idx(k);
 }
 
 int srrp_append_str(int dst, int pos, int s_ptr) {
@@ -650,15 +558,12 @@ int srrp_put_inbox(int dst_node, int path_str) {
     if (r8(path_str + i) == 47) base_off = i + 1;
   }
 
-  int p = 0;
-  p = srrp_append_str(SRRP_TX_BUF, p, "PUT /inbox/");
-  p = srrp_append_str(SRRP_TX_BUF, p, path_str + base_off);
-  p = srrp_append_str(SRRP_TX_BUF, p, " SRRP/1\nEncoding: bytes\nSize: ");
-  p = srrp_append_int(SRRP_TX_BUF, p, fsize);
-  p = srrp_append_str(SRRP_TX_BUF, p, "\n\n");
-  if (fsize > 0) {
-    hal_memcpy(SRRP_TX_BUF + p, fdata, fsize);
-  }
+  int tb = SRRP_TX_BUF;
+  int p = srrp_append_str(tb, 0, "PUT /inbox/");
+  p = srrp_append_str(tb, p, path_str + base_off);
+  p = srrp_kv(tb, p, " SRRP/1\nEncoding: bytes\nSize: ", fsize);
+  p = srrp_append_str(tb, p, "\n\n");
+  if (fsize > 0) hal_memcpy(tb + p, fdata, fsize);
   srrp_start_tx(dst_node, 49153, PORT_HTTP, p + fsize);
   return 0;
 }
@@ -711,25 +616,17 @@ void srrp_send_sack(int dst_node, int sport, int dport) {
 }
 
 void srrp_reply_simple(int dst_node, int dport, int status_str, int body_ptr, int body_len, int type_str) {
-  int p = 0;
-  p = srrp_append_str(SRRP_TX_BUF, p, "SRRP/1 ");
-  p = srrp_append_str(SRRP_TX_BUF, p, status_str);
-  p = srrp_append_str(SRRP_TX_BUF, p, "\n");
-  if (type_str != 0) {
-    p = srrp_append_str(SRRP_TX_BUF, p, "Type: ");
-    p = srrp_append_str(SRRP_TX_BUF, p, type_str);
-    p = srrp_append_str(SRRP_TX_BUF, p, "\n");
-  }
-  p = srrp_append_str(SRRP_TX_BUF, p, "Encoding: bytes\nWindow: 8\nMax-Size: 65536\nSize: ");
-  p = srrp_append_int(SRRP_TX_BUF, p, body_len);
-  p = srrp_append_str(SRRP_TX_BUF, p, "\n\n");
-  if (body_len > 0 && body_ptr != 0) {
-    hal_memcpy(SRRP_TX_BUF + p, body_ptr, body_len);
-  }
+  int tb = SRRP_TX_BUF;
+  int p = srrp_append_str(tb, srrp_append_str(tb, 0, "SRRP/1 "), status_str);
+  if (type_str != 0) p = srrp_append_str(tb, srrp_append_str(tb, p, "\nType: "), type_str);
+  p = srrp_kv(tb, p, "\nEncoding: bytes\nWindow: 8\nMax-Size: 65536\nSize: ", body_len);
+  p = srrp_append_str(tb, p, "\n\n");
+  if (body_len > 0 && body_ptr != 0) hal_memcpy(tb + p, body_ptr, body_len);
   srrp_start_tx(dst_node, PORT_HTTP, dport, p + body_len);
 }
 
 void srrp_err(int n, int p, int st) { srrp_reply_simple(n, p, st, 0, 0, 0); }
+void srrp_403(int n, int p) { srrp_err(n, p, "403 FORBIDDEN"); }
 
 void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, int msg_len) {
   // Find "\n\n" header terminator
@@ -763,11 +660,9 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
     if (match_prefix(msg_ptr + h, "Encoding: trytes16")) is_trytes16 = 1;
   }
 
-  // Extract method and path from line 1: METHOD /path SRRP/1
-  byte meth[12];
-  byte rpath[64];
-  hal_memset(meth, 0, 12);
-  hal_memset(rpath, 0, 64);
+  int meth = SRRP_SCRATCH_BUF + 0xC00;
+  int rpath = SRRP_SCRATCH_BUF + 0xC10;
+  hal_memset(meth, 0, 160);
   int p = 0;
   while (p < hdr_end && r8(msg_ptr + p) != 32 && p < 10) {
     w8(meth + p, r8(msg_ptr + p));
@@ -785,26 +680,26 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
   int path_len = hal_strlen(rpath);
   for (int pi = 0; pi + 1 < path_len; pi++) {
     if (r8(rpath + pi) == 46 && r8(rpath + pi + 1) == 46) {
-      srrp_err(src_node, sport, "403 FORBIDDEN");
+      srrp_403(src_node, sport);
       return;
     }
   }
 
   // DEL over the wire is always refused per §4.3
   if (hal_strcmp(meth, "DEL")) {
-    srrp_err(src_node, sport, "403 FORBIDDEN");
+    srrp_403(src_node, sport);
     return;
   }
 
   // PUT /inbox/<name>
   if (hal_strcmp(meth, "PUT")) {
     if (match_prefix(rpath, "/inbox/") == 0) {
-      srrp_err(src_node, sport, "403 FORBIDDEN");
+      srrp_403(src_node, sport);
       return;
     }
     int fname_sub = rpath + 7;
     if (srrp_is_safe_name(fname_sub) == 0) {
-      srrp_err(src_node, sport, "403 FORBIDDEN");
+      srrp_403(src_node, sport);
       return;
     }
     int write_ptr = body_ptr;
@@ -830,14 +725,12 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
   // LIST /inbox or LIST /share or LIST /www
   if (hal_strcmp(meth, "LIST")) {
     if (hal_strcmp(rpath, "/share") && g_sns_share_on == 0) {
-      srrp_err(src_node, sport, "403 FORBIDDEN");
+      srrp_403(src_node, sport);
       return;
     }
-    byte pfx_match[16];
-    hal_memset(pfx_match, 0, 16);
-    if (hal_strcmp(rpath, "/inbox")) hal_memcpy(pfx_match, "/inbox/", 7);
-    else if (hal_strcmp(rpath, "/share")) hal_memcpy(pfx_match, "/home/", 6);
-    else hal_memcpy(pfx_match, "/www/", 5);
+    int pfx_match = "/www/";
+    if (hal_strcmp(rpath, "/inbox")) pfx_match = "/inbox/";
+    else if (hal_strcmp(rpath, "/share")) pfx_match = "/home/";
     int pfx_len = hal_strlen(pfx_match);
 
     int lp = 0;
@@ -862,11 +755,10 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
   if (hal_strcmp(meth, "GET")) {
     if (match_prefix(rpath, "/share/")) {
       if (g_sns_share_on == 0) {
-        srrp_err(src_node, sport, "403 FORBIDDEN");
+        srrp_403(src_node, sport);
         return;
       }
-      byte spath[64];
-      hal_memset(spath, 0, 64);
+      int spath = SRRP_SCRATCH_BUF + 0xC50;
       hal_memcpy(spath, "/home/", 6);
       hal_memcpy(spath + 6, rpath + 7, hal_strlen(rpath + 7));
       int sidx = fs_find(spath);
@@ -892,8 +784,7 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
       if (hal_strcmp(rpath, "/") || hal_strcmp(rpath, "/index.hts")) {
         fidx = fs_find("/www/index.hts");
       } else {
-        byte wpath[64];
-        hal_memset(wpath, 0, 64);
+        int wpath = SRRP_SCRATCH_BUF + 0xC50;
         hal_memcpy(wpath, "/www", 4);
         hal_memcpy(wpath + 4, rpath, hal_strlen(rpath));
         fidx = fs_find(wpath);
@@ -975,21 +866,13 @@ void net_poll() {
           g_net_rx_dropped = g_net_rx_dropped + 1;
           continue;
         }
-        int pkind  = r8(payload + 1);
-        int pos_id = r8(payload + 2);
-        int psvcs  = r16(payload + 3);
-        int page   = r32(payload + 5);
-        int ptok   = r32(payload + 9);
-        int pnamed = r8(payload + 13);
-        int pnum   = r8(payload + 14);
-        int pname  = payload + 15;
+        int ptok  = r32(payload + 9);
+        int pname = payload + 15;
         if (sns_is_valid_name(pname) == 0) {
           g_net_rx_dropped = g_net_rx_dropped + 1;
           continue;
         }
         g_net_rx_accepted = g_net_rx_accepted + 1;
-
-        // Check duplicate Node ID clash (§3.4)
         if (src_node == g_local_node_id && ptok != g_sns_token) {
           g_sns_clash_active = 1;
           hal_memset(SNS_CLASH_BUF, 0, 64);
@@ -998,14 +881,12 @@ void net_poll() {
           shell_print(SNS_CLASH_BUF);
           continue;
         }
-
-        // Insert or update peer table (8 entries)
         int slot = -1;
         int oldest_slot = 0;
         int oldest_ms = 0x7FFFFFFF;
         for (int i = 0; i < 8; i++) {
           int pe = SNS_PEER_TAB + i * 64;
-          int enode = r32(pe + 0);
+          int enode = r32(pe);
           if (enode == src_node) { slot = i; break; }
           if (enode == 0 && slot < 0) slot = i;
           if (r32(pe + 32) < oldest_ms) {
@@ -1017,16 +898,16 @@ void net_poll() {
         int dst_pe = SNS_PEER_TAB + slot * 64;
         hal_memset(dst_pe, 0, 64);
         w32(dst_pe + 0, src_node);
-        w32(dst_pe + 4, pkind);
-        w32(dst_pe + 8, pos_id);
-        w32(dst_pe + 12, psvcs);
-        w32(dst_pe + 16, page);
+        w32(dst_pe + 4, r8(payload + 1));
+        w32(dst_pe + 8, r8(payload + 2));
+        w32(dst_pe + 12, r16(payload + 3));
+        w32(dst_pe + 16, r32(payload + 5));
         w32(dst_pe + 20, ptok);
-        w32(dst_pe + 24, pnamed);
-        w32(dst_pe + 28, pnum);
+        w32(dst_pe + 24, r8(payload + 13));
+        w32(dst_pe + 28, r8(payload + 14));
         w32(dst_pe + 32, now_ms);
         hal_memcpy(dst_pe + 36, pname, hal_strlen(pname));
-        sns_format_display(pkind, dst_pe + 36, pnamed, pnum, dst_pe + 50);
+        sns_format_display(r32(dst_pe + 4), dst_pe + 36, r32(dst_pe + 24), r32(dst_pe + 28), dst_pe + 50);
         if (src_node != g_local_node_id) {
           g_sns_last_live_peer = src_node;
         }
@@ -1075,8 +956,8 @@ void net_poll() {
 
     // 3. SDP Chat message on PORT_CHAT (Port 4200)
     if (proto == PROTO_SDP && dport == PORT_CHAT) {
-      byte sender_lbl[20];
-      hal_memset(sender_lbl, 0, 20);
+      int sender_lbl = SRRP_SCRATCH_BUF + 0xC80;
+      hal_memset(sender_lbl, 0, 24);
       if (sns_lookup_peer_name(src_node, sender_lbl) == 0) {
         if (src_node == 0x0101) { hal_memset(sender_lbl, 0, 20); hal_memcpy(sender_lbl, "tc1", 3); }
         else if (src_node == 0x0201) { hal_memset(sender_lbl, 0, 20); hal_memcpy(sender_lbl, "hb1", 3); }
@@ -1202,12 +1083,7 @@ void net_poll() {
           // Check Size: header on first frame to refuse > 65536 with 413 TOO BIG immediately
           for (int szp = 0; szp + 6 < plen && szp < 256; szp++) {
             if (match_prefix(payload + szp, "Size: ")) {
-              int decl_sz = 0;
-              int sp2 = szp + 6;
-              while (sp2 < plen && r8(payload + sp2) >= 48 && r8(payload + sp2) <= 57) {
-                decl_sz = decl_sz * 10 + (r8(payload + sp2) - 48);
-                sp2 = sp2 + 1;
-              }
+              int decl_sz = parse_int_at(payload + szp + 6);
               if (decl_sz > 65536) {
                 srrp_send_sack(src_node, dport, sport);
                 int r413 = "SRRP/1 413 TOO BIG\n\n";

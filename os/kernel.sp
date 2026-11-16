@@ -297,15 +297,15 @@ int os_machine_name() {
 int tok_find_idx(int s, int list_str) {
   int idx = 0;
   int p = 0;
+  int s0 = r8(s);
   while (r8(list_str + p) != 0) {
-    int k = 0;
-    int ok = 1;
-    while (r8(list_str + p + k) != 0 && r8(list_str + p + k) != 124) {
-      if (r8(s + k) != r8(list_str + p + k)) ok = 0;
-      k = k + 1;
+    if (r8(list_str + p) == s0) {
+      int k = 0;
+      while (r8(s + k) != 0 && r8(s + k) == r8(list_str + p + k)) k = k + 1;
+      int le = r8(list_str + p + k);
+      if (r8(s + k) == 0 && (le == 0 || le == 124)) return idx;
     }
-    if (ok == 1 && r8(s + k) == 0) return idx;
-    p = p + k;
+    while (r8(list_str + p) != 0 && r8(list_str + p) != 124) p = p + 1;
     if (r8(list_str + p) == 124) p = p + 1;
     idx = idx + 1;
   }

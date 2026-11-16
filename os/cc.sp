@@ -82,21 +82,21 @@ const OP_ENTER       = 0x25;
 const OP_RET         = 0x26;
 const OP_SYSCALL     = 0x27;
 
-const CC_IDENT_BUF   = 0x060000;
-const CC_STR_BUF     = 0x060100;
+const CC_IDENT_BUF   = 0x021000;
+const CC_STR_BUF     = 0x021100;
 const CC_ERR_MSG     = 0x060300;
 const CC_CONST_TAB   = 0x061000;
 const CC_GLOB_TAB    = 0x064000;
-const CC_LOC_TAB     = 0x067000;
+const CC_LOC_TAB     = 0x021400;
 const CC_FUNC_TAB    = 0x068000;
 const CC_FIXUP_TAB   = 0x06E000;
-const CC_BREAK_TAB   = 0x076000;
-const CC_CONT_TAB    = 0x077000;
-const CC_POOL_TAB    = 0x078000;
-const CC_CONST_HEAD  = 0x07A000;
-const CC_GLOB_HEAD   = 0x07A400;
-const CC_FUNC_HEAD   = 0x07A800;
-const CC_POOL_HEAD   = 0x07AC00;
+const CC_BREAK_TAB   = 0x022400;
+const CC_CONT_TAB    = 0x023400;
+const CC_POOL_TAB    = 0x074000;
+const CC_CONST_HEAD  = 0x024400;
+const CC_GLOB_HEAD   = 0x024800;
+const CC_FUNC_HEAD   = 0x024C00;
+const CC_POOL_HEAD   = 0x025000;
 const CC_WORK_BUF    = 0x0B0000;
 
 int g_cc_last_status;
@@ -221,9 +221,15 @@ int cc_pop_add_off16() {
   if (g_cc_code_pos >= g_cc_code_base + 8) {
     int last1 = r32(g_cc_out_buf + g_cc_code_pos - 4);
     int last2 = r32(g_cc_out_buf + g_cc_code_pos - 8);
-    if (last1 == (OP_ADD << 24) && ((last2 >>> 24) & 0xFF) == OP_PUSH_I16) {
-      g_cc_code_pos = g_cc_code_pos - 8;
-      return last2 & 0xFFFF;
+    if (((last2 >>> 24) & 0xFF) == OP_PUSH_I16) {
+      if (last1 == (OP_ADD << 24)) {
+        g_cc_code_pos = g_cc_code_pos - 8;
+        return last2 & 0xFFFF;
+      }
+      if (last1 == (OP_SUB << 24) && (last2 & 0xFFFF) != 0x8000) {
+        g_cc_code_pos = g_cc_code_pos - 8;
+        return (0 - (last2 & 0xFFFF)) & 0xFFFF;
+      }
     }
   }
   return 0;
@@ -235,6 +241,10 @@ void cc_emit_drop_stmt() {
     int last2 = r32(g_cc_out_buf + g_cc_code_pos - 8);
     int op1 = (last1 >>> 24) & 0xFF;
     int op2 = (last2 >>> 24) & 0xFF;
+    if (op1 == OP_CALL) {
+      w32(g_cc_out_buf + g_cc_code_pos - 4, last1 | 0x00800000);
+      return;
+    }
     if (last1 == (OP_PUSH_I16 << 24) && op2 >= OP_STORE8 && op2 <= OP_STORE32) {
       g_cc_code_pos = g_cc_code_pos - 4;
       return;
@@ -249,6 +259,43 @@ void cc_emit_drop_stmt() {
 }
 
 int cc_emit_op(int op, int a, int imm16) {
+  if (op == OP_RET && g_cc_code_pos >= g_cc_code_base + 4 && g_cc_last_patch != g_cc_code_pos) {
+    int rw = r32(g_cc_out_buf + g_cc_code_pos - 4);
+    if (((rw >>> 24) & 0xFF) == OP_PUSH_I16) {
+      w32(g_cc_out_buf + g_cc_code_pos - 4, (OP_RET << 24) | 0x00010000 | (rw & 0xFFFF));
+      return g_cc_code_pos - 4;
+    }
+  }
+  if (op == OP_CMP && a == 0 && g_cc_code_pos >= g_cc_code_base + 4 && g_cc_last_patch != g_cc_code_pos) {
+    int cw1 = r32(g_cc_out_buf + g_cc_code_pos - 4);
+    if (((cw1 >>> 24) & 0xFF) == OP_PUSH_I16) {
+      if (g_cc_code_pos >= g_cc_code_base + 8) {
+        int cw2 = r32(g_cc_out_buf + g_cc_code_pos - 8);
+        if (((cw2 >>> 24) & 0xFF) == OP_CMP) {
+          if ((cw1 == ((OP_PUSH_I16 << 24) | 1) && imm16 == 0) || (cw1 == (OP_PUSH_I16 << 24) && imm16 == 1)) {
+            g_cc_code_pos = g_cc_code_pos - 4;
+            return g_cc_code_pos - 4;
+          }
+          if (cw1 == (OP_PUSH_I16 << 24) && imm16 == 0) {
+            int cwa = (cw2 >>> 16) & 0xFF;
+            int cc = cw2 & 7;
+            if (cwa != 0) cc = cwa & 7;
+            int inv = cc ^ 1;
+            if (cc >= 2 && cc < 6) inv = 7 - cc;
+            if (cc < 6) {
+              int ncw2 = (OP_CMP << 24) | inv;
+              if (cwa != 0) ncw2 = (OP_CMP << 24) | ((8 | inv) << 16) | (cw2 & 0xFFFF);
+              w32(g_cc_out_buf + g_cc_code_pos - 8, ncw2);
+              g_cc_code_pos = g_cc_code_pos - 4;
+              return g_cc_code_pos - 4;
+            }
+          }
+        }
+      }
+      w32(g_cc_out_buf + g_cc_code_pos - 4, (OP_CMP << 24) | ((8 | (imm16 & 7)) << 16) | (cw1 & 0xFFFF));
+      return g_cc_code_pos - 4;
+    }
+  }
   if ((op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_SHL) && g_cc_code_pos >= g_cc_code_base + 8) {
     int w1 = r32(g_cc_out_buf + g_cc_code_pos - 4);
     if (((w1 >>> 24) & 0xFF) == OP_PUSH_I16) {
@@ -263,6 +310,13 @@ int cc_emit_op(int op, int a, int imm16) {
         if (op == OP_MUL) r = c1 * c2;
         if (op == OP_SHL) r = c1 << (c2 & 31);
         cc_emit_push_const(r);
+        return g_cc_code_pos - 4;
+      }
+      if ((op == OP_ADD || op == OP_SUB) && op2 == OP_ADDR_GLOBAL && (c2 & 3) == 0) {
+        int dslot = c2 >> 2;
+        if (op == OP_SUB) dslot = 0 - dslot;
+        w32(g_cc_out_buf + g_cc_code_pos - 8, (OP_ADDR_GLOBAL << 24) | (((w2 & 0xFFFF) + dslot) & 0xFFFF));
+        g_cc_code_pos = g_cc_code_pos - 4;
         return g_cc_code_pos - 4;
       }
       if ((op == OP_ADD || op == OP_SUB) && op2 == OP_PUSH_HI && g_cc_code_pos >= g_cc_code_base + 12) {
@@ -281,12 +335,14 @@ int cc_emit_op(int op, int a, int imm16) {
 }
 
 int cc_emit_jump(int op, int addr24) {
-  if (op == OP_JZ && addr24 == 0 && g_cc_code_pos >= g_cc_code_base + 8 && g_cc_last_patch != g_cc_code_pos) {
+  if ((op == OP_JZ || op == OP_JNZ) && addr24 == 0 && g_cc_code_pos >= g_cc_code_base + 4 && g_cc_last_patch != g_cc_code_pos) {
     int w1 = r32(g_cc_out_buf + g_cc_code_pos - 4);
-    int w2 = r32(g_cc_out_buf + g_cc_code_pos - 8);
-    if (w2 == (OP_PUSH_I16 << 24)) {
-      if (w1 == (OP_CMP << 24)) { g_cc_code_pos = g_cc_code_pos - 8; op = OP_JNZ; }
-      else if (w1 == ((OP_CMP << 24) | 1)) { g_cc_code_pos = g_cc_code_pos - 8; op = OP_JZ; }
+    if (w1 == ((OP_CMP << 24) | (8 << 16))) {
+      g_cc_code_pos = g_cc_code_pos - 4;
+      if (op == OP_JZ) op = OP_JNZ;
+      else op = OP_JZ;
+    } else if (w1 == ((OP_CMP << 24) | (9 << 16))) {
+      g_cc_code_pos = g_cc_code_pos - 4;
     }
   }
   return cc_emit_word(((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF));
@@ -295,8 +351,7 @@ int cc_emit_jump(int op, int addr24) {
 void cc_patch_jump(int inst_addr, int target_addr) {
   g_cc_last_patch = target_addr;
   int prev = r32(g_cc_out_buf + inst_addr);
-  int op = (prev >>> 24) & 0xFF;
-  w32(g_cc_out_buf + inst_addr, (op << 24) | (target_addr & 0x00FFFFFF));
+  w32(g_cc_out_buf + inst_addr, (prev & 0xFF800000) | (target_addr & 0x007FFFFF));
 }
 
 void cc_emit_push_const(int val) {
@@ -304,6 +359,8 @@ void cc_emit_push_const(int val) {
     cc_emit_op(OP_PUSH_I16, 0, val & 0xFFFF);
   } else if (val >= 0 && val <= 65535) {
     cc_emit_op(OP_PUSH_U16, 0, val & 0xFFFF);
+  } else if (g_cc_allow_imports == 1 && (val & 3) == 0 && val >= 0x020000 && val <= 0x05FFFC) {
+    cc_emit_op(OP_ADDR_GLOBAL, 0, ((val - 0x020000) >> 2) & 0xFFFF);
   } else {
     cc_emit_op(OP_PUSH_U16, 0, val & 0xFFFF);
     cc_emit_op(OP_PUSH_HI, 0, (val >>> 16) & 0xFFFF);
@@ -341,70 +398,50 @@ int cc_add_str_lit() {
   return start_addr;
 }
 
-int cc_find_const(int name_ptr) {
+int cc_ht_find(int head_base, int tab_base, int stride, int name_ptr) {
   int sig = cc_name_sig(name_ptr);
-  int b = cc_sig_bucket(sig);
-  int idx = r32(CC_CONST_HEAD + (b << 2));
+  int idx = r32(head_base + (cc_sig_bucket(sig) << 2));
   while (idx >= 0) {
-    int e = CC_CONST_TAB + idx * 36;
+    int e = tab_base + idx * stride;
     if (r32(e + 28) == sig && hal_strcmp(e, name_ptr)) return idx;
     idx = r32(e + 24);
   }
   return -1;
+}
+
+void cc_ht_link(int head_base, int e, int idx) {
+  int b = cc_sig_bucket(r32(e + 28));
+  w32(e + 24, r32(head_base + (b << 2)));
+  w32(head_base + (b << 2), idx);
+}
+
+int cc_find_const(int name_ptr) {
+  return cc_ht_find(CC_CONST_HEAD, CC_CONST_TAB, 36, name_ptr);
 }
 
 void cc_set_const(int name_ptr, int val) {
   int idx = cc_find_const(name_ptr);
   int is_new = 0;
-  if (idx < 0) {
-    idx = g_cc_const_cnt;
-    g_cc_const_cnt = g_cc_const_cnt + 1;
-    is_new = 1;
-  }
+  if (idx < 0) { idx = g_cc_const_cnt; g_cc_const_cnt = g_cc_const_cnt + 1; is_new = 1; }
   int e = CC_CONST_TAB + idx * 36;
   cc_strcpy(e, name_ptr);
-  if (is_new == 1) {
-    int b = cc_sig_bucket(r32(e + 28));
-    w32(e + 24, r32(CC_CONST_HEAD + (b << 2)));
-    w32(CC_CONST_HEAD + (b << 2), idx);
-  }
+  if (is_new) cc_ht_link(CC_CONST_HEAD, e, idx);
   w32(e + 32, val);
-  if (hal_strcmp(name_ptr, "WM_TITLE_COLOR_OVERRIDE")) {
-    g_cc_parsed_override = val;
-  }
+  if (hal_strcmp(name_ptr, "WM_TITLE_COLOR_OVERRIDE")) g_cc_parsed_override = val;
 }
 
 int cc_find_glob(int name_ptr) {
-  int sig = cc_name_sig(name_ptr);
-  int b = cc_sig_bucket(sig);
-  int idx = r32(CC_GLOB_HEAD + (b << 2));
-  while (idx >= 0) {
-    int e = CC_GLOB_TAB + idx * 48;
-    if (r32(e + 28) == sig && hal_strcmp(e, name_ptr)) return idx;
-    idx = r32(e + 24);
-  }
-  return -1;
+  return cc_ht_find(CC_GLOB_HEAD, CC_GLOB_TAB, 48, name_ptr);
 }
 
 void cc_add_glob(int name_ptr, int slot, int is_byte, int is_arr, int sz) {
   int idx = cc_find_glob(name_ptr);
   int is_new = 0;
-  if (idx < 0) {
-    idx = g_cc_glob_cnt;
-    g_cc_glob_cnt = g_cc_glob_cnt + 1;
-    is_new = 1;
-  }
+  if (idx < 0) { idx = g_cc_glob_cnt; g_cc_glob_cnt = g_cc_glob_cnt + 1; is_new = 1; }
   int e = CC_GLOB_TAB + idx * 48;
   cc_strcpy(e, name_ptr);
-  if (is_new == 1) {
-    int b = cc_sig_bucket(r32(e + 28));
-    w32(e + 24, r32(CC_GLOB_HEAD + (b << 2)));
-    w32(CC_GLOB_HEAD + (b << 2), idx);
-  }
-  w32(e + 32, slot);
-  w32(e + 36, is_byte);
-  w32(e + 40, is_arr);
-  w32(e + 44, sz);
+  if (is_new) cc_ht_link(CC_GLOB_HEAD, e, idx);
+  w32(e + 32, slot); w32(e + 36, is_byte); w32(e + 40, is_arr); w32(e + 44, sz);
 }
 
 int cc_find_loc(int name_ptr) {
@@ -418,48 +455,24 @@ int cc_find_loc(int name_ptr) {
 
 void cc_add_loc(int name_ptr, int slot, int is_byte, int is_arr, int sz) {
   int idx = cc_find_loc(name_ptr);
-  if (idx < 0) {
-    idx = g_cc_loc_cnt;
-    g_cc_loc_cnt = g_cc_loc_cnt + 1;
-  }
+  if (idx < 0) { idx = g_cc_loc_cnt; g_cc_loc_cnt = g_cc_loc_cnt + 1; }
   int e = CC_LOC_TAB + idx * 48;
   cc_strcpy(e, name_ptr);
-  w32(e + 32, slot);
-  w32(e + 36, is_byte);
-  w32(e + 40, is_arr);
-  w32(e + 44, sz);
+  w32(e + 32, slot); w32(e + 36, is_byte); w32(e + 40, is_arr); w32(e + 44, sz);
 }
 
 int cc_find_func(int name_ptr) {
-  int sig = cc_name_sig(name_ptr);
-  int b = cc_sig_bucket(sig);
-  int idx = r32(CC_FUNC_HEAD + (b << 2));
-  while (idx >= 0) {
-    int e = CC_FUNC_TAB + idx * 44;
-    if (r32(e + 28) == sig && hal_strcmp(e, name_ptr)) return idx;
-    idx = r32(e + 24);
-  }
-  return -1;
+  return cc_ht_find(CC_FUNC_HEAD, CC_FUNC_TAB, 44, name_ptr);
 }
 
 void cc_set_func(int name_ptr, int addr, int nargs) {
   int idx = cc_find_func(name_ptr);
   int is_new = 0;
-  if (idx < 0) {
-    idx = g_cc_func_cnt;
-    g_cc_func_cnt = g_cc_func_cnt + 1;
-    is_new = 1;
-  }
+  if (idx < 0) { idx = g_cc_func_cnt; g_cc_func_cnt = g_cc_func_cnt + 1; is_new = 1; }
   int e = CC_FUNC_TAB + idx * 44;
   cc_strcpy(e, name_ptr);
-  if (is_new == 1) {
-    int b = cc_sig_bucket(r32(e + 28));
-    w32(e + 24, r32(CC_FUNC_HEAD + (b << 2)));
-    w32(CC_FUNC_HEAD + (b << 2), idx);
-  }
-  w32(e + 32, addr);
-  w32(e + 36, nargs);
-  w32(e + 40, 1);
+  if (is_new) cc_ht_link(CC_FUNC_HEAD, e, idx);
+  w32(e + 32, addr); w32(e + 36, nargs); w32(e + 40, 1);
 }
 
 void cc_add_fixup(int inst_addr, int name_ptr, int line, int is_fn_addr) {
@@ -617,8 +630,10 @@ void cc_next_tok() {
       g_cc_pos = g_cc_pos + 1;
     }
     w8(CC_IDENT_BUF + ilen, 0);
-    int kw = tok_find_idx(CC_IDENT_BUF, "int|byte|void|const|if|else|while|for|return|break|continue|import");
-    if (kw >= 0) { g_cc_tok = TK_INT + kw; return; }
+    if (ilen >= 2 && ilen <= 8 && r8(CC_IDENT_BUF + 1) != 95) {
+      int kw = tok_find_idx(CC_IDENT_BUF, "int|byte|void|const|if|else|while|for|return|break|continue|import");
+      if (kw >= 0) { g_cc_tok = TK_INT + kw; return; }
+    }
     g_cc_tok = TK_IDENT;
     return;
   }
@@ -631,12 +646,14 @@ void cc_next_tok() {
   if (g_cc_pos + 1 < g_cc_src_len) c3 = r8(g_cc_src_ptr + g_cc_pos + 1);
 
   if (c == 62 && c2 == 62 && c3 == 62) { g_cc_pos = g_cc_pos + 2; g_cc_tok = TK_USHR; return; }
-  for (int oi = 0; oi < 12; oi++) {
-    int opp = "==!=<=>=<<>>&&||++--+=-=" + oi * 2;
-    if (c == r8(opp) && c2 == r8(opp + 1)) {
-      g_cc_pos = g_cc_pos + 1;
-      g_cc_tok = 256 + oi + (oi >= 6);
-      return;
+  if (c2 == 61 || c2 == c) {
+    for (int oi = 0; oi < 12; oi++) {
+      int opp = "==!=<=>=<<>>&&||++--+=-=" + oi * 2;
+      if (c == r8(opp) && c2 == r8(opp + 1)) {
+        g_cc_pos = g_cc_pos + 1;
+        g_cc_tok = 256 + oi + (oi >= 6);
+        return;
+      }
     }
   }
 
@@ -1051,6 +1068,32 @@ void cc_parse_expr() {
   cc_parse_bin(1);
 }
 
+int cc_parse_cond(int j_list) {
+  int j_cnt = 0;
+  cc_parse_bin(3);
+  if (g_cc_tok == TK_LOR) {
+    int jt_list[16];
+    int jt_cnt = 0;
+    while (g_cc_tok == TK_LOR) {
+      cc_next_tok();
+      jt_list[jt_cnt] = cc_emit_jump(OP_JNZ, 0);
+      jt_cnt = jt_cnt + 1;
+      cc_parse_bin(2);
+    }
+    w32(j_list, cc_emit_jump(OP_JZ, 0));
+    for (int ti = 0; ti < jt_cnt; ti++) cc_patch_jump(jt_list[ti], g_cc_code_pos);
+    return 1;
+  }
+  while (g_cc_tok == TK_LAND) {
+    cc_next_tok();
+    w32(j_list + (j_cnt << 2), cc_emit_jump(OP_JZ, 0));
+    j_cnt = j_cnt + 1;
+    cc_parse_bin(3);
+  }
+  w32(j_list + (j_cnt << 2), cc_emit_jump(OP_JZ, 0));
+  return j_cnt + 1;
+}
+
 void cc_parse_stmt() {
   if (g_cc_err_flag != 0) return;
 
@@ -1114,9 +1157,9 @@ void cc_parse_stmt() {
   if (g_cc_tok == TK_IF) {
     cc_next_tok();
     cc_expect(40);
-    cc_parse_expr();
+    int j_list[16];
+    int j_cnt = cc_parse_cond(j_list);
     cc_expect(41);
-    int j_false = cc_emit_jump(OP_JZ, 0);
     cc_parse_stmt();
     if (g_cc_tok == TK_ELSE) {
       cc_next_tok();
@@ -1125,11 +1168,11 @@ void cc_parse_stmt() {
       if (g_cc_last_patch == g_cc_code_pos || (prev_op != OP_RET && prev_op != OP_JMP)) {
         j_end = cc_emit_jump(OP_JMP, 0);
       }
-      cc_patch_jump(j_false, g_cc_code_pos);
+      for (int ji = 0; ji < j_cnt; ji++) cc_patch_jump(j_list[ji], g_cc_code_pos);
       cc_parse_stmt();
       if (j_end >= 0) cc_patch_jump(j_end, g_cc_code_pos);
     } else {
-      cc_patch_jump(j_false, g_cc_code_pos);
+      for (int ji2 = 0; ji2 < j_cnt; ji2++) cc_patch_jump(j_list[ji2], g_cc_code_pos);
     }
     return;
   }
@@ -1142,9 +1185,9 @@ void cc_parse_stmt() {
     int cur_depth = g_cc_loop_depth;
 
     cc_expect(40);
-    cc_parse_expr();
+    int j_list[16];
+    int j_cnt = cc_parse_cond(j_list);
     cc_expect(41);
-    int j_exit = cc_emit_jump(OP_JZ, 0);
     cc_parse_stmt();
 
     while (g_cc_cont_cnt > 0 && r32(CC_CONT_TAB + (g_cc_cont_cnt - 1) * 8) == cur_depth) {
@@ -1153,7 +1196,7 @@ void cc_parse_stmt() {
     }
     cc_emit_jump(OP_JMP, loop_start);
     int loop_end = g_cc_code_pos;
-    cc_patch_jump(j_exit, loop_end);
+    for (int ji = 0; ji < j_cnt; ji++) cc_patch_jump(j_list[ji], loop_end);
     while (g_cc_break_cnt > 0 && r32(CC_BREAK_TAB + (g_cc_break_cnt - 1) * 8) == cur_depth) {
       g_cc_break_cnt = g_cc_break_cnt - 1;
       cc_patch_jump(r32(CC_BREAK_TAB + g_cc_break_cnt * 8 + 4), loop_end);
@@ -1187,10 +1230,10 @@ void cc_parse_stmt() {
     }
 
     int cond_start = g_cc_code_pos;
-    int j_exit = -1;
+    int j_list[16];
+    int j_cnt = 0;
     if (g_cc_tok != 59) {
-      cc_parse_expr();
-      j_exit = cc_emit_jump(OP_JZ, 0);
+      j_cnt = cc_parse_cond(j_list);
     }
     cc_expect(59);
     int j_body = cc_emit_jump(OP_JMP, 0);
@@ -1218,7 +1261,7 @@ void cc_parse_stmt() {
     cc_emit_jump(OP_JMP, step_start);
 
     int loop_end = g_cc_code_pos;
-    if (j_exit >= 0) cc_patch_jump(j_exit, loop_end);
+    for (int ji = 0; ji < j_cnt; ji++) cc_patch_jump(j_list[ji], loop_end);
     while (g_cc_break_cnt > 0 && r32(CC_BREAK_TAB + (g_cc_break_cnt - 1) * 8) == cur_depth) {
       g_cc_break_cnt = g_cc_break_cnt - 1;
       cc_patch_jump(r32(CC_BREAK_TAB + g_cc_break_cnt * 8 + 4), loop_end);
@@ -1299,9 +1342,9 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
   g_cc_str_base = str_base;
   g_cc_max_size = max_size;
   if (str_base == 0x0020) {
-    g_cc_code_base = 0x1580;
+    g_cc_code_base = 0x001890;
     g_cc_code_limit = max_size;
-    g_cc_str_limit = 0x1580;
+    g_cc_str_limit = 0x001890;
   } else {
     g_cc_code_base = 0x0020;
     g_cc_code_limit = str_base;
@@ -1311,17 +1354,7 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
   g_cc_last_patch = -1;
   g_cc_str_pos = str_base;
 
-  g_cc_const_cnt = 0;
-  g_cc_glob_cnt = 0;
-  g_cc_glob_slots = 0;
-  g_cc_loc_cnt = 0;
-  g_cc_loc_slots = 0;
-  g_cc_func_cnt = 0;
-  g_cc_fixup_cnt = 0;
-  g_cc_loop_depth = 0;
-  g_cc_break_cnt = 0;
-  g_cc_cont_cnt = 0;
-  g_cc_pool_cnt = 0;
+  hal_memset(&g_cc_const_cnt, 0, 44);
 
   hal_memset(CC_CONST_HEAD, 255, 4096);
   hal_memset(dst_buf, 0, max_size);
@@ -1429,7 +1462,7 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
         cc_parse_stmt();
 
         w32(g_cc_out_buf + enter_addr, (OP_ENTER << 24) | ((nargs & 0xFF) << 16) | (g_cc_loc_slots & 0xFFFF));
-        if (r32(g_cc_out_buf + g_cc_code_pos - 4) != (OP_RET << 24)) {
+        if (((r32(g_cc_out_buf + g_cc_code_pos - 4) >>> 24) & 0xFF) != OP_RET) {
           cc_emit_push_const(0);
           cc_emit_op(OP_RET, 0, 0);
         }
@@ -1560,33 +1593,30 @@ int cc_exec_standalone(int spir_buf) {
     int s16 = (inst << 16) >> 16;
     int addr24 = inst & 0x00FFFFFF;
 
-    if (op == OP_NOP) continue;
-    if (op == OP_HALT) {
-      sp = sp - 4;
-      return r32(sp);
-    }
-    if (op == OP_PUSH_I16) { w32(sp, s16); sp = sp + 4; continue; }
-    if (op == OP_PUSH_U16) { w32(sp, u16); sp = sp + 4; continue; }
-    if (op == OP_PUSH_HI) {
-      int prev = r32(sp - 4) & 0xFFFF;
-      w32(sp - 4, prev | (u16 << 16));
+    if (op <= OP_ADDR_GLOBAL) {
+      if (op == OP_HALT) return r32(sp - 4);
+      if (op == OP_PUSH_HI) w32(sp - 4, (r32(sp - 4) & 0xFFFF) | (u16 << 16));
+      else if (op == OP_DROP || op == OP_SET_LOCAL || op == OP_SET_GLOBAL) {
+        sp = sp - 4;
+        if (op == OP_SET_LOCAL) w32(fp + (u16 << 2), r32(sp));
+        if (op == OP_SET_GLOBAL) w32(glob_base + (u16 << 2), r32(sp));
+      } else if (op == OP_SWAP) {
+        int t1 = r32(sp - 4);
+        w32(sp - 4, r32(sp - 8));
+        w32(sp - 8, t1);
+      } else if (op != OP_NOP) {
+        int pv = s16;
+        if (op == OP_PUSH_U16) pv = u16;
+        if (op == OP_DUP) pv = r32(sp - 4);
+        if (op == OP_GET_LOCAL) pv = r32(fp + (u16 << 2));
+        if (op == OP_GET_GLOBAL) pv = r32(glob_base + (u16 << 2));
+        if (op == OP_ADDR_LOCAL) pv = fp + (u16 << 2);
+        if (op == OP_ADDR_GLOBAL) pv = glob_base + (u16 << 2);
+        w32(sp, pv);
+        sp = sp + 4;
+      }
       continue;
     }
-    if (op == OP_DUP)  { w32(sp, r32(sp - 4)); sp = sp + 4; continue; }
-    if (op == OP_DROP) { sp = sp - 4; continue; }
-    if (op == OP_SWAP) {
-      int t1 = r32(sp - 4);
-      int t2 = r32(sp - 8);
-      w32(sp - 4, t2);
-      w32(sp - 8, t1);
-      continue;
-    }
-    if (op == OP_GET_LOCAL)   { w32(sp, r32(fp + (u16 << 2))); sp = sp + 4; continue; }
-    if (op == OP_SET_LOCAL)   { sp = sp - 4; w32(fp + (u16 << 2), r32(sp)); continue; }
-    if (op == OP_GET_GLOBAL)  { w32(sp, r32(glob_base + (u16 << 2))); sp = sp + 4; continue; }
-    if (op == OP_SET_GLOBAL)  { sp = sp - 4; w32(glob_base + (u16 << 2), r32(sp)); continue; }
-    if (op == OP_ADDR_LOCAL)  { w32(sp, fp + (u16 << 2)); sp = sp + 4; continue; }
-    if (op == OP_ADDR_GLOBAL) { w32(sp, glob_base + (u16 << 2)); sp = sp + 4; continue; }
     if (op >= OP_LOAD8U && op <= OP_LOAD32) {
       int eff = cc_map_standalone_addr(spir_buf, r32(sp - 4) + s16);
       if (op == OP_LOAD8U) w32(sp - 4, r8(eff));
@@ -1605,9 +1635,17 @@ int cc_exec_standalone(int spir_buf) {
       continue;
     }
     if (op >= OP_ADD && op <= OP_CMP) {
-      sp = sp - 4;
-      int lhs = r32(sp - 4);
-      int rhs = r32(sp);
+      int lhs = 0;
+      int rhs = s16;
+      int cc = a & 7;
+      if (op == OP_CMP && a != 0) {
+        lhs = r32(sp - 4);
+      } else {
+        sp = sp - 4;
+        lhs = r32(sp - 4);
+        rhs = r32(sp);
+        cc = u16;
+      }
       int res = 0;
       if (op == OP_ADD) res = lhs + rhs;
       if (op == OP_SUB) res = lhs - rhs;
@@ -1621,12 +1659,12 @@ int cc_exec_standalone(int spir_buf) {
       if (op == OP_SHR) res = lhs >>> (rhs & 31);
       if (op == OP_SAR) res = lhs >> (rhs & 31);
       if (op == OP_CMP) {
-        if (u16 == 0) res = (lhs == rhs);
-        else if (u16 == 1) res = (lhs != rhs);
-        else if (u16 == 2) res = (lhs < rhs);
-        else if (u16 == 3) res = (lhs <= rhs);
-        else if (u16 == 4) res = (lhs > rhs);
-        else if (u16 == 5) res = (lhs >= rhs);
+        if (cc == 0) res = (lhs == rhs);
+        else if (cc == 1) res = (lhs != rhs);
+        else if (cc == 2) res = (lhs < rhs);
+        else if (cc == 3) res = (lhs <= rhs);
+        else if (cc == 4) res = (lhs > rhs);
+        else if (cc == 5) res = (lhs >= rhs);
       }
       w32(sp - 4, res);
       continue;
@@ -1636,9 +1674,9 @@ int cc_exec_standalone(int spir_buf) {
     if (op == OP_JNZ) { sp = sp - 4; if (r32(sp) != 0) pc = addr24; continue; }
     if (op == OP_CALL) {
       w32(csp + 0, pc);
-      w32(csp + 4, fp);
+      w32(csp + 4, fp | (addr24 & 0x800000));
       csp = csp + 8;
-      pc = addr24;
+      pc = addr24 & 0x7FFFFF;
       continue;
     }
     if (op == OP_ENTER) {
@@ -1647,13 +1685,15 @@ int cc_exec_standalone(int spir_buf) {
       continue;
     }
     if (op == OP_RET) {
-      int rval = r32(sp - 4);
+      int rval = s16;
+      if (a == 0) rval = r32(sp - 4);
       sp = fp;
       w32(sp, rval);
-      sp = sp + 4;
       csp = csp - 8;
       pc = r32(csp + 0);
-      fp = r32(csp + 4);
+      int rfp = r32(csp + 4);
+      sp = sp + 4 - ((rfp >> 21) & 4);
+      fp = rfp & 0x7FFFFF;
       continue;
     }
     if (op == OP_SYSCALL) {

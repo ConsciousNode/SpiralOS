@@ -42,7 +42,7 @@ const {
 } = require("../compiler/spiralfs.js");
 const { buildTritonCore } = require("../core/core_triton.js");
 const { runProgramOnBothCores } = require("./vm.js");
-const StudioNetRef = require("../../studionet/studionet-ref.js");
+const StudioNetRef = require("../delivery-1.4/studionet/studionet-ref.js");
 
 loadEmulators();
 

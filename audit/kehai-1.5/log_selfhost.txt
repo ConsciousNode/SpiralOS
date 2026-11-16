@@ -1,0 +1,9 @@
+=== SpiralOS Self-Hosting Rebuild Suite (tests/selfhost.js) ===
+  Pristine SPIR Bytecode SHA-256 : 96d9d3bb0302dfffeaee0e9fab222e72...
+  Pristine 1.44MB Image SHA-256  : 51aee4b6d1a28aafbcadbfd75358bfce...
+  [PASS] Part A: Unmodified self-hosting rebuild is a bit-for-bit fixed point (96d9d3bb0302dfffeaee0e9f...)
+  [PASS] Part B (TabComp TC-32): Edited /src/wm.sp -> Compiled -> Rebuilt -> Rebooted -> Title Bar Color=196 (1991 px visible)
+  [PASS] Part C (Hummingbird i586): Edited /src/wm.sp -> Compiled -> Rebuilt (FDC DMA) -> Rebooted -> Title Bar Color=196 (1991 px visible)
+  [PASS] Part D: Rebuilt 1.44 MB image hashes match bit-for-bit across TabComp & Hummingbird!
+    - Rebuilt Image SHA-256 : a121fa588febb3123b60eaceb33a9ab2...
+    - Changed Sectors       : [64, 96, 320, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447] (SPIR header/code + SpiralFS dir & /src/wm.sp sector)

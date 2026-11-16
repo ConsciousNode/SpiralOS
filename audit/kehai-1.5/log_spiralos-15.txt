@@ -1,0 +1,22 @@
+=== SpiralOS 1.5 "Make It Real" Comprehensive Verification Suite (tests/spiralos-15.js) ===
+  [PASS] 1. Build & Memory-Map Overlap Check: 72 VM regions (31 relocated buffers) verified pairwise disjoint; SPIR=124248B code + 6178B strings (536B headroom)
+  [PASS] 2. Launcher Shared Table (0x04DC00), Hover-Scroll Arrows & Super + Arrow Keys verified
+  [PASS] 3. WM Keyboard Shortcuts (Alt+Tab, Alt+F4, Ctrl+W, Alt+Arrows), Tab Focus Ring & Right-Click Context Menus verified
+  [PASS] 4. App Key Handlers, Scrollbars, sh_buf 'edit ' Aliasing Fix, Shell History/Tab, Paint SaveAs, Clock, Snake, Blocks & Solitaire verified
+  [PASS] 5. Cross-App Scenario (Notes -> Shift+Arrows -> Ctrl+C -> Super+Arrows -> Shell -> Ctrl+V -> shutdown -> reboot -> cat) verified
+
+  --- Fast-CPU Timing & CMOS RTC Rollover-Aligned 10-Second Comparison (Printed by tests/spiralos-15.js) ---
+  | Speed | CPU Clock | ΔRTC (s) | Δirq0_ticks | ΔSYS_TIME_MS | SYS_TIME_MS == ticks*10 | Splash (ms) | Caret Blink (ms) | Snake Tick (ms) | Blocks Grav (ms) |
+  | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+  | 1x | 2.5 MHz | 10 | 999 | 9990 | YES (15050 == 1505*10) | 3150 | 500 | 125 | 400 |
+  | 4x | 10.0 MHz | 10 | 1003 | 10030 | YES (14020 == 1402*10) | 3150 | 500 | 125 | 400 |
+  | 16x | 40.0 MHz | 10 | 1001 | 10010 | YES (14010 == 1401*10) | 3150 | 500 | 125 | 400 |
+  [PASS] 6. Fast-CPU Timing & CMOS RTC Rollover-Aligned 10s Comparison verified at 1x, 4x, and 16x
+
+  [PASS] 7a. Positive Control (a) [Launcher +20px drawn-box drift]: DETECTED & FAILED as required (pixel at x=4 is col=18 != border 14)
+  [PASS] 7b. Positive Control (b) [x86 SYS_TIME_MS *55/6]: DETECTED & FAILED as required (SYS_TIME_MS=121 != ticks*10=10)
+  [PASS] 7c. Positive Control (c) [Isolated clipboards]: DETECTED & FAILED as required (Shell pasted '' != 'CLIP_CHECK')
+  [PASS] 7d. Positive Control (d) [Count-only `ls`]: DETECTED & FAILED as required (`/src/os.sp` absent from `ls` output)
+  [PASS] 7e. Positive Control (e) [Snake self-collision disabled]: DETECTED & FAILED as required (Game Over banner pixels=0)
+  [PASS] 7f. Positive Control (f) [Shutdown without dirty-buffer flush]: DETECTED & FAILED as required (/home/note.txt not flushed)
+=== ALL SPIRALOS 1.5 "MAKE IT REAL" TESTS & POSITIVE CONTROLS PASSED ===

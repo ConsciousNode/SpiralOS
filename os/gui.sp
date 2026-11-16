@@ -84,21 +84,7 @@ int theme_load_file(int path_str) {
       hal_memcpy(kbuf, lp, eq);
       int v = parse_int_at(lp + eq + 1);
       int ki = tok_find_idx(kbuf, "desk_top|desk_bot|taskbar_bg|taskbar_fg|win_bg|win_border|title_active|title_inactive|title_text|btn_face|btn_hi|btn_sh|accent|wallpaper_style|bevel_style");
-      if (ki == 0) thm_desk_top = v;
-      if (ki == 1) thm_desk_bot = v;
-      if (ki == 2) thm_taskbar_bg = v;
-      if (ki == 3) thm_taskbar_fg = v;
-      if (ki == 4) thm_win_bg = v;
-      if (ki == 5) thm_win_border = v;
-      if (ki == 6) thm_title_active = v;
-      if (ki == 7) thm_title_inactive = v;
-      if (ki == 8) thm_title_text = v;
-      if (ki == 9) thm_btn_face = v;
-      if (ki == 10) thm_btn_hi = v;
-      if (ki == 11) thm_btn_sh = v;
-      if (ki == 12) thm_accent = v;
-      if (ki == 13) thm_wallpaper_style = v;
-      if (ki == 14) thm_bevel_style = v;
+      if (ki >= 0 && ki < 15) w32(&thm_desk_top + (ki << 2), v);
     }
     while (p < sz && r8(data + p) != 10) p = p + 1;
     p = p + 1;
@@ -225,11 +211,72 @@ void gui_draw_cursor(int mx, int my) {
   hal_rect(mx + 1, my + 1, 1, 5, 0);
 }
 
+int g_w_is_foc;
+int g_w_ctl_seq;
+int g_w_ctl_tot;
+int g_focus_ctl;
+int g_foc_rx;
+int g_foc_ry;
+int g_foc_is_btn;
+int g_caret_reset_ms;
+
+int gui_caret_on() {
+  return (((hal_time() - g_caret_reset_ms) / 500) & 1) == 0;
+}
+
+void gui_focus_ring(int x, int y, int w, int h) {
+  if (w <= 2 || h <= 2) return;
+  hal_rect(x, y, w, 1, 14);
+  hal_rect(x, y + h - 1, w, 1, 14);
+  hal_rect(x, y, 1, h, 14);
+  hal_rect(x + w - 1, y, 1, h, 14);
+}
+
+int gui_reg_ctl(int rx, int ry, int bw, int bh, int is_btn) {
+  if (g_w_is_foc == 0) return 0;
+  int idx = g_w_ctl_seq;
+  g_w_ctl_seq = idx + 1;
+  if (idx == g_focus_ctl) {
+    g_foc_rx = rx + (bw >> 1);
+    g_foc_ry = ry + (bh >> 1);
+    g_foc_is_btn = is_btn;
+    int fw = bw;
+    if (rx + fw > g_w_w - 4) fw = g_w_w - 4 - rx;
+    if (ry >= 14 && ry + bh <= g_w_h - 2 && fw > 2) {
+      gui_focus_ring(g_w_x + rx, g_w_y + ry, fw, bh);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+void gui_draw_vscroll(int rx, int ry, int sh, int scroll_pos, int vis_rows, int total_rows) {
+  if (sh < 12 || rx < 4 || rx + 4 > g_w_w - 3 || ry < 14 || ry + sh > g_w_h - 3) return;
+  int sx = g_w_x + rx;
+  int sy = g_w_y + ry;
+  hal_rect(sx, sy, 3, sh, 8);
+  hal_rect(sx, sy, 3, 2, 15);
+  hal_rect(sx, sy + sh - 2, 3, 2, 15);
+  if (total_rows < 1) total_rows = 1;
+  int th = (sh - 6) * vis_rows / total_rows;
+  if (th < 4) th = 4;
+  if (th > sh - 6) th = sh - 6;
+  int max_sc = total_rows - vis_rows;
+  if (max_sc < 1) max_sc = 1;
+  int ty = sy + 3 + ((sh - 6 - th) * scroll_pos) / max_sc;
+  if (ty + th > sy + sh - 3) ty = sy + sh - 3 - th;
+  if (ty < sy + 3) ty = sy + 3;
+  hal_rect(sx, ty, 3, th, thm_accent);
+}
+
 void wstr(int rx, int ry, int s, int fg) {
   gui_win_str(g_w_x, g_w_y, g_w_w, g_w_h, g_w_x + rx, g_w_y + ry, s, fg, -1);
 }
 void wbtn(int rx, int ry, int bw, int bh, int lbl, int act) {
   gui_win_btn(g_w_x, g_w_y, g_w_w, g_w_h, g_w_x + rx, g_w_y + ry, bw, bh, lbl, act);
+  if (ry >= 14 && ry + bh <= g_w_h - 2 && rx + 6 <= g_w_w - 4) {
+    gui_reg_ctl(rx, ry, bw, bh, 1);
+  }
 }
 void wnum(int rx, int ry, int val, int fg) {
   hal_itoa(val, NUM_STR_BUF, 10);
