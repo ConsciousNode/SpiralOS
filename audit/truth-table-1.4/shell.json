@@ -1,0 +1,22 @@
+{
+ "help": "cmds: ls ps mem net peers peer name ping\n      send get share cc asm ver clear reboot",
+ "ls": "SpiralFS files mounted:\n23",
+ "ver": "SpiralOS 1.4 \"Daily Driver\" on Hummingbird i586",
+ "mem": "VM RAM: 4096 KB, SPIR: 128 KB",
+ "df": "SpiralFS free: 379904 B",
+ "ps": "Active SpiralVM tasks:\n3",
+ "workers": "Spawned 2 preemptive VM compute tasks",
+ "name": "Unknown cmd (type 'help')",
+ "theme": "Switched desktop theme",
+ "netstat": "self:hummingbird ok:0 drop:0",
+ "peers": "self:hummingbird ok:0 drop:0",
+ "clear": "",
+ "ls /home": "Unknown cmd (type 'help')",
+ "cat /home/note.txt": "Unknown cmd (type 'help')",
+ "open note.txt": "Unknown cmd (type 'help')",
+ "run snake": "Unknown cmd (type 'help')",
+ "date": "Unknown cmd (type 'help')",
+ "time": "Unknown cmd (type 'help')",
+ "history": "Unknown cmd (type 'help')",
+ "cd /": "Unknown cmd (type 'help')"
+}
