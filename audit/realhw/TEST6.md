@@ -37,3 +37,11 @@
 **Real hardware:** the StudioNet card is virtual, so the Toshiba will always say "no network" until SpiralOS gets a real NIC driver (roster D23).
 
 **Option:** upstream the StudioNet NIC into Hummingbird proper (a Hummingbird 1.3). Check that KolibriOS still boots and that Hummingbird's own tests pass with the card present.
+
+### Update 2026-11-16: fixed upstream as Hummingbird 1.3
+
+Kham said "up to you", so Kehai did it: Hummingbird proper now has the StudioNet card (ConsciousNode/Hummingbird
+commit 8cdc9a0, see its `CHANGES-1.3.md`). KolibriOS boots bit-identically; SpiralOS's `net.js`, `sonder.js`,
+`apps.js` and `spiralos-15.js` all pass with the upstream page swapped in; two real Chromium tabs exchange frames.
+SpiralOS's `tests/boot.js` fails on upstream Hummingbird with or without the card (its milestone detector only
+lives in our copy), so `hummingbird.html` here stays as-is for now.
