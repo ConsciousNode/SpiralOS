@@ -26,3 +26,14 @@
 - **Questions for Kham:**
   1. Does "It is now safe to turn off your computer" appear, even briefly?
   2. After the restart, does unsaved Notes text (or a new file) survive? In other words, did the flush happen?
+
+## Hummingbird shows "no network" (Kham, 17:03)
+**Not a SpiralOS bug.** It's two different Hummingbirds:
+- **The Hummingbird repo's page** (`ConsciousNode/Hummingbird/index.html`, the KolibriOS-in-a-tab machine) has **no StudioNet card** at all: 0 references to `StudioNetNIC`. SpiralOS probes port 0x2A0, gets nothing, and correctly says "no network."
+- **The NIC lives only in SpiralOS's own patched copy, `SpiralOS/hummingbird.html`** (Hummingbird 1.1 plus `StudioNetNIC` at 0x2A0–0x2AF, IRQ 10). That's the copy the tests run on.
+
+**Workaround:** open `consciousnode.github.io/SpiralOS/hummingbird.html` and CyberNetServerWeb in the same browser. They talk over `BroadcastChannel("studionet-v1")`, which only works between tabs on the same origin (consciousnode.github.io).
+
+**Real hardware:** the StudioNet card is virtual, so the Toshiba will always say "no network" until SpiralOS gets a real NIC driver (roster D23).
+
+**Option:** upstream the StudioNet NIC into Hummingbird proper (a Hummingbird 1.3). Check that KolibriOS still boots and that Hummingbird's own tests pass with the card present.
