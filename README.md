@@ -5,6 +5,8 @@
 
 ---
 
+> **1.5 "Make It Real" (2026-11-16):** keyboard control throughout (launcher, window manager, every app), right-click menus, a shared clipboard, scrollbars, a much bigger shell (history, Tab completion, `cp`/`mv`/`rm`/`mkdir`), a real-time clock locked to the 100 Hz PIT, and a clean `shutdown` that saves your work. The whole OS still fits the 128 KB SPIR box, with 536 bytes to spare. Audited ([`audit/kehai-1.5/AUDIT.md`](audit/kehai-1.5/AUDIT.md)): the rebuild is byte-identical, all 15 suites pass, and a 360-program differential compiler fuzz found 0 disagreements. Next stop: Kham's Toshiba.
+>
 > **1.3 Triton Core (2026-11-13):** SpiralOS now runs on a third machine, the balanced-ternary **Triton 3.1**. Open [`triton/spiralos-triton.html`](triton/spiralos-triton.html) and it boots [`triton/spiralos-1.3.img`](triton/spiralos-1.3.img). That image is the 1.2.1 image plus one new record, the Triton Core, in sectors 960–994. Sectors 0–959 are byte-identical to 1.2.1, so on x86 (Hummingbird, real hardware) and TabComp, 1.3 behaves exactly like 1.2.1. Audited ([`AUDIT-TRITON-CORE.md`](AUDIT-TRITON-CORE.md)): an ALU oracle of 39,444 vectors run through the disk had 0 mismatches, and it boots in real Chrome. Not yet: the root `spiralos.img` and the Build Station (`index.html`) are still 1.2.1, and the Build Station can't produce the 1.3 image yet.
 >
 > **1.2.1 (2026-11-12):** PS/2 mouse fixes from the first Toshiba test: packet sync, 9-bit deltas, overflow drop, and 8042 timeouts sized for real hardware. Version strings now say 1.2/1.2.1. See [`CHANGES-1.2.1.md`](CHANGES-1.2.1.md).
@@ -12,6 +14,12 @@
 > **On real hardware (2026-11-12):** 1.2.1 boots from a USB stick on Kham's Core 2 Duo–era Toshiba laptop in Legacy BIOS mode. Display, keyboard and the internal trackpad all work, and Paint paints. A USB mouse (through the BIOS's legacy PS/2 emulation) is still erratic. Paint has no save, Files `[+New]` writes a fixed demo file, and there's no general text editor yet: those are next. An idle soak of about two hours ran without a hang, and with USB first in the boot order it goes from POST to the desktop in under a minute (Kham's report).
 >
 > **1.2 (2026-11-11):** bare-metal bring-up patch, audited ([`AUDIT-1.2.md`](AUDIT-1.2.md)). Shell and app text stay inside their windows. The PS/2 mouse init does the full 8042 handshake with timeouts. The framebuffer pitch comes from VBE. Every bring-up test fails on 1.1 and passes on 1.2, including against emulated slow controllers, mice that need a reset, and padded scanlines.
+
+## Acknowledgements: standing on the shoulders of KolibriOS
+
+SpiralOS would not exist without **[KolibriOS](https://kolibrios.org)**. It's a complete graphical operating system written in x86 assembly that fits on a single 1.44 MB floppy, and it's one of Kham's biggest inspirations as a developer. KolibriOS proved, beautifully and for years, that a whole desktop OS doesn't need gigabytes. It's a masterclass at every level.
+
+The lineage is direct. The studio built **Hummingbird** so KolibriOS could run in a browser tab, and SpiralOS learned to boot on that same machine. Thank you to the KolibriOS team and contributors, and to MenuetOS, which KolibriOS grew out of. Go try it: it's an art piece.
 
 ## 1. Overview
 

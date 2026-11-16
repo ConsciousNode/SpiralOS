@@ -50,3 +50,6 @@ Kham's take (2026-11-16): the shelf answers system bloat. Every app can live on 
 - Each listing carries a SHA-256 hash, checked before the app is installed. A tampered or half-sent app is refused.
 - An uninstall that really frees the disk space.
 - Works offline-first: installed apps never need the shelf to run.
+
+## Credit KolibriOS in the About app
+Kham asked for this on 2026-11-16, and it's already in the README. Add a line to SpiralOS's About app: "Inspired by KolibriOS (kolibrios.org)". It waits for loadable apps, or for room in the 128 KB box, since only 536 B are free.
