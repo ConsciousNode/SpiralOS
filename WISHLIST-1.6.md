@@ -1,0 +1,39 @@
+# SpiralOS 1.6 wishlist
+
+Started 2026-11-16 by Kham and Kehai, while the 1.5 delivery was in progress.
+Facts below were checked against the 1.4 source (`TRITON-CORE.md` §3, `core/core_x86.js`, `compiler/spiralc.js`).
+
+## 1. Loadable apps (top priority)
+
+**Problem.** The whole OS, every app included, compiles into one fixed 128 KB `SPIR` image (floppy sectors 64–319, strings at the top). Every new feature competes for space in that one image, which is why 1.5 needed compaction.
+
+**Want.**
+- A small core OS stays in the boot `SPIR` image.
+- Apps (Notes, Paint, Solitaire, Snake, Blocks, Calc, etc.) become their own `.spir` files on SpiralFS, compiled by SpiralC.
+- Opening an app loads it into the heap. Closing it frees the memory.
+- All of this works unchanged on TabComp, Hummingbird/x86 and Triton.
+- The self-host fixed point still holds: SpiralC rebuilds the core and every app module byte-identically.
+
+**Controls.**
+- A deliberately corrupt app file must be refused cleanly; the OS stays up.
+- An app built for an older format version must be refused with a message, not run.
+- Loading and unloading the same app 100 times must not leak memory: report the free heap before and after.
+
+## 2. Use the RAM the machine actually has
+
+**Problem.** SpiralOS maps a fixed 4 MB VM window (physical 2–6 MB on x86) and never asks the BIOS how much memory exists. On the Toshiba, the rest of RAM sits idle.
+
+**Want.**
+- **x86:** read the INT 15h E820 memory map (fall back to E801/88h), and size the VM heap to match, leaving room for the framebuffer and paging.
+- **TabComp and Triton:** use the RAM the machine reports.
+- `SYS_MACHINE_INFO` query 1 returns the real usable size instead of a constant 4 MB.
+- Apps can adapt to the size, e.g. more apps open at once, bigger Paint canvases.
+
+**Controls.**
+- Boot Hummingbird at 16, 64 and 256 MB: the reported size must change accordingly, and the 16 MB machine must still boot.
+- A fake E820 map with a hole in the middle must not be written into.
+
+## 3. Carried over from the 1.5 progress audit
+
+- **Timer test reads the clock properly.** The fast-CPU vs CMOS RTC test aligns its start and stop to a seconds rollover, and the test script prints the table itself.
+- **Dropped timer interrupts.** Investigate the 24 ticks missing in the 4× run, unless the final 1.5 delivery explains them.
