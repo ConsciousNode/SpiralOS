@@ -53,3 +53,22 @@ Kham's take (2026-11-16): the shelf answers system bloat. Every app can live on 
 
 ## Credit KolibriOS in the About app
 Kham asked for this on 2026-11-16, and it's already in the README. Add a line to SpiralOS's About app: "Inspired by KolibriOS (kolibrios.org)". It waits for loadable apps, or for room in the 128 KB box, since only 536 B are free.
+
+## 4. Game settings (Kham, 2026-11-20, passed on by Ren)
+
+Kham's words: "there is no way to change the deal or draw pile from 1 to 3 in game and no way to change the settings in SpiralBlocks also".
+
+**Checked against the 1.5 source (`0263ede`, `os/apps2.sp`).**
+- **Solitaire:** `g_sol_klon_draw` (line 77) and `g_sol_spider_suits` (line 78) exist, and the code honours them: the stock draw at line 549 and the suit fold at lines 480–481. But the only assignments are the inits at lines 1002–1003, both 1. No key, button or command changes them, so every Klondike game is draw 1 and every Spider game is one suit. The header (lines 15–16) advertises "draw 1/3" and "1/2/4 suits", so this is also a claims-vs-code item.
+- **Blocks:** no settings at all. Level comes from lines (`1 + lines/10`, line 278) and gravity from level (line 299).
+
+**Want.**
+- Solitaire: an in-game control for Klondike draw 1/3 and Spider 1/2/4 suits, plus a way to pick or re-deal the deal number. A change starts a new game.
+- Blocks: at least a starting level. Anything else (ghost piece on/off, etc.) is optional.
+
+**Controls.**
+- Klondike draw 3 deals three cards from the stock (or fewer when fewer remain), and the same seed gives the same game.
+- Spider at 2 and 4 suits deals the right suit mix (2 × 52 cards in total, every suit present).
+- Blocks started at level 5 falls at level 5 speed from the first piece.
+
+**Space.** Only 536 B are free in the 1.5 image, so this most likely rides along with loadable apps (§1).
