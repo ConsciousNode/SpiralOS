@@ -1,0 +1,27 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+    AUDIT tabcomp launcher[11] appId=12: heap 11072224 -> 11075584 (3360)
+    AUDIT tabcomp launcher[17] appId=19: heap 11075584 -> 11071168 (-4416)
+  AUDIT LEAK tabcomp: 11072224 -> 11071168
+    AUDIT hummingbird launcher[11] appId=12: heap 11072224 -> 11075584 (3360)
+    AUDIT hummingbird launcher[17] appId=19: heap 11075584 -> 11071168 (-4416)
+  AUDIT LEAK hummingbird: 11072224 -> 11071168
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: triton: launcher[0] expected appId=1, got 7
+
+7 !== 1
+
+    at runSuite (/tmp/s16run2/tests/spiralos-16.js:497:16)
+    at Object.<anonymous> (/tmp/s16run2/tests/spiralos-16.js:936:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 7,
+  expected: 1,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

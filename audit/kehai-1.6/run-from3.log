@@ -1,0 +1,28 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+  [PASS] 3. 3-Stage Self-Host Fixed Point (Core + All 18 /apps/*.spir): bit-identical across Stage 1/2/3 on TabComp & Hummingbird (core=ef1764ebcc4de673...)
+  [PASS] 4. Real RAM Probing: HB heap(16/64/256MB)=10.6/58.6/250.6 MiB | E820 16MB hole guard 0/16777216 bytes touched (usable heap=26.6 MiB) | TC=10.56 MiB | Triton=8.25 MiB
+    - TabComp Zork OK (17473 B, 164 prompts)
+    - Hummingbird Zork OK (17473 B, 164 prompts)
+    - Triton Zork OK (17473 B, 164 prompts)
+  [PASS] 5. Z-Machine vs Independent Oracle (163 commands, 100% hash + transcript match on TabComp, Hummingbird & Triton):
+         Independence: 0 shared non-trivial idents (0.00% Jaccard), distinct class+Map vs procedural AST
+         Transcripts : TC=17473B, HB=17473B, Triton=17473B (oracle=17473B), 164 per-command hashes identical
+  [PASS] 6. Z-Machine Positive Controls: z1=CAUGHT, z2=CAUGHT, z3=CAUGHT, z4=CAUGHT
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: Shell buffer missing 'a b': 'SpiralOS 1.6 "Open Shelf"'
+    at runSuite (/tmp/s16run/tests/spiralos-16.js:736:12)
+    at Object.<anonymous> (/tmp/s16run/tests/spiralos-16.js:933:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+exit=1

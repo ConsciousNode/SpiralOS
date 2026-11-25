@@ -1,0 +1,26 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+  [PASS] 1. Loader Controls: corrupt refused ("Corrupt app: checksum mismatch"), v1 refused ("Unsupported older app format version"), 100x load/unload 0-byte leak (heap free 11072768 -> 11072768 B)
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: tabcomp: heap leak after opening/closing all 19 apps (11072224 -> 11071168)
++ actual - expected
+
++ 11071168
+- 11072224
+      ^
+
+    at runSuite (/tmp/s16run/tests/spiralos-16.js:501:14)
+    at Object.<anonymous> (/tmp/s16run/tests/spiralos-16.js:933:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 11071168,
+  expected: 11072224,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+exit=1

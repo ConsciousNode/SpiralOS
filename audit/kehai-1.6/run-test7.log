@@ -1,0 +1,21 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+  [PASS] 6. Z-Machine Positive Controls: z1=CAUGHT, z2=CAUGHT, z3=CAUGHT, z4=CAUGHT
+  AUDIT 7a shell buffer: "SpiralOS 1.6 \"Open Shelf\"" focused=3
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: Notes buffer expected 'a b', got 'SpiralOS 1.6 "Open Shelf" - ConsciousNode SoftWorks (MIT)
+Unifie'
+    at runSuite (/tmp/s16run2/tests/spiralos-16.js:743:12)
+    at Object.<anonymous> (/tmp/s16run2/tests/spiralos-16.js:933:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
