@@ -25,7 +25,7 @@ Logs and scripts are in this folder.
 | 2. All 19 apps open and close, all 3 machines | **PASS**: 0 B heap change on TabComp, Hummingbird and Triton (1.6 failed this) |
 | 3. Self-host fixed point, core + 18 apps | PASS |
 | 4. Real RAM | PASS |
-| 5. Zork vs the oracle | TabComp and Hummingbird OK (17,473 B, 164 prompts, matching the oracle). Triton: rerun in progress at commit time; result follows in its own commit |
+| 5. Zork vs the oracle | TabComp and Hummingbird OK (17,473 B, 164 prompts, matching the oracle). **Triton OK too**: all three machines match the oracle byte for byte, 164 per-command hashes (`run-s16-test5-zork.log`) |
 | 6. Z-machine mutants | PASS (4/4) |
 | 7. Text areas, "a b" + Enter, no dialog | **PASS** (1.6 failed this) |
 | 8. Shutdown on Hummingbird | **The file survives**, as `persist-1.6`. The frozen test asserts `PERSIST-1.6`, but its own typing helper only sends unshifted (lowercase) scancodes. That's a test bug, and Neon called it correctly. My audit copy (`kehai-audit-s16.js`; its only change is the expected case, `kehai-audit-s16.diff`) gives **PASS**: halted, message shown, file survives, no boot re-entry, positive control 'g' caught |

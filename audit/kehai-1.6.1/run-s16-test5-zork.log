@@ -1,0 +1,31 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+    - TabComp Zork OK (17473 B, 164 prompts)
+    - Hummingbird Zork OK (17473 B, 164 prompts)
+    - Triton Zork OK (17473 B, 164 prompts)
+  [PASS] 5. Z-Machine vs Independent Oracle (163 commands, 100% hash + transcript match on TabComp, Hummingbird & Triton):
+         Independence: 0 shared non-trivial idents (0.00% Jaccard), distinct class+Map vs procedural AST
+         Transcripts : TC=17473B, HB=17473B, Triton=17473B (oracle=17473B), 164 per-command hashes identical
+  [PASS] 6. Z-Machine Positive Controls: z1=CAUGHT, z2=CAUGHT, z3=CAUGHT, z4=CAUGHT
+  [PASS] 7. Text-Area Fresh-Open Check ('a b' + Enter, no dialog): Notes, Edit, Chat, Shell, Zork all verified
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: File did not survive shutdown+reboot: 'persist-1.6'
++ actual - expected
+
++ 'persist-1.6'
+- 'PERSIST-1.6'
+
+    at runSuite (/tmp/w161/tests/spiralos-16.js:801:12)
+    at Object.<anonymous> (/tmp/w161/tests/spiralos-16.js:933:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'persist-1.6',
+  expected: 'PERSIST-1.6',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
