@@ -1,0 +1,29 @@
+=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
+  [PASS] 1. Loader Controls: corrupt refused ("Corrupt app: checksum mismatch"), v1 refused ("Unsupported older app format version"), 100x load/unload 0-byte leak (heap free 11072592 -> 11072592 B)
+  [PASS] 2. All Launcher Apps Open & Close on All 3 Machines: tabcomp: 19/19 ok, heap 11075584 -> 11075584 B | hummingbird: 19/19 ok, heap 11075584 -> 11075584 B | triton: 19/19 ok, heap 8647264 -> 8647264 B
+  [PASS] 3. 3-Stage Self-Host Fixed Point (Core + All 18 /apps/*.spir): bit-identical across Stage 1/2/3 on TabComp & Hummingbird (core=c530d7b9f763670b...)
+  [PASS] 4. Real RAM Probing: HB heap(16/64/256MB)=10.6/58.6/250.6 MiB | E820 16MB hole guard 0/16777216 bytes touched (usable heap=26.6 MiB) | TC=10.56 MiB | Triton=8.25 MiB
+  [PASS] 6. Z-Machine Positive Controls: z1=CAUGHT, z2=CAUGHT, z3=CAUGHT, z4=CAUGHT
+  [PASS] 7. Text-Area Fresh-Open Check ('a b' + Enter, no dialog): Notes, Edit, Chat, Shell, Zork all verified
+SpiralOS 1.6 Suite FAILED: AssertionError [ERR_ASSERTION]: File did not survive shutdown+reboot: 'persist-1.6'
++ actual - expected
+
++ 'persist-1.6'
+- 'PERSIST-1.6'
+
+    at runSuite (/tmp/w161/tests/spiralos-16.js:801:12)
+    at Object.<anonymous> (/tmp/w161/tests/spiralos-16.js:933:1)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'persist-1.6',
+  expected: 'PERSIST-1.6',
+  operator: 'strictEqual',
+  diff: 'simple'
+}

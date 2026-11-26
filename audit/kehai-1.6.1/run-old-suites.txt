@@ -1,0 +1,12 @@
+vm rc=0 1s
+boot rc=0 7s
+apps rc=0 5s
+determinism rc=0 29s
+strict-bios rc=0 18s
+multitask rc=0 13s
+net rc=0 21s
+sonder rc=0 14s
+mouse-121 rc=0 51s
+asm rc=1 2s
+spiralos-14 rc=1 1s
+spiralos-15 rc=1 2s

@@ -1,0 +1,6 @@
+=== SpiralOS 1.6.1 Audit & Real-Hardware Verification Suite (tests/spiralos-161.js) ===
+  [PASS] 1. ACPI S5 Shutdown: RSDP->RSDT->FADT->DSDT(\_S5_) wrote 0x3400 to PM1a(0x0604) & PM1b(0x0608), /home/s5test.txt ("acpi-ok") survived reboot; missing-_S5_ positive control halted cleanly (status=4, 0 reboots)
+  [PASS] 2. Notes & Edit Cursor-Follow Scroll: Notes [New] cleared buffer, 60 lines -> Notes(curRow=60, scroll=55), Edit(curRow=60, scroll=51)
+  [PASS] 3. Mouse Packet Sync & Diagnostic: bad byte resynced (drops 0->1, cursor +10/-6 intact), /home/mouse.log (21 B) logged raw packets
+  [PASS] 4. Game Settings: Klondike Draw 3 (24->21/3) & Deal #42 deterministic | Spider 2-suit (52/52/0/0) & 4-suit (26/26/26/26) | Blocks Lv5 (77 drops) > Lv1 (38 drops)
+=== SpiralOS 1.6.1 Verification Suite Complete ===

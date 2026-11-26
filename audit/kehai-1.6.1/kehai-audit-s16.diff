@@ -1,0 +1,4 @@
+801c801
+<     assert.strictEqual(survived, "PERSIST-1.6", `File did not survive shutdown+reboot: '${survived}'`);
+---
+>     assert.strictEqual(survived, "persist-1.6" /* KEHAI AUDIT COPY: helper types lowercase */, `File did not survive shutdown+reboot: '${survived}'`);

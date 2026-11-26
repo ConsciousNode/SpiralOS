@@ -1,0 +1,28 @@
+=== SpiralOS 1.5 "Make It Real" Comprehensive Verification Suite (tests/spiralos-15.js) ===
+  [PASS] 1. Build & Memory-Map Overlap Check: 72 VM regions (31 relocated buffers) verified pairwise disjoint; SPIR=88292B code + 5938B strings (36492B headroom)
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Launcher should expose all 18 items
+
+19 !== 18
+
+    at runSpiralOS15Suite (/tmp/w161/tests/spiralos-15.js:172:12)
+    at Object.<anonymous> (/tmp/w161/tests/spiralos-15.js:681:3)
+    at Module._compile (node:internal/modules/cjs/loader:1781:14)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 19,
+  expected: 18,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.5
