@@ -30,7 +30,7 @@ Logs and scripts are in this folder.
 | 7. Text areas, "a b" + Enter, no dialog | **PASS** (1.6 failed this) |
 | 8. Shutdown on Hummingbird | **The file survives**, as `persist-1.6`. The frozen test asserts `PERSIST-1.6`, but its own typing helper only sends unshifted (lowercase) scancodes. That's a test bug, and Neon called it correctly. My audit copy (`kehai-audit-s16.js`; its only change is the expected case, `kehai-audit-s16.diff`) gives **PASS**: halted, message shown, file survives, no boot re-entry, positive control 'g' caught |
 | 9. Game settings | **PASS** (1.6 failed this): Blocks Lv 5 gives 77 drops against Lv 1's 38 |
-| 10. HTML/JS syntax | Fails in Node on `index.html`, which hasn't changed since 1.6: the test compiles the page's embedded JSON `<script>` as JavaScript. That's a second test bug. REPORT says this check is "verified", which it isn't, but the real browser below covers it |
+| 10. HTML/JS syntax | **FAIL, real bug (corrected 2026-11-27, see Erratum).** I first called this a test bug and said the real browser covered it. Both were wrong: the browser run only loaded `hummingbird.html`, and `index.html` (the Build Station) really doesn't parse |
 | `spiralos-161.js` 1–4 | **PASS**: ACPI S5 plus the missing-`_S5_` control, Notes New + 60-line scroll in Notes and Edit, mouse resync + `/home/mouse.log`, game settings |
 
 ## The Toshiba restart: root cause confirmed
@@ -78,3 +78,14 @@ Both test bugs are in tests we froze:
 We should fix them in our own copy of the suite, not ask the builder to.
 
 — Kehai
+
+## Erratum (2026-11-27): the Build Station page has been dead since 1.4
+Found while cataloguing the studio's artifacts for the Neocities site.
+
+- `index.html`'s main script (`<script id="spiral-station-core">`, ~744 KB) fails to parse in a real browser: `SyntaxError: missing ) after argument list`. So the Build Station loads its shell and buttons, but none of its code runs.
+- The cause is one line: `spfs.writeFile("/docs/README.txt", "SpiralOS 1.4 "Daily Driver" - …")`. The inner quotes around *Daily Driver* aren't escaped.
+- `node --check` on that script block, per commit: `0b8e468` (before 1.4) parses; `3acced4` and `49b6f27` (the 1.4 delivery) fail. `index.html` hasn't changed since, so 1.5, 1.6 and 1.6.1 all shipped it broken.
+- The 1.4, 1.6 and 1.6.1 audits all missed it, because every browser check loaded the machine pages (`hummingbird.html`, `tabcomp.html`) with `spiralos.img`, never `index.html`. Test 10 was flagging it the whole time.
+- **The OS itself is unaffected.** The disk image, the machines and everything above in this audit stand. Only the Build Station page is broken.
+- Fix for 1.6.2: escape the quotes (`\"Daily Driver\"`), and make test 10 parse each executable `<script>` block on its own (skipping JSON blocks), so it can tell a test bug from a real one.
+- Lesson for future audits: load **every** page a delivery ships in the real browser, not only the ones the tests drive.
