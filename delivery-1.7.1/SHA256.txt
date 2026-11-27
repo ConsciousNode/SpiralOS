@@ -1,0 +1,2 @@
+7dba179dc3389789f6ea5dd3bb337862570700867ec7c64acbb6c262152d4ba1  spiralos-1.7.1-delivery.zip
+5b5a4f5b34e963764cdf3dc91d7fc6da87eb05a7282ce77f0427949e7fdcc90d  spiralos.img
