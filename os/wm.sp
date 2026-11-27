@@ -11,7 +11,7 @@
 const WM_TITLE_COLOR_OVERRIDE = 0;
 
 // from spiralos/os/wm.sp:13-166
-const MAX_WINS = 12;
+const MAX_WINS = 16;
 const APP_FILES    = 1;
 const APP_EDIT     = 2;
 const APP_SHELL    = 3;
@@ -26,16 +26,17 @@ const APP_BLOCKS   = 11;
 const APP_CHAT     = 12;
 const APP_TRANSFER = 13;
 const APP_BROWSER  = 14;
+const APP_ZORK     = 20;
 
-int win_used[12];
-int win_app[12];
-int win_x[12];
-int win_y[12];
-int win_w[12];
-int win_h[12];
-int win_min[12];
-int win_title[12];
-int win_zorder[12];
+int win_used[16];
+int win_app[16];
+int win_x[16];
+int win_y[16];
+int win_w[16];
+int win_h[16];
+int win_min[16];
+int win_title[16];
+int win_zorder[16];
 int g_win_count;
 int g_focused_win;
 
@@ -44,6 +45,8 @@ int g_drag_mode; // 0=none, 1=move, 2=resize
 int g_drag_ox;
 int g_drag_oy;
 int g_launcher_open;
+int g_pending_app_arg;
+const LOADER_ERR_BUF = 0x04DF40;
 
 void wm_init() {
   g_win_count = 0;
@@ -101,7 +104,18 @@ int wm_open(int app_id, int x, int y, int w, int h, int title_str) {
   win_title[wid] = title_str;
   win_zorder[g_win_count] = wid;
   g_win_count = g_win_count + 1;
-  if (app_id >= 0 && app_id < 16) app_tick_last_ms[app_id] = hal_time();
+  if (app_id >= 0 && app_id < 24) app_tick_last_ms[app_id] = hal_time();
+  if (app_path_for_id(app_id) != 0) {
+    int lrc = app_attach_to_win(wid, app_id, g_pending_app_arg);
+    g_pending_app_arg = 0;
+    if (lrc < 0) {
+      win_used[wid] = 0;
+      g_win_count = g_win_count - 1;
+      w32(VMRAM_STATUS + 0x14, g_win_count);
+      shell_print(LOADER_ERR_BUF);
+      return -1;
+    }
+  }
   task_spawn(app_id, wid);
   wm_focus(wid);
   w32(VMRAM_STATUS + 0x14, g_win_count);
@@ -111,6 +125,7 @@ int wm_open(int app_id, int x, int y, int w, int h, int title_str) {
 void wm_close(int wid) {
   if (wid < 0 || wid >= MAX_WINS) return;
   if (win_used[wid] == 0) return;
+  app_unload_win(wid);
   win_used[wid] = 0;
   task_kill_by_win(wid);
   int pos = -1;
@@ -128,6 +143,7 @@ void wm_close(int wid) {
     w32(VMRAM_STATUS + 0x18, win_app[g_focused_win]);
   } else {
     g_focused_win = -1;
+    w32(VMRAM_STATUS + 0x18, 0);
   }
   w32(VMRAM_STATUS + 0x14, g_win_count);
 }

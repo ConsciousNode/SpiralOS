@@ -49,6 +49,7 @@ const APP_NOTES      = 16;
 const APP_CLOCK      = 17;
 const APP_SOLITAIRE  = 18;
 const APP_ABOUT      = 19;
+const SHARED_ST      = 0x04DFC0;
 
 int g_fm_selected;
 int g_fm_inbox_mode;
@@ -179,6 +180,8 @@ int dlg_folder_path(int idx) {
 void dlg_open(int mode, int owner_app, int folder_idx, int default_name) {
   g_dlg_active = mode;
   g_dlg_owner_app = owner_app;
+  w32(SHARED_ST + 0x18, mode);
+  w32(SHARED_ST + 0x1C, owner_app);
   g_dlg_folder_idx = folder_idx;
   g_dlg_file_sel = 0;
   g_dlg_confirm_ovw = 0;
@@ -209,10 +212,12 @@ void dlg_commit_action() {
     if (g_dlg_owner_app == 5) { // APP_PAINT
       fs_write(DLG_FULL_BUF, PAINT_CANVAS, 96 * 56);
     } else if (g_dlg_owner_app == APP_NOTES) {
+      g_notes_len = r32(SHARED_ST + 0x00);
       fs_write(DLG_FULL_BUF, NOTES_BUF, g_notes_len);
       hal_memset(NOTES_PATH_BUF, 0, 64);
       hal_memcpy(NOTES_PATH_BUF, DLG_FULL_BUF, hal_strlen(DLG_FULL_BUF));
       g_notes_dirty = 0;
+      w32(SHARED_ST + 0x04, 0);
     }
   } else if (g_dlg_active == 2) {
     // Open
@@ -227,8 +232,9 @@ void dlg_commit_action() {
       }
     }
   }
-  g_dlg_active = 0;
+  g_dlg_active = 0; w32(SHARED_ST + 0x18, 0);
   g_dlg_confirm_ovw = 0;
+  w32(SHARED_ST + 0x18, 0);
 }
 
 void dlg_draw(int x, int y, int w, int h) {
@@ -328,7 +334,7 @@ int dlg_click(int wid, int rx, int ry) {
         dlg_commit_action();
       }
     } else if (rx >= 60 && rx < 108) {
-      g_dlg_active = 0;
+      g_dlg_active = 0; w32(SHARED_ST + 0x18, 0);
       g_dlg_confirm_ovw = 0;
     }
   }
@@ -339,7 +345,7 @@ int dlg_key(int ascii, int vk) {
   if (g_dlg_active == 0) return 0;
   if (vk == 27) {
     if (g_dlg_confirm_ovw == 1) g_dlg_confirm_ovw = 0;
-    else g_dlg_active = 0;
+    else g_dlg_active = 0; w32(SHARED_ST + 0x18, 0);
     return 1;
   }
   if (vk == 38 && g_dlg_file_sel > 0) { g_dlg_file_sel = g_dlg_file_sel - 1; return 1; }
@@ -370,6 +376,9 @@ void edit_load_file(int path_str) {
   hal_memset(EDIT_BUF, 0, 36000);
   hal_memcpy(EDIT_BUF, fs_entry_data_ptr(idx), sz);
   g_edit_len = sz;
+  w32(SHARED_ST + 0x08, sz);
+  w32(SHARED_ST + 0x0C, 0);
+  w32(SHARED_ST + 0x10, idx);
   g_edit_cursor = sz;
   g_edit_sel_a = sz;
   g_edit_sel_b = sz;
@@ -475,6 +484,7 @@ void shell_resolve_path(int in_str, int out_buf) {
 }
 
 void notes_load_file(int path_str) {
+  g_pending_app_arg = 1;
   int fidx = fs_find(path_str);
   if (fidx < 0) return;
   int sz = fs_entry_size(fidx);
@@ -482,6 +492,8 @@ void notes_load_file(int path_str) {
   hal_memset(NOTES_BUF, 0, 32768);
   hal_memcpy(NOTES_BUF, fs_entry_data_ptr(fidx), sz);
   g_notes_len = sz;
+  w32(SHARED_ST + 0x00, sz);
+  w32(SHARED_ST + 0x04, 0);
   g_notes_cursor = sz;
   g_notes_sel_start = sz;
   g_notes_sel_end = sz;
@@ -492,6 +504,8 @@ void notes_load_file(int path_str) {
 }
 
 void shell_open_file(int raw_arg) {
+  int rlen0 = hal_strlen(raw_arg);
+  if (rlen0 >= 3 && r8(raw_arg + rlen0 - 3) == 46 && r8(raw_arg + rlen0 - 2) == 122 && r8(raw_arg + rlen0 - 1) == 51) { g_pending_app_arg = raw_arg; open_app_by_id(APP_ZORK); return; }
   int fpath = SRRP_SCRATCH_BUF + 0xE80;
   shell_resolve_path(raw_arg, fpath);
   int fidx = fs_find(fpath);
@@ -649,7 +663,7 @@ void shell_exec_cmd(int cmd_str) {
     }
     if (g_ping_pending == 0 && g_ping_rtt_ms >= 0) {
       int rp = srrp_kv(sb, 0, "PONG RTT ", g_ping_rtt_ms);
-      srrp_append_str(sb, rp, " ms");
+      srrp_append_str(sb, rp, " ms (1.6)");
       shell_print(sb);
     } else {
       g_ping_pending = 0;
@@ -840,7 +854,7 @@ void shell_exec_cmd(int cmd_str) {
     }
     return;
   }
-  if (hal_strcmp(cmd_str, "deals")) { sol_print_deal_checks(); return; }
+  if (hal_strcmp(cmd_str, "deals")) { int sb_m = app_load_path("/apps/solitaire.spir", 1); if (sb_m != 0) app_unload_base(sb_m); return; }
   if (hal_strcmp(cmd_str, "df")) {
     srrp_append_str(sb, srrp_kv(sb, 0, "SpiralFS free: ", fs_free_bytes()), " B");
     shell_print(sb);
@@ -860,7 +874,32 @@ void shell_exec_cmd(int cmd_str) {
     return;
   }
   if (hal_strcmp(cmd_str, "mem")) {
-    shell_print("VM RAM: 4096 KB, SPIR: 128 KB");
+    int mp = srrp_kv(sb, 0, "VM RAM: ", hal_info(1) / 1024);
+    mp = srrp_kv(sb, mp, " KB, HeapFree: ", heap_free_bytes() / 1024);
+    srrp_append_str(sb, mp, " KB");
+    shell_print(sb);
+    return;
+  }
+  if (hal_strcmp(cmd_str, "z") || match_prefix(cmd_str, "z ")) {
+    if (hal_strcmp(cmd_str, "z")) {
+      g_pending_app_arg = "/games/zork1.z3";
+    } else {
+      int zarg = cmd_str + 2;
+      if (r8(zarg) == 47) {
+        hal_memcpy(sb, zarg, hal_strlen(zarg) + 1);
+      } else {
+        hal_memcpy(sb, "/games/", 7);
+        hal_memcpy(sb + 7, zarg, hal_strlen(zarg) + 1);
+      }
+      g_pending_app_arg = sb;
+    }
+    open_app_by_id(APP_ZORK);
+    return;
+  }
+  if (match_prefix(cmd_str, "load ")) {
+    int mh = app_load_path(cmd_str + 5, 0);
+    if (mh == 0) shell_print(LOADER_ERR_BUF);
+    else { app_unload_base(mh); shell_print("Loaded & verified OK"); }
     return;
   }
   if (hal_strcmp(cmd_str, "net")) {
@@ -887,6 +926,20 @@ void shell_exec_cmd(int cmd_str) {
   if (hal_strcmp(cmd_str, "theme")) {
     theme_select(g_current_theme_idx + 1);
     shell_print("Switched desktop theme");
+    return;
+  }
+  if (match_prefix(cmd_str, "write ")) {
+    byte wa1[64]; byte wa2[128];
+    shell_split_two_args(cmd_str + 6, wa1, wa2);
+    if (wa1[0] != 0) {
+      byte wp[64];
+      shell_resolve_path(wa1, wp);
+      int wrc = fs_write(wp, wa2, hal_strlen(wa2));
+      if (wrc >= 0) shell_print("Wrote file");
+      else shell_print("Write failed");
+    } else {
+      shell_print("Usage: write <path> <text>");
+    }
     return;
   }
   if (hal_strcmp(cmd_str, "clear")) {
@@ -947,7 +1000,13 @@ void apps1_init() {
     g_clk_set_mode = 1;
   }
   g_clk_base_ms = hal_time();
-  shell_print(os_version_str());
+  hal_memset(SHELL_OUT_BUF, 0, 48);
+  int vstr = os_version_str();
+  int vlen = hal_strlen(vstr);
+  if (vlen > 46) vlen = 46;
+  hal_memcpy(SHELL_OUT_BUF, vstr, vlen);
+  g_shell_lines = 1;
+  g_shell_hist_cnt = 0;
 
   g_paint_color = 14;
   hal_memset(PAINT_CANVAS, 16, 96 * 56);
@@ -956,610 +1015,7 @@ void apps1_init() {
 }
 
 // from spiralos/os/apps1.sp:196-310 (extended with New Folder, New File, Rename, Delete confirm, Send to..., Inbox)
-void app_draw_files(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  // Top toolbar inside Files: [All] [Inbox] [+Dir] [Ren] [Send]
-  wbtn(4, 14, 26, 10, "All", g_fm_inbox_mode == 0);
-  wbtn(32, 14, 34, 10, "Inbx", g_fm_inbox_mode == 1);
-  wbtn(68, 14, 30, 10, "+Dir", g_fm_modal_mode == 2);
-  wbtn(100, 14, 26, 10, "Ren", g_fm_modal_mode == 3);
-  wbtn(128, 14, 24, 10, "Snd", g_fm_modal_mode == 5);
 
-  if (h > 44 && w > 8) {
-    hal_rect(x + 4, y + 25, w - 8, h - 43, 16);
-  }
-  int cnt = fs_count();
-  int max_show = (h - 46) / 9;
-  int name_cols = (w - 54) / 8;
-  if (w < 116) {
-    name_cols = (w - 16) / 8;
-  }
-  gui_reg_ctl(4, 25, w - 8, h - 43, 0);
-  if (g_fm_selected < g_fm_scroll) g_fm_scroll = g_fm_selected;
-  if (max_show > 0 && g_fm_selected >= g_fm_scroll + max_show) g_fm_scroll = g_fm_selected - max_show + 1;
-  if (g_fm_scroll < 0) g_fm_scroll = 0;
-  int shown = 0;
-  int vis_idx = 0;
-  for (int i = 0; i < cnt && shown < max_show; i++) {
-    int fidx = fs_nth_index(i);
-    int ep = fs_entry_ptr(fidx);
-    if (g_fm_inbox_mode == 1 && match_prefix(ep, "/inbox/") == 0) continue;
-    if (vis_idx >= g_fm_scroll) {
-      int ry = y + 26 + shown * 9;
-      if (i == g_fm_selected) {
-        hal_rect(x + 5, ry - 1, w - 14, 9, thm_title_active);
-      }
-      if (name_cols > 0) {
-        gui_str_clip(x + 8, ry, ep, name_cols, 15, -1);
-      }
-      if (w >= 116) {
-        hal_itoa(fs_entry_size(fidx), NUM_STR_BUF, 10);
-        gui_str_clip(x + w - 48, ry, NUM_STR_BUF, 5, 11, -1);
-      }
-      shown = shown + 1;
-    }
-    vis_idx = vis_idx + 1;
-  }
-  gui_draw_vscroll(w - 8, 25, h - 43, g_fm_scroll, max_show, cnt);
-  wbtn(4, h - 16, 42, 12, "Edit", 0);
-  wbtn(50, h - 16, 42, 12, "+New", 0);
-  wbtn(96, h - 16, 40, 12, "Del", 0);
-
-  if (g_fm_modal_mode != 0) {
-    gui_bevel_rect(x + 8, y + 36, w - 16, 52, 18, thm_btn_hi, thm_btn_sh);
-    int ml = "Send to Peer:";
-    if (g_fm_modal_mode == 1) ml = "New File Path:";
-    if (g_fm_modal_mode == 2) ml = "New Folder Path:";
-    if (g_fm_modal_mode == 3) ml = "Rename To:";
-    if (g_fm_modal_mode == 4) ml = "Confirm Delete?";
-    wstr(12, 40, ml, 14);
-
-    if (g_fm_modal_mode <= 3 || g_fm_modal_mode == 5) {
-      hal_rect(x + 12, y + 52, w - 24, 11, 0);
-      gui_str_clip(x + 14, y + 54, FM_INPUT_BUF, (w - 28) / 8, 15, -1);
-      if (gui_caret_on()) {
-        int mcx = x + 14 + g_fm_input_len * 8;
-        if (mcx + 6 < x + w - 14) hal_rect(mcx, y + 61, 6, 2, 14);
-      }
-    }
-    wbtn(12, 68, 42, 12, "OK", 1);
-    wbtn(60, 68, 48, 12, "Cancel", 0);
-  }
-}
-
-void fm_commit_modal() {
-  int fidx = fs_nth_index(g_fm_selected);
-  if (g_fm_modal_mode == 1 && g_fm_input_len > 0) {
-    fs_write(FM_INPUT_BUF, "SpiralOS Note\n", 14);
-  } if (g_fm_modal_mode == 2 && g_fm_input_len > 0) {
-    int keep_path = sh_buf();
-    hal_memcpy(keep_path, FM_INPUT_BUF, g_fm_input_len);
-    hal_memcpy(keep_path + g_fm_input_len, "/.dir", 5);
-    fs_write(keep_path, "", 0);
-  } if (g_fm_modal_mode == 3 && g_fm_input_len > 0 && fidx >= 0) {
-    int ep = fs_entry_ptr(fidx);
-    hal_memset(ep, 0, 40);
-    int nlen = g_fm_input_len;
-    if (nlen > 39) nlen = 39;
-    hal_memcpy(ep, FM_INPUT_BUF, nlen);
-    hal_disk_sync(320, 8);
-  } if (g_fm_modal_mode == 4 && fidx >= 0) {
-    fs_delete(fs_entry_ptr(fidx));
-    if (g_fm_selected > 0) g_fm_selected = g_fm_selected - 1;
-  } if (g_fm_modal_mode == 5 && fidx >= 0) {
-    int dst = sns_resolve("peer");
-    if (g_fm_input_len > 0) dst = sns_resolve(FM_INPUT_BUF);
-    srrp_put_inbox(dst, fs_entry_ptr(fidx));
-  }
-  g_fm_modal_mode = 0;
-}
-
-void fm_open_modal(int mode, int def_str) {
-  g_fm_modal_mode = mode;
-  hal_memset(FM_INPUT_BUF, 0, 48);
-  int len = hal_strlen(def_str);
-  hal_memcpy(FM_INPUT_BUF, def_str, len);
-  g_fm_input_len = len;
-}
-
-void app_click_files(int wid, int rx, int ry) {
-  int w = win_w[wid];
-  int h = win_h[wid];
-  if (g_fm_modal_mode != 0) {
-    if (ry >= 68 && ry <= 80) {
-      if (rx >= 12 && rx < 54) fm_commit_modal();
-      else if (rx >= 60 && rx < 108) g_fm_modal_mode = 0;
-    }
-    return;
-  }
-  if (ry >= 14 && ry <= 24) {
-    if (rx >= 4 && rx < 30) g_fm_inbox_mode = 0;
-    else if (rx >= 32 && rx < 66) g_fm_inbox_mode = 1;
-    else if (rx >= 68 && rx < 98) fm_open_modal(2, "/home/docs");
-    else if (rx >= 100 && rx < 126 && fs_nth_index(g_fm_selected) >= 0) fm_open_modal(3, fs_entry_ptr(fs_nth_index(g_fm_selected)));
-    else if (rx >= 128 && rx < 152) fm_open_modal(5, "peer");
-    return;
-  }
-  if (ry >= 25 && ry < h - 20) {
-    if (rx >= w - 12) {
-      if (ry < 25 + ((h - 43) >> 1)) { if (g_fm_scroll > 0) g_fm_scroll = g_fm_scroll - 1; }
-      else if (g_fm_scroll + 1 < fs_count()) g_fm_scroll = g_fm_scroll + 1;
-      return;
-    }
-    int row = g_fm_scroll + (ry - 26) / 9;
-    if (row >= 0 && row < fs_count()) g_fm_selected = row;
-    return;
-  }
-  if (ry >= h - 16 && ry < h - 4) {
-    int fidx = fs_nth_index(g_fm_selected);
-    if (rx >= 4 && rx < 46 && fidx >= 0) {
-      edit_load_file(fs_entry_ptr(fidx));
-      wm_open(APP_EDIT, 24, 20, 216, 134, "SpiralEdit");
-    } else if (rx >= 50 && rx < 92) {
-      // Create default /home/note.txt immediately for compatibility AND open New File name prompt
-      fs_write("/home/note.txt", "SpiralOS Note\n", 14);
-      fm_open_modal(1, "/home/note.txt");
-    } else if (rx >= 96 && rx < 136 && fidx >= 0) {
-      g_fm_modal_mode = 4;
-    }
-  }
-}
-
-void app_key_files(int ascii, int vk) {
-  if (g_fm_modal_mode == 0) {
-    int cnt = fs_count();
-    if (vk == 38 && g_fm_selected > 0) { g_fm_selected = g_fm_selected - 1; return; }
-    if (vk == 40 && g_fm_selected + 1 < cnt) { g_fm_selected = g_fm_selected + 1; return; }
-    if (vk == 33) { g_fm_selected = g_fm_selected - 5; if (g_fm_selected < 0) g_fm_selected = 0; return; }
-    if (vk == 34) { g_fm_selected = g_fm_selected + 5; if (g_fm_selected >= cnt) g_fm_selected = cnt - 1; return; }
-    if (vk == 36) { g_fm_selected = 0; return; }
-    if (vk == 35 && cnt > 0) { g_fm_selected = cnt - 1; return; }
-    if (ascii == 13) {
-      int fidx = fs_nth_index(g_fm_selected);
-      if (fidx >= 0) shell_open_file(fs_entry_ptr(fidx));
-      return;
-    }
-    if (vk == 46 || ascii == 'd') {
-      if (fs_nth_index(g_fm_selected) >= 0) g_fm_modal_mode = 4;
-      return;
-    }
-    if (ascii == 'r' || vk == 113) {
-      int fidx0 = fs_nth_index(g_fm_selected);
-      if (fidx0 >= 0) fm_open_modal(3, fs_entry_ptr(fidx0));
-      return;
-    }
-    if (ascii == 'n') {
-      fs_write("/home/note.txt", "SpiralOS Note\n", 14);
-      fm_open_modal(1, "/home/note.txt");
-      return;
-    }
-    return;
-  }
-  if (vk == 27) { g_fm_modal_mode = 0; return; }
-  if (ascii == 13) { fm_commit_modal(); return; }
-  g_fm_input_len = field_key_common(FM_INPUT_BUF, g_fm_input_len, 38, ascii);
-}
-
-int g_doc_buf;
-int g_doc_undo_buf;
-int g_doc_max;
-int g_doc_len;
-int g_doc_cur;
-int g_doc_sa;
-int g_doc_sb;
-int g_doc_sc;
-int g_doc_dirty;
-int g_doc_ulen;
-
-void doc_begin(int is_notes) {
-  if (is_notes == 1) {
-    g_doc_buf = NOTES_BUF; g_doc_undo_buf = NOTES_UNDO_BUF; g_doc_max = 32000;
-    g_doc_len = g_notes_len; g_doc_cur = g_notes_cursor;
-    g_doc_sa = g_notes_sel_start; g_doc_sb = g_notes_sel_end;
-    g_doc_sc = g_notes_scroll; g_doc_dirty = g_notes_dirty; g_doc_ulen = g_notes_undo_len;
-  } else {
-    g_doc_buf = EDIT_BUF; g_doc_undo_buf = EDIT_UNDO_BUF; g_doc_max = 35000;
-    g_doc_len = g_edit_len; g_doc_cur = g_edit_cursor;
-    g_doc_sa = g_edit_sel_a; g_doc_sb = g_edit_sel_b;
-    g_doc_sc = g_edit_scroll; g_doc_dirty = g_edit_dirty; g_doc_ulen = g_edit_undo_len;
-  }
-}
-
-void doc_end(int is_notes) {
-  if (is_notes == 1) {
-    g_notes_len = g_doc_len; g_notes_cursor = g_doc_cur;
-    g_notes_sel_start = g_doc_sa; g_notes_sel_end = g_doc_sb;
-    g_notes_scroll = g_doc_sc; g_notes_dirty = g_doc_dirty; g_notes_undo_len = g_doc_ulen;
-  } else {
-    g_edit_len = g_doc_len; g_edit_cursor = g_doc_cur;
-    g_edit_sel_a = g_doc_sa; g_edit_sel_b = g_doc_sb;
-    g_edit_scroll = g_doc_sc; g_edit_dirty = g_doc_dirty; g_edit_undo_len = g_doc_ulen;
-  }
-}
-
-void doc_save_undo() {
-  g_doc_ulen = g_doc_len;
-  if (g_doc_len <= 4000) hal_memcpy(g_doc_undo_buf, g_doc_buf, g_doc_len);
-}
-
-void doc_delete_range(int a, int b) {
-  if (a > b) { int t = a; a = b; b = t; }
-  if (a < 0) a = 0;
-  if (b > g_doc_len) b = g_doc_len;
-  int dlen = b - a;
-  if (dlen <= 0) return;
-  doc_save_undo();
-  int tail = g_doc_len - b;
-  if (tail > 0) {
-    hal_memcpy(EDIT_SCRATCH, g_doc_buf + b, tail);
-    hal_memcpy(g_doc_buf + a, EDIT_SCRATCH, tail);
-  }
-  g_doc_len = g_doc_len - dlen;
-  w8(g_doc_buf + g_doc_len, 0);
-  g_doc_cur = a; g_doc_sa = a; g_doc_sb = a; g_doc_dirty = 1;
-}
-
-void doc_insert_char(int ch) {
-  if (g_doc_len >= g_doc_max) return;
-  doc_save_undo();
-  if (g_doc_cur < 0) g_doc_cur = 0;
-  if (g_doc_cur > g_doc_len) g_doc_cur = g_doc_len;
-  int tail = g_doc_len - g_doc_cur;
-  if (tail > 0) {
-    hal_memcpy(EDIT_SCRATCH, g_doc_buf + g_doc_cur, tail);
-    hal_memcpy(g_doc_buf + g_doc_cur + 1, EDIT_SCRATCH, tail);
-  }
-  w8(g_doc_buf + g_doc_cur, ch);
-  g_doc_len = g_doc_len + 1;
-  g_doc_cur = g_doc_cur + 1;
-  g_doc_sa = g_doc_cur; g_doc_sb = g_doc_cur;
-  w8(g_doc_buf + g_doc_len, 0);
-  g_doc_dirty = 1;
-}
-
-void doc_sync_sel(int mods) {
-  if ((mods & 1) != 0) g_doc_sb = g_doc_cur;
-  else { g_doc_sa = g_doc_cur; g_doc_sb = g_doc_cur; }
-}
-
-void doc_key_common(int is_notes, int ascii, int vk, int mods) {
-  doc_begin(is_notes);
-  int ca = ascii;
-  if ((mods & 2) != 0 && ascii >= 65) ca = ascii & 31;
-  if (ca == 1) { g_doc_sa = 0; g_doc_sb = g_doc_len; g_doc_cur = g_doc_len; doc_end(is_notes); return; }
-  if (ca == 3 || ca == 24) {
-    int a = g_doc_sa; int b = g_doc_sb;
-    if (a > b) { int t = a; a = b; b = t; }
-    if (b <= a && ca == 3) { a = 0; b = g_doc_len; }
-    if (b > a) {
-      clip_copy_bytes(g_doc_buf + a, b - a, 0);
-      if (ca == 24) doc_delete_range(a, b);
-    }
-    doc_end(is_notes); return;
-  }
-  if (ca == 22) {
-    if (g_doc_sa != g_doc_sb) doc_delete_range(g_doc_sa, g_doc_sb);
-    doc_save_undo();
-    int old_l = g_doc_len;
-    g_doc_len = clip_paste_buf(g_doc_buf, g_doc_len, g_doc_max, g_doc_cur);
-    g_doc_cur = g_doc_cur + (g_doc_len - old_l);
-    g_doc_sa = g_doc_cur; g_doc_sb = g_doc_cur; g_doc_dirty = 1;
-    doc_end(is_notes); return;
-  }
-  if (ca == 26 && g_doc_ulen <= 4000) {
-    hal_memcpy(g_doc_buf, g_doc_undo_buf, g_doc_ulen);
-    g_doc_len = g_doc_ulen;
-    w8(g_doc_buf + g_doc_len, 0);
-    if (g_doc_cur > g_doc_len) g_doc_cur = g_doc_len;
-    g_doc_sa = g_doc_cur; g_doc_sb = g_doc_cur;
-    doc_end(is_notes); return;
-  }
-  if (ca == 19) {
-    doc_end(is_notes);
-    if (is_notes == 1) { fs_write(NOTES_PATH_BUF, NOTES_BUF, g_notes_len); g_notes_dirty = 0; }
-    else edit_save_current();
-    return;
-  }
-  if (ca == 6 && is_notes == 1) { g_notes_find_mode = 1 - g_notes_find_mode; return; }
-  if (vk == 37) { if (g_doc_cur > 0) g_doc_cur = g_doc_cur - 1; doc_sync_sel(mods); doc_end(is_notes); return; }
-  if (vk == 39) { if (g_doc_cur < g_doc_len) g_doc_cur = g_doc_cur + 1; doc_sync_sel(mods); doc_end(is_notes); return; }
-  if (vk == 36) {
-    if ((mods & 2) != 0) { g_doc_cur = 0; g_doc_sc = 0; }
-    else { while (g_doc_cur > 0 && r8(g_doc_buf + g_doc_cur - 1) != 10) g_doc_cur = g_doc_cur - 1; }
-    doc_sync_sel(mods); doc_end(is_notes); return;
-  }
-  if (vk == 35) {
-    if ((mods & 2) != 0) g_doc_cur = g_doc_len;
-    else { while (g_doc_cur < g_doc_len && r8(g_doc_buf + g_doc_cur) != 10) g_doc_cur = g_doc_cur + 1; }
-    doc_sync_sel(mods); doc_end(is_notes); return;
-  }
-  if (vk == 38) { if (g_doc_sc > 0) g_doc_sc = g_doc_sc - 1; doc_end(is_notes); return; }
-  if (vk == 40) { g_doc_sc = g_doc_sc + 1; doc_end(is_notes); return; }
-  if (vk == 33) { g_doc_sc = g_doc_sc - 4; if (g_doc_sc < 0) g_doc_sc = 0; doc_end(is_notes); return; }
-  if (vk == 34) { g_doc_sc = g_doc_sc + 4; doc_end(is_notes); return; }
-  if (ascii == 8 || ascii == 127) {
-    if (g_doc_sa != g_doc_sb) doc_delete_range(g_doc_sa, g_doc_sb);
-    else if (ascii == 8 && g_doc_cur > 0) doc_delete_range(g_doc_cur - 1, g_doc_cur);
-    else if (ascii == 127 && g_doc_cur < g_doc_len) doc_delete_range(g_doc_cur, g_doc_cur + 1);
-    doc_end(is_notes); return;
-  }
-  if ((ascii >= 32 && ascii <= 126) || ascii == 13) {
-    if (g_doc_sa != g_doc_sb) doc_delete_range(g_doc_sa, g_doc_sb);
-    int ch = ascii;
-    if (ch == 13) ch = 10;
-    doc_insert_char(ch);
-  }
-  doc_end(is_notes);
-}
-
-int edit_pos_from_xy(int rx, int ry) {
-  int target_row = g_edit_scroll + (ry - 30) / 9;
-  int target_col = (rx - 7) / 8;
-  if (target_row < 0) target_row = 0;
-  if (target_col < 0) target_col = 0;
-  int p = 0;
-  int cur_line = 0;
-  while (p < g_edit_len && cur_line < target_row) {
-    if (r8(EDIT_BUF + p) == 10) cur_line = cur_line + 1;
-    p = p + 1;
-  }
-  int col = 0;
-  while (p < g_edit_len && r8(EDIT_BUF + p) != 10 && col < target_col) {
-    p = p + 1; col = col + 1;
-  }
-  return p;
-}
-
-void app_draw_edit(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  int tx = x + 4; int ty = y + 28; int tw = w - 8; int th = h - 32;
-  gui_reg_ctl(4, 28, tw, th, 0);
-  wbtn(4, 15, 44, 11, "wm.sp", 0);
-  wbtn(50, 15, 52, 11, "Col196", 0);
-  wbtn(104, 15, 42, 11, "Save", g_edit_dirty);
-  wbtn(148, 15, 58, 11, "Rebuild", 0);
-  if (tw <= 8 || th <= 8) return;
-  hal_rect(tx, ty, tw, th, 16);
-
-  int sel_lo = g_edit_sel_a; int sel_hi = g_edit_sel_b;
-  if (sel_lo > sel_hi) { int t = sel_lo; sel_lo = sel_hi; sel_hi = t; }
-
-  int max_rows = (th - 4) / 9; int max_cols = (tw - 10) / 8;
-  int p = 0; int cur_line = 0; int drawn = 0; int caret_drawn = 0;
-  while (p <= g_edit_len && drawn < max_rows) {
-    if (cur_line >= g_edit_scroll) {
-      int col = 0; int ry = ty + 2 + drawn * 9;
-      while (p < g_edit_len && r8(EDIT_BUF + p) != 10) {
-        if (col < max_cols) {
-          int bg = -1;
-          if (p >= sel_lo && p < sel_hi) bg = thm_title_active;
-          hal_char(tx + 3 + col * 8, ry, r8(EDIT_BUF + p), 15, bg, 0);
-          if (p == g_edit_cursor && gui_caret_on()) {
-            hal_rect(tx + 3 + col * 8, ry + 7, 8, 2, 14);
-            caret_drawn = 1;
-          }
-        }
-        p = p + 1; col = col + 1;
-      }
-      if (p == g_edit_cursor && caret_drawn == 0 && col < max_cols && gui_caret_on()) {
-        hal_rect(tx + 3 + col * 8, ry + 7, 8, 2, 14);
-        caret_drawn = 1;
-      }
-      drawn = drawn + 1;
-    } else {
-      while (p < g_edit_len && r8(EDIT_BUF + p) != 10) p = p + 1;
-    }
-    if (p >= g_edit_len) break;
-    p = p + 1; cur_line = cur_line + 1;
-  }
-  gui_draw_vscroll(w - 8, 28, th, g_edit_scroll, max_rows, cur_line + 8);
-}
-
-void app_click_edit(int wid, int rx, int ry) {
-  int w = win_w[wid]; int h = win_h[wid];
-  if (ry >= 15 && ry <= 26) {
-    if (rx >= 4 && rx < 48) edit_load_file("/src/wm.sp");
-    else if (rx >= 50 && rx < 102) edit_set_wm_title_color(196);
-    else if (rx >= 104 && rx < 146) edit_save_current();
-    else if (rx >= 148 && rx < 206) {
-      edit_save_current();
-      cc_rebuild_os_image();
-      wm_open(APP_BUILD, 48, 28, 204, 108, "SpiralBuild");
-    }
-    return;
-  }
-  if (ry >= 28 && ry < h - 4) {
-    if (rx >= w - 12) {
-      if (ry < 28 + ((h - 32) >> 1)) { if (g_edit_scroll > 0) g_edit_scroll = g_edit_scroll - 2; }
-      else g_edit_scroll = g_edit_scroll + 2;
-      if (g_edit_scroll < 0) g_edit_scroll = 0;
-      return;
-    }
-    int pos = edit_pos_from_xy(rx, ry);
-    g_edit_cursor = pos; g_edit_sel_a = pos; g_edit_sel_b = pos;
-  }
-}
-
-void app_key_edit(int ascii, int vk, int mods) {
-  doc_key_common(0, ascii, vk, mods);
-}
-
-int notes_pos_from_xy(int w, int rx, int ry) {
-  int ty = 27 + g_notes_find_mode * 11;
-  int target_row = g_notes_scroll + (ry - ty) / 16;
-  int target_col = (rx - 6) / 8;
-  if (target_row < 0) target_row = 0;
-  if (target_col < 0) target_col = 0;
-  int max_cols = (w - 14) / 8;
-  if (max_cols < 1) max_cols = 1;
-  int p = 0; int row = 0;
-  while (p < g_notes_len && row < target_row) {
-    int ls = p;
-    while (p < g_notes_len && r8(NOTES_BUF + p) != 10 && (g_notes_wrap == 0 || (p - ls) < max_cols)) p = p + 1;
-    if (p < g_notes_len && r8(NOTES_BUF + p) == 10) p = p + 1;
-    row = row + 1;
-  }
-  int col = 0;
-  while (p < g_notes_len && r8(NOTES_BUF + p) != 10 && col < target_col) { p = p + 1; col = col + 1; }
-  return p;
-}
-
-void notes_copy_selection() {
-  doc_begin(1);
-  int a = g_doc_sa; int b = g_doc_sb;
-  if (a > b) { int t = a; a = b; b = t; }
-  if (b <= a) { a = 0; b = g_doc_len; }
-  clip_copy_bytes(NOTES_BUF + a, b - a, 0);
-}
-
-void notes_paste_clipboard() {
-  doc_key_common(1, 22, 86, 2);
-}
-
-void notes_find_next() {
-  if (g_notes_find_len <= 0) return;
-  int start = g_notes_cursor + 1;
-  if (start >= g_notes_len) start = 0;
-  for (int pass = 0; pass < 2; pass++) {
-    int p = start;
-    if (pass == 1) p = 0;
-    while (p + g_notes_find_len <= g_notes_len) {
-      if (match_prefix(NOTES_BUF + p, NOTES_FIND_BUF)) {
-        g_notes_cursor = p; g_notes_sel_start = p; g_notes_sel_end = p + g_notes_find_len;
-        return;
-      }
-      p = p + 1;
-    }
-  }
-}
-
-void app_draw_notes(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  wbtn(4, 14, 28, 11, "Open", 0);
-  wbtn(34, 14, 28, 11, "Save", g_notes_dirty);
-  wbtn(64, 14, 30, 11, "SvAs", 0);
-  wbtn(96, 14, 28, 11, "Find", g_notes_find_mode);
-  wbtn(126, 14, 28, 11, "Wrap", g_notes_wrap);
-  wbtn(156, 14, 20, 11, "Cp", 0);
-  wbtn(178, 14, 20, 11, "Ps", 0);
-  if (g_notes_dirty == 1) wstr(200, 16, "*M", 14);
-
-  int ty = y + 27;
-  if (g_notes_find_mode == 1) {
-    hal_rect(x + 4, y + 26, w - 8, 11, 0);
-    wstr(6, 28, "Find:", 11);
-    gui_str_clip(x + 48, y + 28, NOTES_FIND_BUF, (w - 56) / 8, 14, -1);
-    ty = y + 38;
-  }
-
-  int th = (y + h - 4) - ty; int tw = w - 8;
-  if (tw <= 8 || th <= 16) return;
-  hal_rect(x + 4, ty, tw, th, 16);
-
-  int max_cols = (tw - 6) / 8; int max_rows = th / 16;
-  if (max_cols < 1) max_cols = 1;
-  if (max_rows < 1) max_rows = 1;
-
-  int sel_lo = g_notes_sel_start; int sel_hi = g_notes_sel_end;
-  if (sel_lo > sel_hi) { int t = sel_lo; sel_lo = sel_hi; sel_hi = t; }
-
-  int p = 0; int row = 0; int drawn = 0;
-  while (p <= g_notes_len && drawn < max_rows) {
-    int line_start = p; int line_end = p;
-    if (g_notes_wrap == 1) {
-      int last_space = -1;
-      while (line_end < g_notes_len && r8(NOTES_BUF + line_end) != 10 && (line_end - line_start) < max_cols) {
-        if (r8(NOTES_BUF + line_end) == 32) last_space = line_end;
-        line_end = line_end + 1;
-      }
-      if ((line_end - line_start) == max_cols && line_end < g_notes_len && r8(NOTES_BUF + line_end) != 10 && last_space > line_start) {
-        line_end = last_space;
-      }
-    } else {
-      while (line_end < g_notes_len && r8(NOTES_BUF + line_end) != 10) line_end = line_end + 1;
-    }
-
-    if (row >= g_notes_scroll) {
-      int ry = ty + drawn * 16;
-      for (int ci = line_start; ci < line_end && (ci - line_start) < max_cols; ci++) {
-        int cx = x + 6 + (ci - line_start) * 8;
-        int bg = -1;
-        if (ci >= sel_lo && ci < sel_hi) bg = thm_title_active;
-        hal_char(cx, ry, r8(NOTES_BUF + ci), 15, bg, FONT_SERIF_8X16);
-        if (ci == g_notes_cursor && gui_caret_on()) hal_rect(cx, ry + 14, 8, 2, 14);
-      }
-      if (g_notes_cursor == line_end && (line_end - line_start) < max_cols && gui_caret_on()) {
-        hal_rect(x + 6 + (line_end - line_start) * 8, ry + 14, 8, 2, 14);
-      }
-      drawn = drawn + 1;
-    }
-
-    if (line_end >= g_notes_len) break;
-    if (r8(NOTES_BUF + line_end) == 10 || r8(NOTES_BUF + line_end) == 32) p = line_end + 1;
-    else p = line_end;
-    row = row + 1;
-  }
-
-  gui_reg_ctl(4, ty - y, tw, th, 0);
-  gui_draw_vscroll(w - 8, ty - y, th, g_notes_scroll, max_rows, row + 4);
-  if (g_dlg_active != 0 && g_dlg_owner_app == APP_NOTES) dlg_draw(x, y, w, h);
-}
-
-void app_click_notes(int wid, int rx, int ry) {
-  if (g_dlg_active != 0 && g_dlg_owner_app == APP_NOTES) { dlg_click(wid, rx, ry); return; }
-  if (ry >= 14 && ry <= 25) {
-    if (rx >= 4 && rx < 32) dlg_open(2, APP_NOTES, 0, "note.txt");
-    else if (rx >= 34 && rx < 62) {
-      if (r8(NOTES_PATH_BUF) != 0) { fs_write(NOTES_PATH_BUF, NOTES_BUF, g_notes_len); g_notes_dirty = 0; }
-      else dlg_open(1, APP_NOTES, 0, "note.txt");
-    } else if (rx >= 64 && rx < 94) dlg_open(1, APP_NOTES, 0, "note.txt");
-    else if (rx >= 96 && rx < 124) g_notes_find_mode = 1 - g_notes_find_mode;
-    else if (rx >= 126 && rx < 154) g_notes_wrap = 1 - g_notes_wrap;
-    else if (rx >= 156 && rx < 176) notes_copy_selection();
-    else if (rx >= 178 && rx < 198) notes_paste_clipboard();
-    return;
-  }
-  int w = win_w[wid]; int h = win_h[wid];
-  if (ry >= 27 && ry < h - 4) {
-    if (rx >= w - 12) {
-      if (ry < 27 + ((h - 31) >> 1)) { if (g_notes_scroll > 0) g_notes_scroll = g_notes_scroll - 1; }
-      else g_notes_scroll = g_notes_scroll + 1;
-      return;
-    }
-    int pos = notes_pos_from_xy(w, rx, ry);
-    g_notes_cursor = pos; g_notes_sel_start = pos; g_notes_sel_end = pos;
-  }
-}
-
-void app_key_notes(int ascii, int vk, int mods) {
-  if (g_dlg_active != 0 && g_dlg_owner_app == APP_NOTES) { dlg_key(ascii, vk); return; }
-  if (g_notes_find_mode == 1) {
-    if (vk == 27) g_notes_find_mode = 0;
-    else {
-      g_notes_find_len = field_key_common(NOTES_FIND_BUF, g_notes_find_len, 30, ascii);
-      if (ascii == 13 || ascii >= 32) notes_find_next();
-    }
-    return;
-  }
-  doc_key_common(1, ascii, vk, mods);
-}
-
-// 17. Clock & Calendar App (APP_CLOCK)
-int clk_days_in_month(int yr, int mo) {
-  if (mo == 2) {
-    if ((yr % 4 == 0 && yr % 100 != 0) || (yr % 400 == 0)) return 29;
-    return 28;
-  }
-  if (mo == 4 || mo == 6 || mo == 9 || mo == 11) return 30;
-  return 31;
-}
-
-// Sakamoto day-of-week: 0 = Sunday .. 6 = Saturday
-int clk_day_of_week(int y, int m, int d) {
-  int t = r8("032503514624" + (m - 1)) - 48;
-  if (m < 3) y = y - 1;
-  return (y + y / 4 - y / 100 + y / 400 + t + d) % 7;
-}
 int clk_append_2d(int dst, int dp, int val, int sep) {
   if (val < 10) { w8(dst + dp, 48); dp = dp + 1; }
   dp = srrp_append_int(dst, dp, val);
@@ -1567,135 +1023,6 @@ int clk_append_2d(int dst, int dp, int val, int sep) {
   return dp;
 }
 
-void app_draw_clock(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  hal_rect(x + 4, y + 15, w - 8, h - 19, 16);
-  clock_sync_from_hal();
-
-  if (g_clk_set_mode == 1) {
-    wstr(8, 18, "Set time (No Hardware RTC)", 14);
-    wstr(8, 32, "Y/M/D:", 11);
-    for (int fi = 0; fi < 5; fi++) {
-      wnum(56 + (fi >= 3) * 54, 32 + (fi % 3) * 12, r32(&g_clk_year + (fi << 2)), 15);
-    }
-    wbtn(8, 74, 28, 12, "+", 0);
-    wbtn(40, 74, 28, 12, "-", 0);
-    wbtn(72, 74, 38, 12, "Next", 0);
-    wbtn(114, 74, 52, 12, "Apply", 1);
-    return;
-  }
-
-  int disp_hr = g_clk_hour;
-  int disp_min = g_clk_min;
-  int disp_sec = g_clk_sec;
-  if (g_clk_is_manual == 1) {
-    int el_sec = (hal_time() - g_clk_base_ms) / 1000;
-    if (el_sec < 0) el_sec = 0;
-    int tot = g_clk_hour * 3600 + g_clk_min * 60 + g_clk_sec + el_sec;
-    disp_sec = tot % 60;
-    disp_min = (tot / 60) % 60;
-    disp_hr  = (tot / 3600) % 24;
-    wstr(8, 17, "MANUAL CLOCK", 14);
-  } else {
-    wstr(8, 17, "CMOS RTC", 10);
-  }
-  wbtn(w - 64, 15, 58, 10, "Set time", 0);
-
-  // Format YYYY-MM-DD HH:MM:SS
-  int dt_str = sh_buf();
-  int dp = srrp_append_int(dt_str, 0, g_clk_year);
-  w8(dt_str + dp, 45); dp = dp + 1;
-  dp = clk_append_2d(dt_str, dp, g_clk_month, 45);
-  dp = clk_append_2d(dt_str, dp, g_clk_day, 32);
-  dp = clk_append_2d(dt_str, dp, disp_hr, 58);
-  dp = clk_append_2d(dt_str, dp, disp_min, 58);
-  dp = clk_append_2d(dt_str, dp, disp_sec, 0);
-  wstr(8, 28, dt_str, 15);
-
-  // Month Calendar Grid with Today highlighted
-  wstr(8, 40, "Su Mo Tu We Th Fr Sa", 11);
-  int dim = clk_days_in_month(g_clk_year, g_clk_month);
-  int dow0 = clk_day_of_week(g_clk_year, g_clk_month, 1);
-  for (int d = 1; d <= dim; d++) {
-    int cell = dow0 + (d - 1);
-    int crow = cell / 7;
-    int ccol = cell % 7;
-    int cx = x + 8 + ccol * 24;
-    int cy = y + 50 + crow * 9;
-    int dcol = 15;
-    if (d == g_clk_day) { hal_rect(cx - 1, cy - 1, 18, 9, 14); dcol = 0; }
-    wnum(cx - x, cy - y, d, dcol);
-  }
-}
-
-void clock_apply_manual() {
-  if (g_clk_year < 1970) g_clk_year = 2026;
-  if (g_clk_month < 1) g_clk_month = 11;
-  if (g_clk_day < 1) g_clk_day = 14;
-  g_clk_is_manual = 1;
-  g_clk_base_ms = hal_time();
-  g_clk_set_mode = 0;
-}
-
-void clock_step_field(int delta) {
-  int p = &g_clk_year + (g_clk_field << 2);
-  int v = r32(p) + delta;
-  if (g_clk_field == 0 && v < 1970) v = 1970;
-  if (g_clk_field == 1) v = ((v - 1 + 12) % 12) + 1;
-  if (g_clk_field == 2) v = ((v - 1 + 31) % 31) + 1;
-  if (g_clk_field == 3) v = (v + 24) % 24;
-  if (g_clk_field == 4) v = (v + 60) % 60;
-  w32(p, v);
-}
-
-void app_click_clock(int wid, int rx, int ry) {
-  int w = win_w[wid];
-  if (g_clk_set_mode == 1) {
-    if (ry >= 74 && ry <= 86) {
-      if (rx >= 8 && rx < 36) clock_step_field(1);
-      else if (rx >= 40 && rx < 68) clock_step_field(-1);
-      else if (rx >= 72 && rx < 110) g_clk_field = (g_clk_field + 1) % 5;
-      else if (rx >= 114 && rx < 166) clock_apply_manual();
-    }
-    return;
-  }
-  if (ry >= 15 && ry <= 25 && rx >= w - 64 && rx < w - 6) {
-    if (g_clk_year == 0) { g_clk_year = 2026; g_clk_month = 11; g_clk_day = 14; g_clk_hour = 12; g_clk_min = 0; }
-    g_clk_set_mode = 1;
-  }
-}
-
-void app_key_clock(int ascii, int vk) {
-  if (g_clk_set_mode == 0) {
-    if (ascii == 's' || ascii == 'S' || ascii == 13 || ascii == 32) {
-      if (g_clk_year == 0) { g_clk_year = 2026; g_clk_month = 11; g_clk_day = 14; g_clk_hour = 12; g_clk_min = 0; }
-      g_clk_set_mode = 1;
-    }
-    return;
-  }
-  if (vk == 27) { g_clk_set_mode = 0; return; }
-  if (ascii == 13) { clock_apply_manual(); return; }
-  if (vk == 39 || ascii == 'n' || ascii == 'N') { g_clk_field = (g_clk_field + 1) % 5; return; }
-  if (vk == 37) { g_clk_field = (g_clk_field + 4) % 5; return; }
-  if (vk == 38 || ascii == '+' || ascii == '=') { clock_step_field(1); return; }
-  if (vk == 40 || ascii == '-') { clock_step_field(-1); return; }
-  if (ascii >= 48 && ascii <= 57) {
-    int d = ascii - 48;
-    int p = &g_clk_year + (g_clk_field << 2);
-    int v = r32(p) * 10 + d;
-    if (g_clk_field == 0) v = (r32(p) % 1000) * 10 + d;
-    else {
-      v = v % 100;
-      int mx = 59;
-      if (g_clk_field == 1) mx = 12;
-      if (g_clk_field == 2) mx = 31;
-      if (g_clk_field == 3) mx = 23;
-      if (v > mx) v = d;
-      if (g_clk_field <= 2 && v < 1) v = 1;
-    }
-    w32(p, v);
-  }
-}
 
 // 1.2 F1: Soft-wrap shell output lines to inner width, recompute on resize,
 // scroll so newest wrapped lines and prompt are always visible, and scroll
@@ -1903,6 +1230,14 @@ void app_key_shell(int ascii, int vk, int mods) {
 
   if (ascii == 13) {
     w8(SHELL_IN_BUF + g_shell_in_len, 0);
+    if (g_shell_in_len > 0) {
+      int ep = SRRP_SCRATCH_BUF + 2048;
+      w8(ep, '>'); w8(ep + 1, ' ');
+      int el = g_shell_in_len; if (el > 88) el = 88;
+      hal_memcpy(ep + 2, SHELL_IN_BUF, el);
+      w8(ep + 2 + el, 0);
+      shell_print(ep);
+    }
     shell_exec_cmd(SHELL_IN_BUF);
     g_shell_in_len = 0;
     g_shell_cursor = 0;
@@ -1942,47 +1277,6 @@ void app_key_shell(int ascii, int vk, int mods) {
   }
 }
 
-void app_draw_build(int x, int y, int w, int h) {
-  if (h > 36 && w > 8) hal_rect(x + 4, y + 15, w - 8, h - 36, 16);
-  gui_set_win(x, y, w, h - 18);
-  wstr(8, 19, os_version_str(), 14);
-  wstr(8, 31, "Target: SPIR Unified VM", 15);
-  wstr(8, 43, "TitleOverride:", 11);
-  wnum(124, 43, g_cc_parsed_override, 15);
-  if (g_cc_last_status == 1) {
-    wstr(8, 55, "Status: IMAGE REBUILT OK", 10);
-    wstr(8, 67, "Bytes:", 11);
-    wnum(60, 67, g_cc_last_bytes, 15);
-  } else if (g_cc_last_status == -1) {
-    wstr(8, 55, CC_ERR_MSG, 12);
-    wstr(8, 67, "Old image kept intact", 14);
-  } else {
-    wstr(8, 55, "Status: Ready to compile", 7);
-  }
-  gui_set_win(x, y, w, h);
-  wbtn(4, h - 17, 64, 13, "Compile", 0);
-  wbtn(72, h - 17, 62, 13, "AsmCore", 0);
-  wbtn(138, h - 17, 60, 13, "Reboot", 0);
-}
-
-void app_click_build(int wid, int rx, int ry) {
-  int h = win_h[wid];
-  if (ry >= h - 17 && ry <= h - 4) {
-    if (rx >= 4 && rx < 68) {
-      cc_rebuild_os_image();
-    } else if (rx >= 72 && rx < 134) {
-      asm_rebuild_native_cores();
-    } else if (rx >= 138 && rx < 198) {
-      hal_reboot();
-    }
-  }
-}
-
-void app_key_build(int ascii, int vk) {
-  if (ascii == 'c' || ascii == 'C') cc_rebuild_os_image();
-  else if (ascii == 'a' || ascii == 'A') asm_rebuild_native_cores();
-  else if (ascii == 'r' || ascii == 'R') hal_reboot();
-}
 
 void gui_blit_clipped(int dx, int dy, int bw, int bh, int max_w, int max_h, int src) {
   if (max_w <= 0 || max_h <= 0) return;
@@ -1999,188 +1293,3 @@ void gui_blit_clipped(int dx, int dy, int bw, int bh, int max_w, int max_h, int 
   }
 }
 
-void app_draw_paint(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  for (int c = 0; c < 8; c++) {
-    int col = c + 9;
-    if (4 + c * 11 + 10 <= w - 4 && 27 <= h - 4) {
-      hal_rect(x + 4 + c * 11, y + 15, 10, 10, col);
-      if (g_paint_color == col) {
-        hal_rect(x + 4 + c * 11, y + 25, 10, 2, 15);
-      }
-    }
-  }
-  wbtn(94, 15, 28, 11, "Clr", 0);
-  wbtn(124, 15, 34, 11, "Save", 0);
-  wbtn(104, 30, 52, 11, "Open...", 0);
-  wbtn(104, 44, 52, 11, "SaveAs", 0);
-  gui_blit_clipped(x + 4, y + 29, 96, 56, w - 8, h - 33, PAINT_CANVAS);
-  if (g_dlg_active != 0 && g_dlg_owner_app == 5) {
-    dlg_draw(x, y, w, h);
-  }
-}
-
-void app_click_paint(int wid, int rx, int ry) {
-  if (g_dlg_active != 0 && g_dlg_owner_app == 5) {
-    dlg_click(wid, rx, ry);
-    return;
-  }
-  if (ry >= 15 && ry <= 26) {
-    if (rx >= 4 && rx < 92) {
-      g_paint_color = 9 + ((rx - 4) / 11);
-    } else if (rx >= 94 && rx < 122) {
-      hal_memset(PAINT_CANVAS, 16, 96 * 56);
-      g_Paint_strokes = g_Paint_strokes + 1;
-      g_paint_dirty = 1;
-    } else if (rx >= 124 && rx < 158) {
-      fs_write("/art/user.pic", PAINT_CANVAS, 96 * 56);
-      g_paint_dirty = 0;
-    }
-    return;
-  }
-  if (rx >= 104 && rx < 156) {
-    if (ry >= 30 && ry <= 41) {
-      dlg_open(2, 5, 1, "user.pic");
-      return;
-    }
-    if (ry >= 44 && ry <= 55) {
-      dlg_open(1, 5, 1, "user.pic");
-      return;
-    }
-  }
-  if (rx >= 4 && rx < 100 && ry >= 29 && ry < 85) {
-    int px = rx - 4;
-    int py = ry - 29;
-    for (int dy = -1; dy <= 1; dy++) {
-      for (int dx = -1; dx <= 1; dx++) {
-        int nx = px + dx;
-        int ny = py + dy;
-        if (nx >= 0 && nx < 96 && ny >= 0 && ny < 56) {
-          w8(PAINT_CANVAS + ny * 96 + nx, g_paint_color);
-        }
-      }
-    }
-    g_Paint_strokes = g_Paint_strokes + 1;
-    g_paint_dirty = 1;
-  }
-}
-
-void app_key_paint(int ascii, int vk, int mods) {
-  if (g_dlg_active != 0 && g_dlg_owner_app == 5) {
-    dlg_key(ascii, vk);
-    return;
-  }
-  int ca = ascii;
-  if ((mods & 2) != 0 && ascii >= 65) ca = ascii & 31;
-  if (ca == 19 || ascii == 's') { fs_write("/art/user.pic", PAINT_CANVAS, 96 * 56); g_paint_dirty = 0; return; }
-  if (ascii == 'o') { dlg_open(2, 5, 1, "user.pic"); return; }
-  if (ascii == 'a') { dlg_open(1, 5, 1, "user.pic"); return; }
-  if (ascii == 'c') { hal_memset(PAINT_CANVAS, 16, 96 * 56); g_Paint_strokes = g_Paint_strokes + 1; g_paint_dirty = 1; return; }
-  if (ascii >= 49 && ascii <= 56) { g_paint_color = 9 + (ascii - 49); return; }
-}
-
-void calc_press_digit(int d) {
-  if (g_calc_entering == 0) {
-    g_calc_cur = d;
-    g_calc_entering = 1;
-  } else {
-    g_calc_cur = g_calc_cur * 10 + d;
-  }
-}
-
-void calc_eval_op(int next_op) {
-  if (g_calc_op == 0) {
-    g_calc_acc = g_calc_cur;
-  } if (g_calc_op == 1) {
-    g_calc_acc = g_calc_acc + g_calc_cur;
-  } if (g_calc_op == 2) {
-    g_calc_acc = g_calc_acc - g_calc_cur;
-  } if (g_calc_op == 3) {
-    g_calc_acc = g_calc_acc * g_calc_cur;
-  } if (g_calc_op == 4) {
-    if (g_calc_cur != 0) g_calc_acc = g_calc_acc / g_calc_cur;
-  }
-  g_calc_cur = g_calc_acc;
-  g_calc_op = next_op;
-  g_calc_entering = 0;
-}
-
-void app_draw_calc(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  if (h >= 34 && w > 8) {
-    hal_rect(x + 4, y + 16, w - 8, 14, 16);
-    wnum(8, 19, g_calc_cur, 14);
-  }
-
-  byte klbl[4];
-  klbl[1] = 0;
-  for (int r = 0; r < 4; r++) {
-    for (int c = 0; c < 4; c++) {
-      klbl[0] = r8("789+456-123*C0=/" + (r * 4 + c));
-      wbtn(4 + c * 26, 33 + r * 15, 24, 13, klbl, c == 3 && g_calc_op == r + 1);
-    }
-  }
-}
-
-void app_click_calc(int wid, int rx, int ry) {
-  if (ry < 33 || ry > 92 || rx < 4 || rx > 106) return;
-  int col = (rx - 4) / 26;
-  int row = (ry - 33) / 15;
-  if (col == 3) {
-    calc_eval_op(row + 1);
-    return;
-  }
-  if (row == 0) calc_press_digit(7 + col);
-  if (row == 1) calc_press_digit(4 + col);
-  if (row == 2) calc_press_digit(1 + col);
-  if (row == 3) {
-    if (col == 0) { g_calc_acc = 0; g_calc_cur = 0; g_calc_op = 0; g_calc_entering = 1; }
-    else if (col == 1) calc_press_digit(0);
-    else if (col == 2) calc_eval_op(0);
-  }
-}
-
-void app_key_calc(int ascii) {
-  if (ascii >= 48 && ascii <= 57) calc_press_digit(ascii - 48);
-  else if (ascii == 43) calc_eval_op(1);
-  else if (ascii == 45) calc_eval_op(2);
-  else if (ascii == 42) calc_eval_op(3);
-  else if (ascii == 47) calc_eval_op(4);
-  else if (ascii == 61 || ascii == 13) calc_eval_op(0);
-  else if (ascii == 99 || ascii == 67) { g_calc_acc = 0; g_calc_cur = 0; g_calc_op = 0; g_calc_entering = 1; }
-}
-
-void app_draw_sysmon(int x, int y, int w, int h) {
-  gui_set_win(x, y, w, h);
-  if (h > 20 && w > 8) {
-    hal_rect(x + 4, y + 16, w - 8, h - 20, 16);
-  }
-  if (g_machine_id == 1) wstr(8, 20, "CPU: TabComp TC-32", 14);
-  else if (g_machine_id == 3) wstr(8, 20, "CPU: Triton", 14);
-  else wstr(8, 20, "CPU: i586 Protected", 14);
-
-  wstr(8, 32, "Tasks:", 11);
-  int hw_tasks = r32(VMRAM_SCHED_HDR + 4);
-  wnum(60, 32, g_num_tasks + hw_tasks - 1, 15);
-
-  wstr(92, 32, "Sw:", 11);
-  wnum(118, 32, r32(VMRAM_SCHED_HDR + 16), 10);
-
-  wstr(8, 44, "VM Op:", 11);
-  wnum(60, 44, hal_info(2), 15);
-
-  if (g_has_snet == 1) {
-    wstr(8, 56, "NetTX:", 11);
-    wnum(60, 56, g_net_tx_pkts, 10);
-
-    wstr(104, 56, "RX:", 11);
-    wnum(130, 56, g_net_rx_pkts, 10);
-  } else {
-    wstr(8, 56, "Net: no network", 12);
-  }
-
-  if (h >= 82 && w > 16) {
-    hal_rect(x + 8, y + 70, w - 16, 8, 8);
-    hal_rect(x + 8, y + 70, (w - 16) / 3, 8, thm_accent);
-  }
-}

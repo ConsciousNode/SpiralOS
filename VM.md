@@ -1,3 +1,5 @@
+> **Notice (SpiralOS 1.6):** The opcode, syscall, and memory-map tables in this document are **superseded** by `TRITON-CORE.md` (updated for 1.5 immediate `CMP`, 1.6 `OP_CALL_IND`, real RAM `SYS_MACHINE_INFO(1)`, and the 1.6 memory map) and `APPS.md` (SAPP v2 loadable module format and ABI table).
+
 # Spiral VM 1.1 Specification (`SPIR` Format)
 
 **Studio:** ConsciousNode SoftWorks · **Licence:** MIT

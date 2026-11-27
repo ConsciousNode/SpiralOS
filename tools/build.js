@@ -24,7 +24,7 @@ const {
   SPFS_HOLE_START,
   SPFS_USABLE_SIZE
 } = require("../compiler/spiralfs.js");
-const { compileSpiralSource, expandImports } = require("../compiler/spiralc.js");
+const { compileSpiralSource, compileAppModule, expandImports } = require("../compiler/spiralc.js");
 const { rasterizeCnswMark } = require("./rasterize-splash.js");
 
 const MIN_REQUIRED_FREE_BYTES = 128 * 1024; // 131,072 bytes (128 KB)
@@ -32,7 +32,7 @@ const MIN_REQUIRED_FREE_BYTES = 128 * 1024; // 131,072 bytes (128 KB)
 function readCanonicalVersion(rootDir) {
   const ksp = fs.readFileSync(path.join(rootDir, "os/kernel.sp"), "utf8");
   const m = ksp.match(/int\s+os_version_str\s*\(\s*\)\s*\{\s*return\s+"((?:\\.|[^"\\])*)"/);
-  return m ? m[1].replace(/\\"/g, '"') : 'SpiralOS 1.4 "Daily Driver"';
+  return m ? m[1].replace(/\\"/g, '"') : 'SpiralOS 1.6 "Open Shelf"';
 }
 
 function createProceduralPic(style = 0) {
@@ -57,7 +57,7 @@ const LAUNCHER_LAYOUT = {
   entriesAddr: 0x04DC20,
   stride: 16,
   visRows: 17,
-  totalItems: 18,
+  totalItems: 19,
   topArrow: { x: 4, y: 12, w: 100, h: 3 },
   botArrow: { x: 4, y: 168, w: 100, h: 8 }
 };
@@ -173,12 +173,12 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     opts = rootDir;
     rootDir = opts.rootDir || path.resolve(__dirname, "..");
   }
-  const pcMode = opts.positiveControl || null;
+  const pcMode = (opts.positiveControl || opts.pcMode) || null;
   const versionStr = readCanonicalVersion(rootDir);
 
   // 1. Build all three Native Cores (TC-32, x86, and Triton T3)
   const tc32Core = buildTC32Core();
-  const x86Core = buildX86Core("SpiralOS 1.2", { brokenTimeMs: pcMode === "b" });
+  const x86Core = buildX86Core("SpiralOS 1.6", { brokenTimeMs: pcMode === "b", brokenShutdownReturn: pcMode === "g" });
   const tritonCore = buildTritonCore();
 
   // 2. Populate SpiralFS (768 KB usable volume across Sectors 320..1919, skipping 960..1023)
@@ -193,6 +193,7 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     ["os/net.sp",    "/src/net.sp"],
     ["os/cc.sp",     "/src/cc.sp"],
     ["os/asm.sp",    "/src/asm.sp"],
+    ["os/loader.sp", "/src/loader.sp"],
     ["os/apps1.sp",  "/src/apps1.sp"],
     ["os/apps2.sp",  "/src/apps2.sp"]
   ];
@@ -206,24 +207,24 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     if (pcMode === "d" && diskRel === "os/apps1.sp") content = content.replace("const PC_LS_COUNT_ONLY = 0;", "const PC_LS_COUNT_ONLY = 1;");
     if (pcMode === "e" && diskRel === "os/apps2.sp") content = content.replace("const PC_SNAKE_NO_SELF = 0;", "const PC_SNAKE_NO_SELF = 1;");
     if (pcMode === "f" && diskRel === "os/os.sp") content = content.replace("const PC_SHUTDOWN_NO_FLUSH = 0;", "const PC_SHUTDOWN_NO_FLUSH = 1;");
-    const cap = Math.max(8192, (content.length + 3072) & ~511);
+    const cap = Math.max(1024, (content.length + 512) & ~511);
     spfs.writeFile(vfsPath, content, cap);
   }
 
   spfs.writeFile(
     "/src/hello.sp",
     "// Sample SpiralC Standalone Program\nconst BASE = 35;\nint add7(int x) { return x + 7; }\nint main() { return add7(BASE); }\n",
-    2048
+    1024
   );
   spfs.writeFile(
     "/src/core_tc32.asm",
     tc32Core.asmSource,
-    (tc32Core.asmSource.length + 2048) & ~511
+    (tc32Core.asmSource.length + 512) & ~511
   );
   spfs.writeFile(
     "/src/core_x86.asm",
     x86Core.asmSource,
-    (x86Core.asmSource.length + 2048) & ~511
+    (x86Core.asmSource.length + 512) & ~511
   );
 
   // Add the 4 plain-text Theme files
@@ -237,7 +238,7 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     const fullP = path.join(rootDir, diskRel);
     if (!fs.existsSync(fullP)) throw new Error("Missing required in-repo build input: " + diskRel);
     const content = fs.readFileSync(fullP, "utf8");
-    spfs.writeFile(vfsPath, content, 2048);
+    spfs.writeFile(vfsPath, content, 1024);
   }
 
   // Add Hypertext Web Pages for SpiralHttpd & SpiralWeb
@@ -247,26 +248,26 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     "<p>Served live over StudioNet SRRP (Port 80) by SpiralHttpd.</p>\n" +
     "<img src='/art/spiral.pic'>\n" +
     "<a href='/sonder.hts'>Visit Sonder Capsule</a>\n",
-    2048
+    1024
   );
   spfs.writeFile(
     "/www/sonder.hts",
     "<h1>Sonder Procedural Capsule</h1>\n" +
     "<p>Timeline 1991-B: ConsciousNode SoftWorks Aether Network.</p>\n" +
     "<a href='/index.hts'>Return to Node Index</a>\n",
-    2048
+    1024
   );
 
   // Add sample .pic bitmap art files + build-time rasterized CNSW splash logo (/art/cnsw.pic)
-  spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 6144);
-  spfs.writeFile("/art/prism.pic", createProceduralPic(1), 6144);
+  spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 5632);
+  spfs.writeFile("/art/prism.pic", createProceduralPic(1), 5632);
   // KEHAI FIX (2026-11-15): the mark lived outside the repo (../cnsw-mark.svg), so every
   // in-repo build silently shipped an all-zero (black) logo. Look in the repo too, and fail loudly.
   const svgMarkPath = [path.resolve(rootDir, "delivery-1.4/cnsw-mark.svg"), path.resolve(rootDir, "cnsw-mark.svg")]
     .find(p => fs.existsSync(p));
   if (!svgMarkPath) throw new Error("cnsw-mark.svg not found: the splash logo would be blank");
   const splashBmp = rasterizeCnswMark(svgMarkPath, 80, 80);
-  spfs.writeFile("/art/cnsw.pic", splashBmp, 8192);
+  spfs.writeFile("/art/cnsw.pic", splashBmp, 6656);
 
   // Add on-disk documentation using the single canonical version string
   spfs.writeFile(
@@ -275,8 +276,45 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     "Unified VM Bytecode OS for TabComp, Hummingbird, and Triton.\n" +
     "Includes StudioNet 1.0 (SNS/SDP/SRRP), Notes, Clock, Solitaire,\n" +
     "self-hosting SpiralC compiler (/src/cc.sp) & assemblers (/src/asm.sp).\n",
-    2048
+    1024
   );
+
+
+  // 2b. Write shared app ABI header, compile all 18 loadable apps to /apps/*.spir, and ship Zork I
+  const abiSrc = fs.readFileSync(path.join(rootDir, "os/apps/app_abi.sp"), "utf8");
+  spfs.writeFile("/src/app_abi.sp", abiSrc, (abiSrc.length + 512) & ~511);
+
+  const loadableAppNames = [
+    "about", "calc", "clock", "sysmon", "theme", "viewer",
+    "build", "transfer", "snake", "paint", "blocks", "solitaire",
+    "notes", "edit", "files", "chat", "browser", "zork"
+  ];
+  const builtApps = [];
+  for (const appName of loadableAppNames) {
+    const srcRel = "os/apps/app_" + appName + ".sp";
+    let appSrc = fs.readFileSync(path.join(rootDir, srcRel), "utf8");
+    if (pcMode === "e" && appName === "snake") appSrc = appSrc.replace("const PC_SNAKE_NO_SELF = 0;", "const PC_SNAKE_NO_SELF = 1;");
+    if (pcMode === "z1" && appName === "zork") appSrc = appSrc.replace("const PC_Z_BAD_ABBREV       = 0;", "const PC_Z_BAD_ABBREV       = 1;");
+    if (pcMode === "z2" && appName === "zork") appSrc = appSrc.replace("const PC_Z_SWAP_INSERT      = 0;", "const PC_Z_SWAP_INSERT      = 1;");
+    if (pcMode === "z3" && appName === "zork") appSrc = appSrc.replace("const PC_Z_SPACE_ONLY_TOK   = 0;", "const PC_Z_SPACE_ONLY_TOK   = 1;");
+    if (pcMode === "z4" && appName === "zork") appSrc = appSrc.replace("const PC_Z_RESTORE_NO_STACK = 0;", "const PC_Z_RESTORE_NO_STACK = 1;");
+    spfs.writeFile("/src/app_" + appName + ".sp", appSrc, (appSrc.length + 511) & ~511);
+    const modRes = compileAppModule(appSrc, (p) => spfs.readFile(p));
+    spfs.writeFile("/apps/" + appName + ".spir", modRes.image, (modRes.image.length + 511) & ~511);
+    builtApps.push({ name: appName, path: "/apps/" + appName + ".spir", bytes: modRes.totalBytes, codeBytes: modRes.codeBytes, stringBytes: modRes.stringBytes, relocCount: modRes.relocCount });
+  }
+
+  // Ship Zork I story file (MIT) and its MIT license notice on SpiralFS
+  const zorkStoryPath = [path.resolve(rootDir, "../zork1.z3"), path.resolve(rootDir, "games/zork1.z3")].find(p => fs.existsSync(p));
+  const zorkLicPath = [path.resolve(rootDir, "../ZORK-LICENSE"), path.resolve(rootDir, "games/ZORK-LICENSE")].find(p => fs.existsSync(p));
+  if (zorkStoryPath) {
+    const zBytes = fs.readFileSync(zorkStoryPath);
+    spfs.writeFile("/games/zork1.z3", zBytes, (zBytes.length + 511) & ~511);
+  }
+  if (zorkLicPath) {
+    const lBytes = fs.readFileSync(zorkLicPath, "utf8");
+    spfs.writeFile("/games/ZORK-LICENSE", lBytes, (lBytes.length + 511) & ~511);
+  }
 
   const freeBytes = spfs.freeBytes();
   const usedBytes = spfs.usedBytes();
@@ -327,7 +365,8 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     usedBytes,
     usableBytes: SPFS_USABLE_SIZE,
     expandedSource,
-    memoryMap
+    memoryMap,
+    builtApps
   };
 }
 
@@ -345,7 +384,9 @@ if (require.main === module) {
   console.log("  x86 Native Core   : " + res.x86Core.totalBytes + " bytes");
   console.log("  TC-32 Native Core : " + res.tc32Core.bytes.length + " bytes (" + res.tc32Core.wordCount + " words)");
   console.log("  Triton T3 Core    : " + res.tritonCore.diskRecordBytes.length + " bytes (" + res.tritonCore.tryteCount + " trytes)");
-  console.log("  SPIR VM Bytecode  : " + res.compiled.codeBytes + " code bytes + " + res.compiled.stringBytes + " string bytes (" + res.compiled.funcCount + " functions, " + res.compiled.globalWords + " global words)");
+  const coreUsed = 0x1890 + res.compiled.codeBytes; const coreFree = 0x20000 - coreUsed;
+  console.log("  SPIR Core Image   : " + coreUsed + " / 131072 bytes used, " + coreFree + " bytes free (" + res.compiled.codeBytes + " code + " + res.compiled.stringBytes + " str, " + res.compiled.funcCount + " funcs, " + res.compiled.globalWords + " globals)");
+  console.log("  Loadable Apps     : " + res.builtApps.length + " SAPP v2 modules (" + res.builtApps.map(a => a.name + "=" + a.bytes + "B").join(", ") + ")");
   console.log("  SpiralFS Volume   : " + res.spfs.listFiles().length + " files mounted in Sectors 320..1919 (" + (res.usableBytes / 1024) + " KB usable, " + res.usedBytes + " B used, " + res.freeBytes + " B / " + (res.freeBytes / 1024).toFixed(1) + " KB free)");
   const reloc = res.memoryMap.filter(r => r.relocated);
   console.log("  Memory-Map Check  : PASS (" + res.memoryMap.length + " total regions, " + reloc.length + " relocated buffers verified pairwise disjoint, 0 overlaps)");

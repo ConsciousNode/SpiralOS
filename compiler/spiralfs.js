@@ -30,7 +30,7 @@ const SPFS_HOLE_START = 0x50000; // Relative offset of Sector 960 (0x78000 in sp
 const SPFS_HOLE_END   = 0x58000; // Relative offset of Sector 1024 (0x80000 in spiralos.img)
 const SPFS_USABLE_SECTORS = SPFS_SECTORS - 64; // 1536 sectors (768 KB usable)
 const SPFS_USABLE_SIZE = SPFS_USABLE_SECTORS * 512; // 0xC0000 (786,432 bytes usable)
-const SPFS_MAX_FILES = 63;
+const SPFS_MAX_FILES = 127;
 
 class SpiralFS {
   constructor(backingBuffer = null) {
@@ -50,7 +50,7 @@ class SpiralFS {
     this.dv.setUint32(0x00, SPFS_MAGIC, true);
     this.dv.setUint32(0x04, 1, true);
     this.dv.setUint32(0x08, SPFS_MAX_FILES, true);
-    this.dv.setUint32(0x0C, 0x1000, true); // Data starts at offset 4096 (Sector 328)
+    this.dv.setUint32(0x0C, 0x2000, true); // Data starts at offset 4096 (Sector 328)
   }
 
   _readEntryName(entryOff) {

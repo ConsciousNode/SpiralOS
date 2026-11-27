@@ -588,6 +588,7 @@ int net_send_file(int dst_node, int path_str) {
 int net_http_get(int dst_node, int url_path_str) {
   g_web_status = 1;
   g_web_is_snap = 0;
+  w32(0x04DFE0, 0);
   // Legacy Sonder gateway (0x00FE) uses 1-frame GET; SRRP peers use SRRP/1 GET
   if (dst_node == 0x00FE) {
     int pbuf = 0x049C00;
@@ -649,6 +650,7 @@ void srrp_handle_complete_msg(int src_node, int sport, int dport, int msg_ptr, i
       if (match_prefix(msg_ptr + k, "Type: image/spiral-snap")) is_snap = 1;
     }
     g_web_is_snap = is_snap;
+    w32(0x04DFE0, is_snap);
     web_set_page_buf(body_ptr, body_len);
     return;
   }

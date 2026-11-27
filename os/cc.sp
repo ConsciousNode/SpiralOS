@@ -81,6 +81,9 @@ const OP_CALL        = 0x24;
 const OP_ENTER       = 0x25;
 const OP_RET         = 0x26;
 const OP_SYSCALL     = 0x27;
+const OP_CALL_IND    = 0x28;
+const SAPP_MAGIC     = 0x50504153;
+const SAPP_VERSION   = 2;
 
 const CC_IDENT_BUF   = 0x021000;
 const CC_STR_BUF     = 0x021100;
@@ -97,6 +100,7 @@ const CC_CONST_HEAD  = 0x024400;
 const CC_GLOB_HEAD   = 0x024800;
 const CC_FUNC_HEAD   = 0x024C00;
 const CC_POOL_HEAD   = 0x025000;
+const CC_RELOC_TAB   = 0x0A0000;
 const CC_WORK_BUF    = 0x0B0000;
 
 int g_cc_last_status;
@@ -142,6 +146,8 @@ int g_cc_loop_depth;
 int g_cc_break_cnt;
 int g_cc_cont_cnt;
 int g_cc_pool_cnt;
+int g_cc_is_mod;
+int g_cc_reloc_cnt;
 
 int cc_name_sig(int s) {
   int len = hal_strlen(s);
@@ -217,6 +223,16 @@ int cc_emit_word(int w) {
   return addr;
 }
 
+int cc_emit_reloc_ptr32(int rtype, int raddr) {
+  int iaddr = cc_emit_word((OP_PUSH_U16 << 24) | (raddr & 0xFFFF));
+  cc_emit_word((OP_PUSH_HI << 24) | ((raddr >>> 16) & 0xFFFF));
+  if (g_cc_is_mod == 1) {
+    w32(CC_RELOC_TAB + g_cc_reloc_cnt * 4, ((rtype & 0xFF) << 24) | (iaddr & 0x00FFFFFF));
+    g_cc_reloc_cnt = g_cc_reloc_cnt + 1;
+  }
+  return iaddr;
+}
+
 int cc_pop_add_off16() {
   if (g_cc_code_pos >= g_cc_code_base + 8) {
     int last1 = r32(g_cc_out_buf + g_cc_code_pos - 4);
@@ -241,7 +257,7 @@ void cc_emit_drop_stmt() {
     int last2 = r32(g_cc_out_buf + g_cc_code_pos - 8);
     int op1 = (last1 >>> 24) & 0xFF;
     int op2 = (last2 >>> 24) & 0xFF;
-    if (op1 == OP_CALL) {
+    if (op1 == OP_CALL || op1 == OP_CALL_IND) {
       w32(g_cc_out_buf + g_cc_code_pos - 4, last1 | 0x00800000);
       return;
     }
@@ -319,7 +335,7 @@ int cc_emit_op(int op, int a, int imm16) {
         g_cc_code_pos = g_cc_code_pos - 4;
         return g_cc_code_pos - 4;
       }
-      if ((op == OP_ADD || op == OP_SUB) && op2 == OP_PUSH_HI && g_cc_code_pos >= g_cc_code_base + 12) {
+      if (g_cc_is_mod == 0 && (op == OP_ADD || op == OP_SUB) && op2 == OP_PUSH_HI && g_cc_code_pos >= g_cc_code_base + 12) {
         int w3 = r32(g_cc_out_buf + g_cc_code_pos - 12);
         if (((w3 >>> 24) & 0xFF) == OP_PUSH_U16) {
           int c1 = ((w2 & 0xFFFF) << 16) | (w3 & 0xFFFF);
@@ -345,7 +361,12 @@ int cc_emit_jump(int op, int addr24) {
       g_cc_code_pos = g_cc_code_pos - 4;
     }
   }
-  return cc_emit_word(((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF));
+  int iaddr = cc_emit_word(((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF));
+  if (g_cc_is_mod == 1) {
+    w32(CC_RELOC_TAB + g_cc_reloc_cnt * 4, (1 << 24) | (iaddr & 0x00FFFFFF));
+    g_cc_reloc_cnt = g_cc_reloc_cnt + 1;
+  }
+  return iaddr;
 }
 
 void cc_patch_jump(int inst_addr, int target_addr) {
@@ -722,6 +743,7 @@ int cc_eval_const_expr() {
 
 void cc_emit_var_addr(int is_loc, int slot) {
   if (is_loc == 1) cc_emit_op(OP_ADDR_LOCAL, 0, slot);
+  else if (g_cc_is_mod == 1) cc_emit_reloc_ptr32(3, slot * 4);
   else cc_emit_op(OP_ADDR_GLOBAL, 0, slot);
 }
 
@@ -731,12 +753,19 @@ void cc_emit_var_get(int is_loc, int slot, int is_arr) {
     return;
   }
   if (is_loc == 1) cc_emit_op(OP_GET_LOCAL, 0, slot);
-  else cc_emit_op(OP_GET_GLOBAL, 0, slot);
+  else if (g_cc_is_mod == 1) {
+    cc_emit_reloc_ptr32(3, slot * 4);
+    cc_emit_op(OP_LOAD32, 0, 0);
+  } else cc_emit_op(OP_GET_GLOBAL, 0, slot);
 }
 
 void cc_emit_var_set(int is_loc, int slot) {
   if (is_loc == 1) cc_emit_op(OP_SET_LOCAL, 0, slot);
-  else cc_emit_op(OP_SET_GLOBAL, 0, slot);
+  else if (g_cc_is_mod == 1) {
+    cc_emit_reloc_ptr32(3, slot * 4);
+    cc_emit_op(OP_SWAP, 0, 0);
+    cc_emit_op(OP_STORE32, 0, 0);
+  } else cc_emit_op(OP_SET_GLOBAL, 0, slot);
 }
 
 void cc_parse_primary() {
@@ -749,7 +778,8 @@ void cc_parse_primary() {
   }
   if (g_cc_tok == TK_STR) {
     int saddr = cc_add_str_lit();
-    cc_emit_push_const(saddr);
+    if (g_cc_is_mod == 1) cc_emit_reloc_ptr32(2, saddr);
+    else cc_emit_push_const(saddr);
     cc_next_tok();
     return;
   }
@@ -805,6 +835,16 @@ void cc_parse_primary() {
         cc_expect(41);
         cc_emit_op(OP_SYSCALL, nargs, sysnum);
         return;
+      } else if (nc0 == 105 && hal_strcmp(name, "icall")) {
+        cc_next_tok();
+        cc_parse_expr();
+        while (g_cc_tok == 44) {
+          cc_next_tok();
+          cc_parse_expr();
+        }
+        cc_expect(41);
+        cc_emit_word(OP_CALL_IND << 24);
+        return;
       } else if (nc0 == 102 && hal_strcmp(name, "fn_addr")) {
         cc_next_tok();
         byte tfn[32];
@@ -814,11 +854,9 @@ void cc_parse_primary() {
         int fidx = cc_find_func(tfn);
         if (fidx >= 0) {
           int faddr = r32(CC_FUNC_TAB + fidx * 44 + 32);
-          cc_emit_op(OP_PUSH_U16, 0, faddr & 0xFFFF);
-          cc_emit_op(OP_PUSH_HI, 0, (faddr >>> 16) & 0xFFFF);
+          cc_emit_reloc_ptr32(2, faddr);
         } else {
-          int iaddr = cc_emit_op(OP_PUSH_U16, 0, 0);
-          cc_emit_op(OP_PUSH_HI, 0, 0);
+          int iaddr = cc_emit_reloc_ptr32(2, 0);
           cc_add_fixup(iaddr, tfn, g_cc_line, 1);
         }
         return;
@@ -1325,6 +1363,12 @@ void cc_parse_stmt() {
   cc_expect(59);
 }
 
+int cc_fn_off(int name_str) {
+  int fi = cc_find_func(name_str);
+  if (fi < 0) return 0;
+  return r32(CC_FUNC_TAB + fi * 44 + 32);
+}
+
 int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max_size, int allow_imports) {
   g_cc_err_flag = 0;
   g_cc_err_line = 0;
@@ -1526,6 +1570,42 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
     }
   }
 
+  if (g_cc_is_mod == 1) {
+    int reloc_off = g_cc_code_pos;
+    int total_sz = reloc_off + g_cc_reloc_cnt * 4;
+    if (total_sz > max_size) {
+      cc_error("module size overflow");
+      return -1;
+    }
+    for (int ri = 0; ri < g_cc_reloc_cnt; ri++) {
+      w32(dst_buf + reloc_off + ri * 4, r32(CC_RELOC_TAB + ri * 4));
+    }
+    w32(dst_buf + 0x00, SAPP_MAGIC);
+    w32(dst_buf + 0x04, SAPP_VERSION);
+    w32(dst_buf + 0x08, 0);
+    w32(dst_buf + 0x0C, g_cc_code_base);
+    w32(dst_buf + 0x10, g_cc_code_pos - g_cc_code_base);
+    w32(dst_buf + 0x14, str_base);
+    w32(dst_buf + 0x18, g_cc_str_pos - str_base);
+    w32(dst_buf + 0x1C, g_cc_glob_slots * 4);
+    w32(dst_buf + 0x20, reloc_off);
+    w32(dst_buf + 0x24, g_cc_reloc_cnt);
+    w32(dst_buf + 0x28, cc_fn_off("app_init"));
+    w32(dst_buf + 0x2C, cc_fn_off("app_draw"));
+    w32(dst_buf + 0x30, cc_fn_off("app_click"));
+    w32(dst_buf + 0x34, cc_fn_off("app_key"));
+    w32(dst_buf + 0x38, cc_fn_off("app_tick"));
+    w32(dst_buf + 0x3C, 0);
+    int h = 0x811C9DC5;
+    for (int bi = 0; bi < total_sz; bi++) {
+      h = (h ^ r8(dst_buf + bi)) * 0x01000193;
+    }
+    w32(dst_buf + 0x3C, h);
+    g_cc_last_bytes = total_sz;
+    g_cc_last_csum = h;
+    return total_sz;
+  }
+
   int midx = cc_find_func("main");
   if (midx < 0) {
     cc_error("no main function");
@@ -1555,6 +1635,7 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
 }
 
 int cc_compile_standalone(int src_ptr, int src_len, int dst_buf) {
+  g_cc_is_mod = 0;
   int rc = cc_compile_core(src_ptr, src_len, dst_buf, 0x0800, 0x04000, 0);
   if (rc < 0) {
     g_cc_last_status = -1;
@@ -1713,7 +1794,40 @@ int cc_exec_standalone(int spir_buf) {
   return r32(sp - 4);
 }
 
+int cc_compile_app(int src_ptr, int src_len, int dst_buf) {
+  g_cc_is_mod = 1;
+  int sz = cc_compile_core(src_ptr, src_len, dst_buf, 0x0040, 0x010000, 1);
+  g_cc_is_mod = 0;
+  return sz;
+}
+
+int cc_rebuild_apps() {
+  byte out_path[40];
+  for (int i = 0; i < FS_MAX_ENTRIES; i++) {
+    if (fs_entry_flags(i) != 0) {
+      int ep = fs_entry_ptr(i);
+      // Match "/src/app_" prefix (9 bytes)
+      if (r8(ep)==47 && r8(ep+1)==115 && r8(ep+2)==114 && r8(ep+3)==99 && r8(ep+4)==47 &&
+          r8(ep+5)==97 && r8(ep+6)==112 && r8(ep+7)==112 && r8(ep+8)==95) {
+        int plen = hal_strlen(ep);
+        if (plen > 12 && r8(ep + plen - 3) == 46 && r8(ep + plen - 2) == 115 && r8(ep + plen - 1) == 112) {
+          // Build "/apps/<name>.spir"
+          hal_memcpy(out_path, "/apps/", 6);
+          int nlen = plen - 12;
+          hal_memcpy(out_path + 6, ep + 9, nlen);
+          hal_memcpy(out_path + 6 + nlen, ".spir", 6);
+          int sz = cc_compile_app(fs_entry_data_ptr(i), fs_entry_size(i), CC_WORK_BUF);
+          if (sz < 0 || g_cc_err_flag != 0) return -1;
+          fs_write(out_path, CC_WORK_BUF, sz);
+        }
+      }
+    }
+  }
+  return 1;
+}
+
 int cc_rebuild_os_image() {
+  g_cc_is_mod = 0;
   int os_idx = fs_find("/src/os.sp");
   if (os_idx < 0) {
     g_cc_last_status = -1;
@@ -1731,6 +1845,11 @@ int cc_rebuild_os_image() {
   // Copy newly compiled 128 KB SPIR image to mounted spiralos.img (Sectors 64..319)
   hal_memcpy(VMRAM_IMG_BASE + 0x8000, CC_WORK_BUF, 0x020000);
   hal_disk_sync(64, 256);
+
+  if (cc_rebuild_apps() < 0) {
+    g_cc_last_status = -1;
+    return -1;
+  }
 
   g_cc_last_status = 1;
   return 1;

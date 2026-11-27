@@ -8,7 +8,7 @@
 // ============================================================================
 
 // from spiralos/os/fs.sp:1-123
-const FS_MAX_ENTRIES = 63;
+const FS_MAX_ENTRIES = 127;
 const SPFS_SIZE      = 0xC8000;
 const SPFS_HOLE_LO   = 0x50000;
 const SPFS_HOLE_HI   = 0x58000;
@@ -108,10 +108,12 @@ int fs_write(int path_str, int src_ptr, int len) {
     w32(VMRAM_SPFS_BASE + 0x0C, next_free + need);
   }
 
-  hal_memset(e, 0, 40);
-  int plen = hal_strlen(path_str);
-  if (plen > 39) plen = 39;
-  hal_memcpy(e, path_str, plen);
+  if (e != path_str) {
+    hal_memset(e, 0, 40);
+    int plen = hal_strlen(path_str);
+    if (plen > 39) plen = 39;
+    hal_memcpy(e, path_str, plen);
+  }
 
   w32(e + 0x28, 1);
   w32(e + 0x2C, rel_off);
@@ -126,7 +128,7 @@ int fs_write(int path_str, int src_ptr, int len) {
   }
 
   // Sync directory table (Sectors 320..327) and modified file sectors to disk
-  hal_disk_sync(320, 8);
+  hal_disk_sync(320, 16);
   int file_start_sec = 320 + (rel_off >> 9);
   int file_sec_cnt = (cap + 511) >> 9;
   hal_disk_sync(file_start_sec, file_sec_cnt);
@@ -138,6 +140,6 @@ int fs_delete(int path_str) {
   if (idx < 0) return -1;
   int e = fs_entry_ptr(idx);
   w32(e + 0x28, 0);
-  hal_disk_sync(320, 8);
+  hal_disk_sync(320, 16);
   return 0;
 }

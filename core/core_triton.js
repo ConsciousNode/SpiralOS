@@ -163,23 +163,24 @@ const VAR_TMP2          = 132; // 3 trytes: scratch word 2
 const VAR_TMP3          = 135; // 3 trytes: scratch word 3
 const VAR_TMP4          = 138; // 3 trytes: scratch word 4
 const VAR_TMP5          = 141; // 3 trytes: font selector scratch
+const VAR_VM_RAM_SIZE   = 144; // 3 trytes: usable VM RAM size (ulimit - TRITON_VM_BASE)
 
 const ADDR_VEC_TABLE    = 150; // 12 * 3 = 36 trytes (150..185)
-const ADDR_OP_TABLE     = 186; // 40 * 3 = 120 trytes (186..305)
-const ADDR_CMP_TABLE    = 306; // 8 * 3 = 24 trytes (306..329)
-const ADDR_SYS_TABLE    = 330; // 22 * 3 = 66 trytes (330..395)
-const ADDR_POW2_TABLE   = 396; // 32 * 3 = 96 trytes (396..491): 2^0 .. 2^31
-const ADDR_POW2C_TABLE  = 492; // 32 * 3 = 96 trytes (492..587): 2^32 .. 2^1
+const ADDR_OP_TABLE     = 186; // 41 * 3 = 123 trytes (186..308)
+const ADDR_CMP_TABLE    = 309; // 8 * 3 = 24 trytes (309..332)
+const ADDR_SYS_TABLE    = 333; // 23 * 3 = 69 trytes (333..401)
+const ADDR_POW2_TABLE   = 402; // 32 * 3 = 96 trytes (402..497): 2^0 .. 2^31
+const ADDR_POW2C_TABLE  = 498; // 32 * 3 = 96 trytes (498..593): 2^32 .. 2^1
 
-const ADDR_BOOT_BANNER  = 590;  // 16 trytes (590..605)
+const ADDR_BOOT_BANNER  = 594;  // 16 trytes (594..609)
 const ADDR_FONT_8X8     = 610;  // 768 trytes (610..1377)
 const ADDR_INIT_PAL     = 1380; // 768 trytes (1380..2147)
 const ADDR_CODE_START   = 2160; // Main Triton Core code start (2160..6650)
 
 // 256-entry fast byte/nibble tables (computed by guest at boot in 6800..9615, all < 9841!)
-const TAB_PAL_LUT       = 9000; // 256 trytes: mapped 729-color palette entries (9000..9255, < 9841)
-const ADDR_FONT_SERIF   = 9300; // 1536 trytes: CNSW Serif 8x16 font bank (9300..10835)
-const TAB_BASE          = 12000; // Base for 10x256-entry bitwise/nibble tables (12000..14559, above all code)
+const TAB_PAL_LUT       = 9500; // 256 trytes: mapped 729-color palette entries (9000..9255, < 9841)
+const ADDR_FONT_SERIF   = 9800; // 1536 trytes: CNSW Serif 8x16 font bank (9300..10835)
+const TAB_BASE          = 12500; // Base for 10x256-entry bitwise/nibble tables (12000..14559, above all code)
 const OFF_NIB_LO        = 0;    // 256 trytes: b & 15
 const OFF_NIB_LO16      = 256;  // 256 trytes: (b & 15) * 16
 const OFF_NIB_HI        = 512;  // 256 trytes: b >>> 4
@@ -194,7 +195,7 @@ const TRITON_HW_SP      = 28000;
 
 function buildTritonCore(options = {}) {
   const T = getTritonSystem();
-  const customBanner = options.customBanner !== undefined ? options.customBanner : "SpiralOS 1.2";
+  const customBanner = options.customBanner !== undefined ? options.customBanner : "SpiralOS 1.6";
   const noWrap32 = Boolean(options.noWrap32);
   const swapPalette = Boolean(options.swapPalette);
   const shiftMod64 = Boolean(options.shiftMod64);
@@ -376,7 +377,8 @@ function buildTritonCore(options = {}) {
     "op_18_div",       "op_19_mod",       "op_1a_and",       "op_1b_or",
     "op_1c_xor",       "op_1d_shl",       "op_1e_shr",       "op_1f_sar",
     "op_20_cmp",       "op_21_jmp",       "op_22_jz",        "op_23_jnz",
-    "op_24_call",      "op_25_enter",     "op_26_ret",       "op_27_syscall"
+    "op_24_call",      "op_25_enter",     "op_26_ret",       "op_27_syscall",
+    "op_28_call_ind"
   ];
   for (const l of opLabels) emit(`.word ${l}`);
 
@@ -451,6 +453,12 @@ function buildTritonCore(options = {}) {
   emit("LI R0, #0");
   emit("MTSPR R0, #2"); // SPR_IE = 0
   emit("MTSPR R0, #8"); // SPR_PROT_EN = 0
+  // Probe real Triton hardware RAM size from SPR 7 (ulimit = ramSize)
+  emit("MFSPR R1, #7");
+  emitImm27(2, TRITON_VM_BASE);
+  emit("SUB R1, R1, R2");
+  emit("LI R2, #0");
+  emit(`SW R1, R2, #${VAR_VM_RAM_SIZE}`);
   emit("LI R1, #" + ADDR_VEC_TABLE);
   emit("MTSPR R1, #5"); // SPR_VBR = ADDR_VEC_TABLE
   emitImm27(1, TRITON_HW_SP);
@@ -768,7 +776,7 @@ function buildTritonCore(options = {}) {
   // ==========================================================================
   label("vm_loop");
   // Check if VM_PC < 0 (i.e. R8 < TRITON_VM_BASE, or R8 >= TRITON_VM_BASE + 0x80000000 when sentinel -1 = 0xFFFFFFFF was popped!)
-  emitImm27(0, TRITON_VM_BASE + 0x00400000);
+  emitImm27(0, TRITON_VM_BASE + 0x00800000);
   emit("CMP R8, R0");
   emit("JNNX vm_task_exit_or_halt");
 
@@ -875,7 +883,7 @@ function buildTritonCore(options = {}) {
   emit("ADDI R5, R5, #1");
   emit("CMPI R1, #0");
   emit("JNX vm_halt_bad_op");
-  emit("CMPI R1, #39");
+  emit("CMPI R1, #40");
   emit("JPX vm_halt_bad_op");
   emit("MULI R1, R1, #3");
   emit(`LW R0, R1, #${ADDR_OP_TABLE}`);
@@ -1051,7 +1059,15 @@ function buildTritonCore(options = {}) {
     emit("ADD R1, R1, R0"); // R1 = sext16(imm16)
     emitLoadU32(2, 7, stackOff, 0); // R2 = base
     emit("ADD R1, R2, R1");
-    // Mask to 22 bits (& 0x003FFFFF = mod 4194304)
+    // Allow 0 <= ea < VAR_VM_RAM_SIZE directly; wrap out-of-range modulo 0x00400000
+    const lEaWrap = nextLbl("ea_wrap");
+    emit("CMPI R1, #0");
+    emit(`JNX ${lEaWrap}`);
+    emit("LI R0, #0");
+    emit(`LW R2, R0, #${VAR_VM_RAM_SIZE}`);
+    emit("CMP R1, R2");
+    emit(`JNX ${lModPos}`);
+    label(lEaWrap);
     emitImm27(2, 0x00400000);
     emit("MOD R1, R1, R2");
     emit(`JNNX ${lModPos}`);
@@ -1490,6 +1506,33 @@ function buildTritonCore(options = {}) {
   emit("ADD R8, R8, R1");
   emit("JMP vm_loop");
 
+  // 0x28: CALL_IND (pop target_pc from stack, call it; bit 23 of inst = drop return)
+  label("op_28_call_ind");
+  emit("SUBI R7, R7, #4");
+  emitLoadU32(5, 7, 0, 0); // R5 = target_pc
+  emit("LI R0, #0");
+  emit(`LW R4, R0, #${VAR_EA_CSP}`);
+  emitImm27(0, TRITON_VM_BASE);
+  emit("SUB R1, R8, R0");
+  emitStoreU32(1, 4, 0, 2, 3);
+  emitImm27(0, TRITON_VM_BASE);
+  emit("SUB R1, R6, R0");
+  emitStoreU32(1, 4, 4, 2, 3);
+  emit("LT R1, R8, #-2");
+  emit("CMPI R1, #128");
+  emit("JNX call_ind_no_drop");
+  emit("LI R2, #128");
+  emit("ST R2, R4, #7");
+  label("call_ind_no_drop");
+  emit("ADDI R4, R4, #8");
+  emit("LI R0, #0");
+  emit(`SW R4, R0, #${VAR_EA_CSP}`);
+  emitImm27(2, 0x00800000);
+  emit("MOD R5, R5, R2");
+  emitImm27(8, TRITON_VM_BASE);
+  emit("ADD R8, R8, R5");
+  emit("JMP vm_loop");
+
   // 0x25: ENTER [nargs:8 at R8-2][nlocals:16 at R8-4..R8-3]
   label("op_25_enter");
   emit("LT R1, R8, #-2"); // nargs
@@ -1641,8 +1684,8 @@ function buildTritonCore(options = {}) {
   emit("JMP vm_halt_with_r0");
 
   // SYS 1: YIELD() -> Present 320x200 8-bpp backbuffer (0x0F0000) 2x into centered 640x400 of 729x486 FB
+  // (Mouse is polled solely in sys_03 so click presses are never consumed at frame-end before OS reads them)
   label("sys_01");
-  emit("CALL sub_poll_mouse");
   // Store current R5 (VM_ICNT) at [0x002FFD20] on SYS_YIELD
   emitImm27(1, 0x002FFD20);
   emit("MOV R2, R5");
@@ -2238,7 +2281,8 @@ function buildTritonCore(options = {}) {
   emit("LI R0, #3"); // Machine ID = 3 (Triton)
   emit("JMP sys_push_r0");
   label("mi_1");
-  emitImm27(0, 0x00400000);
+  emit("LI R1, #0");
+  emit(`LW R0, R1, #${VAR_VM_RAM_SIZE}`);
   emit("JMP sys_push_r0");
   label("mi_2");
   emit("MOV R0, R5");

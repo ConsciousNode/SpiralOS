@@ -12,6 +12,7 @@ import "/src/cc.sp";
 import "/src/asm.sp";
 import "/src/apps1.sp";
 import "/src/apps2.sp";
+import "/src/loader.sp";
 
 const PC_LAUNCHER_DRIFT    = 0;
 const PC_SHUTDOWN_NO_FLUSH = 0;
@@ -31,7 +32,7 @@ int g_ctx_y;
 int g_ctx_sel;
 
 int launcher_item_label(int idx) {
-  int s = "1. Files\02. Editor\03. Shell\04. Compiler\05. Paint\06. Calc\07. SysMon\08. Themes\09. Viewer\010. Snake\011. Blocks\012. NetChat\013. FileBeam\014. SpiralWeb\015. Notes\016. Clock\017. Solitaire\018. About";
+  int s = "1. Files\02. Editor\03. Shell\04. Compiler\05. Paint\06. Calc\07. SysMon\08. Themes\09. Viewer\010. Snake\011. Blocks\012. NetChat\013. FileBeam\014. SpiralWeb\015. Notes\016. Clock\017. Solitaire\018. About\019. Zork";
   for (int i = 0; i < idx; i++) s = s + hal_strlen(s) + 1;
   return s;
 }
@@ -44,19 +45,19 @@ int launcher_item_app_id(int idx) {
 
 void launcher_rebuild_table() {
   if (g_launcher_sel < 0) g_launcher_sel = 0;
-  if (g_launcher_sel > 17) g_launcher_sel = 17;
+  if (g_launcher_sel > 18) g_launcher_sel = 18;
   if (g_launcher_scroll < 0) g_launcher_scroll = 0;
-  if (g_launcher_scroll > 1) g_launcher_scroll = 1;
+  if (g_launcher_scroll > 2) g_launcher_scroll = 2;
   w32(LAUNCHER_TAB + 0, g_launcher_scroll);
   w32(LAUNCHER_TAB + 4, g_launcher_sel);
   w32(LAUNCHER_TAB + 8, 17);
-  w32(LAUNCHER_TAB + 12, 18);
+  w32(LAUNCHER_TAB + 12, 19);
   // Top hover-scroll arrow box: (x=4, y=12, w=100, h=3)
   w32(LAUNCHER_TAB + 16, (4 << 24) | (12 << 16) | (100 << 8) | 3);
   // Bottom hover-scroll arrow box: (x=4, y=168, w=100, h=8)
   w32(LAUNCHER_TAB + 20, (4 << 24) | (168 << 16) | (100 << 8) | 8);
 
-  for (int i = 0; i < 18; i++) {
+  for (int i = 0; i < 19; i++) {
     int e = LAUNCHER_TAB + 32 + i * 16;
     int row = i - g_launcher_scroll;
     int aid = launcher_item_app_id(i);
@@ -76,44 +77,49 @@ void launcher_rebuild_table() {
 
 void os_shutdown() {
   if (PC_SHUTDOWN_NO_FLUSH == 0) {
-    if (g_notes_dirty == 1 && r8(NOTES_PATH_BUF) != 0) {
-      fs_write(NOTES_PATH_BUF, NOTES_BUF, g_notes_len);
-      g_notes_dirty = 0;
+    if ((g_notes_dirty == 1 || r32(SHARED_ST + 0x04) == 1) && r8(NOTES_PATH_BUF) != 0) {
+      fs_write(NOTES_PATH_BUF, NOTES_BUF, r32(SHARED_ST + 0x00));
+      g_notes_dirty = 0; w32(SHARED_ST + 0x04, 0);
     }
-    if (g_edit_dirty == 1) {
+    if (g_edit_dirty == 1 || r32(SHARED_ST + 0x0C) == 1) {
       edit_save_current();
     }
-    if (g_paint_dirty == 1) {
+    if (g_paint_dirty == 1 || r32(SHARED_ST + 0x14) == 1) {
       fs_write("/art/user.pic", PAINT_CANVAS, 96 * 56);
-      g_paint_dirty = 0;
+      g_paint_dirty = 0; w32(SHARED_ST + 0x14, 0);
     }
-    hal_disk_sync(320, 8);
+    hal_disk_sync(320, 16);
   }
 
-  if (g_machine_id == 2) hal_disk_sync(0xFFFF, 1);
   hal_rect(0, 0, 320, 200, 0);
   hal_str(0, 96, "It is now safe to turn off your computer", 14, -1);
   hal_yield();
+  if (g_machine_id == 2) hal_disk_sync(0xFFFF, 1);
   sys(0, 0);
 }
 
 void open_app_by_id(int app_id) {
   g_focus_ctl = 0;
   g_foc_is_btn = 0;
-  if (app_id == APP_SNAKE) {
-    snake_reset();
-    app_tick_last_ms[APP_SNAKE] = hal_time();
-  }
+  if (app_id == APP_SNAKE) { app_tick_last_ms[APP_SNAKE] = hal_time(); }
   if (app_id == APP_BLOCKS) {
     app_tick_last_ms[APP_BLOCKS] = hal_time();
   }
   if (app_id == APP_BROWSER)  wm_open(APP_BROWSER,  26, 22, 236, 132, "SpiralWeb");
-  if (app_id == APP_BROWSER || app_id < 1 || app_id > 19 || app_id == 15) return;
+  if (app_id == APP_ZORK)     wm_open(APP_ZORK,     18, 16, 284, 164, "Zork I (Z-Machine v3)");
+  if (app_id == APP_ABOUT)    wm_open(APP_ABOUT,    24, 24, 272, 108, "About SpiralOS");
+  if (app_id == APP_BROWSER || app_id == APP_ZORK || app_id == APP_ABOUT || app_id < 1 || app_id > 20 || app_id == 15) return;
   int ts = "SpiralFiles\0SpiralEdit\0SpiralSh\0SpiralBuild\0SpiralPaint\0SpiralCalc\0SpiralMon\0SpiralTheme\0SpiralView\0SpiralSnake\0SpiralBlocks\0SpiralChat\0SpiralSend\0\0\0Notes\0Clock & Cal\0Solitaire\0About SpiralOS";
   int t = ts;
   for (int ti = 1; ti < app_id; ti++) t = t + hal_strlen(t) + 1;
   int gp = ",+I_1-ff55kS;1aYA/MR}.3TgJOOF4JOM17S?0H\\Q09W48_Q=:UP0.qe--7O/,mi>-cg+*{qC7[Q" + (app_id - 1) * 4;
   wm_open(app_id, (r8(gp) - 35) << 1, (r8(gp + 1) - 35) << 1, ((r8(gp + 2) - 35) << 1) + 80, (r8(gp + 3) - 35) << 1, t);
+}
+
+void app_draw_browser(int x, int y, int w, int h) {
+  for (int i = 0; i < MAX_WINS; i++) {
+    if (win_used[i] == 1 && win_app[i] == APP_BROWSER && win_mod_draw[i] != 0) { icall(x, y, w, h, win_mod_draw[i]); return; }
+  }
 }
 
 void draw_window_client(int wid) {
@@ -127,24 +133,9 @@ void draw_window_client(int wid) {
     g_w_ctl_seq = 0;
     g_foc_is_btn = 0;
   }
-  if (app == APP_FILES)     app_draw_files(x, y, w, h);
-  if (app == APP_EDIT)      app_draw_edit(x, y, w, h);
   if (app == APP_SHELL)     app_draw_shell(x, y, w, h);
-  if (app == APP_BUILD)     app_draw_build(x, y, w, h);
-  if (app == APP_PAINT)     app_draw_paint(x, y, w, h);
-  if (app == APP_CALC)      app_draw_calc(x, y, w, h);
-  if (app == APP_SYSMON)    app_draw_sysmon(x, y, w, h);
-  if (app == APP_THEME)     app_draw_theme(x, y, w, h);
-  if (app == APP_VIEWER)    app_draw_viewer(x, y, w, h);
-  if (app == APP_SNAKE)     app_draw_snake(x, y, w, h);
-  if (app == APP_BLOCKS)    app_draw_blocks(x, y, w, h);
-  if (app == APP_CHAT)      app_draw_chat(x, y, w, h);
-  if (app == APP_TRANSFER)  app_draw_transfer(x, y, w, h);
   if (app == APP_BROWSER)  app_draw_browser(x, y, w, h);
-  if (app == APP_NOTES)     app_draw_notes(x, y, w, h);
-  if (app == APP_CLOCK)     app_draw_clock(x, y, w, h);
-  if (app == APP_SOLITAIRE) app_draw_solitaire(x, y, w, h);
-  if (app == APP_ABOUT)     app_draw_about(x, y, w, h);
+  else if (win_mod_draw[wid] != 0) icall(x, y, w, h, win_mod_draw[wid]);
   if (g_w_is_foc == 1) {
     g_w_ctl_tot = g_w_ctl_seq;
     if (g_w_ctl_tot > 0 && g_focus_ctl >= g_w_ctl_tot) g_focus_ctl = 0;
@@ -154,21 +145,7 @@ void draw_window_client(int wid) {
 
 void dispatch_window_click(int wid, int rx, int ry) {
   int app = win_app[wid];
-  if (app == APP_FILES)     app_click_files(wid, rx, ry);
-  if (app == APP_EDIT)      app_click_edit(wid, rx, ry);
-  if (app == APP_BUILD)     app_click_build(wid, rx, ry);
-  if (app == APP_PAINT)     app_click_paint(wid, rx, ry);
-  if (app == APP_CALC)      app_click_calc(wid, rx, ry);
-  if (app == APP_THEME)     app_click_theme(wid, rx, ry);
-  if (app == APP_VIEWER)    app_click_viewer(wid, rx, ry);
-  if (app == APP_SNAKE)     app_click_snake(wid, rx, ry);
-  if (app == APP_BLOCKS)    app_click_blocks(wid, rx, ry);
-  if (app == APP_CHAT)      app_click_chat(wid, rx, ry);
-  if (app == APP_TRANSFER)  app_click_transfer(wid, rx, ry);
-  if (app == APP_BROWSER)   app_click_browser(wid, rx, ry);
-  if (app == APP_NOTES)     app_click_notes(wid, rx, ry);
-  if (app == APP_CLOCK)     app_click_clock(wid, rx, ry);
-  if (app == APP_SOLITAIRE) app_click_solitaire(wid, rx, ry);
+  if (win_mod_click[wid] != 0) icall(wid, rx, ry, win_mod_click[wid]);
 }
 
 void ctx_exec_item(int item_idx) {
@@ -178,7 +155,7 @@ void ctx_exec_item(int item_idx) {
   if (g_ctx_kind == 1 && app == APP_FILES) {
     int fidx = fs_nth_index(g_fm_selected);
     if (item_idx == 0 && fidx >= 0) shell_open_file(fs_entry_ptr(fidx));
-    if (item_idx == 1 && fidx >= 0) fm_open_modal(3, fs_entry_ptr(fidx));
+    if (item_idx == 1 && fidx >= 0) shell_open_file(fs_entry_ptr(fidx));
     if (item_idx == 2 && fidx >= 0) g_fm_modal_mode = 4;
     return;
   }
@@ -240,7 +217,7 @@ void dispatch_focused_key(int ascii, int vk, int mods) {
       return;
     }
     if (vk == 36 || vk == 33) { g_launcher_sel = 0; g_launcher_scroll = 0; return; }
-    if (vk == 35 || vk == 34) { g_launcher_sel = 17; g_launcher_scroll = 1; return; }
+    if (vk == 35 || vk == 34) { g_launcher_sel = 18; g_launcher_scroll = 2; return; }
     if (ascii == 13 || ascii == 32) {
       g_launcher_open = 0;
       open_app_by_id(launcher_item_app_id(g_launcher_sel));
@@ -300,23 +277,54 @@ void dispatch_focused_key(int ascii, int vk, int mods) {
     return;
   }
 
-  if (app == APP_FILES)     app_key_files(ascii, vk);
-  if (app == APP_EDIT)      app_key_edit(ascii, vk, mods);
   if (app == APP_SHELL)     app_key_shell(ascii, vk, mods);
-  if (app == APP_BUILD)     app_key_build(ascii, vk);
-  if (app == APP_PAINT)     app_key_paint(ascii, vk, mods);
-  if (app == APP_CALC)      app_key_calc(ascii);
-  if (app == APP_THEME)     app_key_theme(ascii, vk);
-  if (app == APP_VIEWER)    app_key_viewer(ascii, vk);
-  if (app == APP_SNAKE)     app_key_snake(ascii, vk);
-  if (app == APP_BLOCKS)    app_key_blocks(ascii, vk);
-  if (app == APP_CHAT)      app_key_chat(ascii);
-  if (app == APP_TRANSFER)  app_key_transfer(ascii, vk);
-  if (app == APP_BROWSER)   app_key_browser(ascii, vk);
-  if (app == APP_NOTES)     app_key_notes(ascii, vk, mods);
-  if (app == APP_CLOCK)     app_key_clock(ascii, vk);
-  if (app == APP_SOLITAIRE) app_key_solitaire(ascii, vk);
-  if (app == APP_ABOUT)     app_key_about(ascii, vk);
+  else if (win_mod_key[g_focused_win] != 0) icall(ascii, vk, mods, win_mod_key[g_focused_win]);
+}
+
+
+int g_mlog_buf;
+int g_mlog_len;
+int g_mlog_seq;
+
+void poll_mouse_diag() {
+  int on = r32(SHARED_ST + 0x38);
+  if (on == 0) {
+    if (g_mlog_buf != 0) {
+      if (g_mlog_len > 0) fs_write("/home/mouse.log", g_mlog_buf, g_mlog_len);
+      heap_free(g_mlog_buf);
+      g_mlog_buf = 0;
+      g_mlog_len = 0;
+    }
+    return;
+  }
+  if (g_mlog_buf == 0) {
+    g_mlog_buf = heap_alloc(4096);
+    g_mlog_len = 0;
+    g_mlog_seq = r32(VMRAM_STATUS + 0xA0);
+    if (g_mlog_buf == 0) return;
+  }
+  int seq = r32(VMRAM_STATUS + 0xA0);
+  if (seq == g_mlog_seq) return;
+  g_mlog_seq = seq;
+  int raw = r32(VMRAM_STATUS + 0xA4);
+  if (g_mlog_len > 3960) g_mlog_len = 0;
+  int p = g_mlog_len;
+  if ((raw & 0x80000000) != 0) {
+    p = srrp_append_str(g_mlog_buf, p, "DROP ");
+    p = srrp_append_int(g_mlog_buf, p, raw & 0xFF);
+  } else {
+    p = srrp_append_str(g_mlog_buf, p, "PKT ");
+    p = srrp_append_int(g_mlog_buf, p, raw & 0xFF);
+    p = srrp_append_str(g_mlog_buf, p, " ");
+    p = srrp_append_int(g_mlog_buf, p, (raw >>> 8) & 0xFF);
+    p = srrp_append_str(g_mlog_buf, p, " ");
+    p = srrp_append_int(g_mlog_buf, p, (raw >>> 16) & 0xFF);
+  }
+  w8(g_mlog_buf + p, 10);
+  p = p + 1;
+  w8(g_mlog_buf + p, 0);
+  g_mlog_len = p;
+  fs_write("/home/mouse.log", g_mlog_buf, g_mlog_len);
 }
 
 void app_run_ticks() {
@@ -324,14 +332,15 @@ void app_run_ticks() {
   for (int i = 0; i < MAX_WINS; i++) {
     if (win_used[i] == 1 && win_min[i] == 0) {
       int app = win_app[i];
-      if (app >= 0 && app < 16) {
+      if (app >= 0 && app < 24) {
         int iv = app_tick_interval[app];
-        if (iv > 0 && (now_ms - app_tick_last_ms[app]) >= iv) {
-          if (now_ms - app_tick_last_ms[app] > iv * 4) app_tick_last_ms[app] = now_ms;
+        int tc = 0;
+        while (iv > 0 && (now_ms - app_tick_last_ms[app]) >= iv && tc < 4) {
+          if (now_ms - app_tick_last_ms[app] > iv * 8) app_tick_last_ms[app] = now_ms;
           else app_tick_last_ms[app] = app_tick_last_ms[app] + iv;
           app_tick_count[app] = app_tick_count[app] + 1;
-          if (app == APP_SNAKE)  snake_step();
-          if (app == APP_BLOCKS) blocks_step();
+          if (win_mod_tick[i] != 0) icall(win_mod_tick[i]);
+          tc = tc + 1;
         }
       }
     }
@@ -395,7 +404,7 @@ void draw_desktop_scene() {
     gui_bevel_rect(2, 12, 104, 166, thm_taskbar_bg, thm_btn_hi, thm_btn_sh);
     // Top hover-scroll arrow at (4, 12, 100, 3)
     hal_rect(4, 12, 100, 3, thm_btn_face + (g_launcher_scroll > 0) * (thm_accent - thm_btn_face));
-    for (int li = 0; li < 18; li++) {
+    for (int li = 0; li < 19; li++) {
       int e = LAUNCHER_TAB + 32 + li * 16;
       int bx = r32(e + 0);
       int by = r32(e + 4);
@@ -418,7 +427,7 @@ void draw_desktop_scene() {
       }
     }
     // Bottom hover-scroll arrow at (4, 168, 100, 8)
-    hal_rect(4, 168, 100, 8, thm_btn_face + (g_launcher_scroll < 1) * (thm_accent - thm_btn_face));
+    hal_rect(4, 168, 100, 8, thm_btn_face + (g_launcher_scroll < 2) * (thm_accent - thm_btn_face));
     hal_str(44, 168, "v v", 15, -1);
   }
 
@@ -496,10 +505,10 @@ void handle_mouse_down(int mx, int my) {
       return;
     }
     if (mx >= 4 && mx < 104 && my >= 168 && my < 177) {
-      if (g_launcher_scroll < 1) g_launcher_scroll = g_launcher_scroll + 1;
+      if (g_launcher_scroll < 2) g_launcher_scroll = g_launcher_scroll + 1;
       return;
     }
-    for (int li = 0; li < 18; li++) {
+    for (int li = 0; li < 19; li++) {
       int e = LAUNCHER_TAB + 32 + li * 16;
       int bx = r32(e + 0);
       int by = r32(e + 4);
@@ -602,6 +611,8 @@ void boot_splash() {
 
 int main() {
   kernel_init();
+  heap_init();
+  abi_init();
   wm_init();
   theme_select(0);
   net_init();
@@ -628,6 +639,7 @@ int main() {
   while (1) {
     net_poll();
     app_run_ticks();
+    poll_mouse_diag();
 
     int mpack = hal_mouse(VMRAM_STATUS + 0x08);
     g_mouse_x = mpack & 0x3FF;
@@ -636,11 +648,11 @@ int main() {
 
     // Launcher hover-scroll arrows when launcher is open
     if (g_launcher_open == 1 && g_mouse_x >= 4 && g_mouse_x < 104) {
-      if (g_mouse_y >= 168 && g_mouse_y < 177 && g_launcher_scroll < 1) {
-        g_launcher_scroll = 1;
+      if (g_mouse_y >= 168 && g_mouse_y < 177 && g_launcher_scroll < 2) {
+        g_launcher_scroll = g_launcher_scroll + 1;
         launcher_rebuild_table();
       } else if (g_mouse_y >= 12 && g_mouse_y < 15 && g_launcher_scroll > 0) {
-        g_launcher_scroll = 0;
+        g_launcher_scroll = g_launcher_scroll - 1;
         launcher_rebuild_table();
       }
     }
@@ -661,15 +673,7 @@ int main() {
         int frx = g_mouse_x - win_x[g_focused_win];
         int fry = g_mouse_y - win_y[g_focused_win];
         if (fapp == APP_PAINT) {
-          app_click_paint(g_focused_win, frx, fry);
-        } else if (fapp == APP_NOTES && fry >= 27 && frx < win_w[g_focused_win] - 12) {
-          int npos = notes_pos_from_xy(win_w[g_focused_win], frx, fry);
-          g_notes_cursor = npos;
-          g_notes_sel_end = npos;
-        } else if (fapp == APP_EDIT && fry >= 28 && frx < win_w[g_focused_win] - 12) {
-          int epos = edit_pos_from_xy(frx, fry);
-          g_edit_cursor = epos;
-          g_edit_sel_b = epos;
+          dispatch_window_click(g_focused_win, frx, fry);
         }
       }
     } else {

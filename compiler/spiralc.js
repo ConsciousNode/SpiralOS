@@ -87,8 +87,14 @@ const OP_CALL        = 0x24;
 const OP_ENTER       = 0x25;
 const OP_RET         = 0x26;
 const OP_SYSCALL     = 0x27;
+const OP_CALL_IND    = 0x28;
 
-const SPIR_MAGIC     = 0x52495053; // 'SPIR'
+const SPIR_MAGIC     = 0x52495053;
+const SAPP_MAGIC     = 0x50504153; // 'SAPP'
+const SAPP_VERSION   = 2;
+const SAPP_STR_BASE  = 0x000040;
+const SAPP_CODE_BASE = 0x000240;
+const SAPP_MAX_SIZE  = 0x010000;   // 64 KB max app module // 'SPIR'
 const SPIR_STR_BASE  = 0x000020;
 const SPIR_CODE_BASE = 0x001890;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
 const SPIR_MAX_SIZE  = 0x020000;   // 128 KB total SPIR image size
@@ -123,7 +129,12 @@ function expandImports(entryPath, readFileTextFn) {
   return chunks.join("\n");
 }
 
-function compileSpiralSource(sourceText, readFileFn = null) {
+function compileSpiralSource(sourceText, readFileFn = null, opts = null) {
+  const isModule = !!(opts && opts.module);
+  const STR_BASE = isModule ? SAPP_STR_BASE : SPIR_STR_BASE;
+  const CODE_BASE = isModule ? SAPP_CODE_BASE : SPIR_CODE_BASE;
+  const MAX_SIZE = isModule ? SAPP_MAX_SIZE : SPIR_MAX_SIZE;
+  const relocs = [];
   let src = typeof sourceText === "string"
     ? new TextEncoder().encode(sourceText)
     : new Uint8Array(sourceText);
@@ -136,16 +147,15 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   let parentPos = 0;
   let parentLine = 1;
 
-  // Output 128 KB SPIR buffer
-  const outBuf = new Uint8Array(SPIR_MAX_SIZE);
+  const outBuf = new Uint8Array(MAX_SIZE);
   const outDV = new DataView(outBuf.buffer);
-  let codePos = SPIR_CODE_BASE;
-  let lastPatchPos = -1; // Bytecode starts right after 32-byte SPIR header
-  let strPos = SPIR_STR_BASE;
+  let codePos = CODE_BASE;
+  let lastPatchPos = -1;
+  let strPos = STR_BASE;
 
   function emitWord(w) {
-    if (codePos + 4 > SPIR_MAX_SIZE) {
-      throw new Error(`SpiralC: Code size exceeded ${SPIR_MAX_SIZE} bytes at line ${lineNum}`);
+    if (codePos + 4 > MAX_SIZE) {
+      throw new Error(`SpiralC: Code size exceeded ${MAX_SIZE} bytes at line ${lineNum}`);
     }
     outDV.setUint32(codePos, w >>> 0, true);
     const addr = codePos;
@@ -153,8 +163,15 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     return addr;
   }
 
+  function emitRelocPtr32(relocType, relAddr) {
+    const instAddr = emitWord(((OP_PUSH_U16 << 24) | (relAddr & 0xFFFF)) >>> 0);
+    emitWord(((OP_PUSH_HI << 24) | ((relAddr >>> 16) & 0xFFFF)) >>> 0);
+    if (isModule) relocs.push((((relocType & 0xFF) << 24) | (instAddr & 0x00FFFFFF)) >>> 0);
+    return instAddr;
+  }
+
   function popAddOffset16() {
-    if (codePos >= SPIR_CODE_BASE + 8) {
+    if (codePos >= CODE_BASE + 8) {
       const last1 = outDV.getUint32(codePos - 4, true);
       const last2 = outDV.getUint32(codePos - 8, true);
       if (((last2 >>> 24) & 0xFF) === OP_PUSH_I16) {
@@ -172,12 +189,12 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   }
 
   function emitDropStmt() {
-    if (codePos >= SPIR_CODE_BASE + 8) {
+    if (codePos >= CODE_BASE + 8) {
       const last1 = outDV.getUint32(codePos - 4, true);
       const last2 = outDV.getUint32(codePos - 8, true);
       const op1 = (last1 >>> 24) & 0xFF;
       const op2 = (last2 >>> 24) & 0xFF;
-      if (op1 === OP_CALL) {
+      if (op1 === OP_CALL || op1 === OP_CALL_IND) {
         outDV.setUint32(codePos - 4, (last1 | 0x00800000) >>> 0, true);
         return;
       }
@@ -195,17 +212,17 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   }
 
   function emitOp(op, a = 0, imm16 = 0) {
-    if (op === OP_RET && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
+    if (op === OP_RET && codePos >= CODE_BASE + 4 && lastPatchPos !== codePos) {
       const rw = outDV.getUint32(codePos - 4, true);
       if (((rw >>> 24) & 0xFF) === OP_PUSH_I16) {
         outDV.setUint32(codePos - 4, ((OP_RET << 24) | 0x00010000 | (rw & 0xFFFF)) >>> 0, true);
         return codePos - 4;
       }
     }
-    if (op === OP_CMP && a === 0 && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
+    if (op === OP_CMP && a === 0 && codePos >= CODE_BASE + 4 && lastPatchPos !== codePos) {
       const w1 = outDV.getUint32(codePos - 4, true);
       if (((w1 >>> 24) & 0xFF) === OP_PUSH_I16) {
-        if (codePos >= SPIR_CODE_BASE + 8) {
+        if (codePos >= CODE_BASE + 8) {
           const w2 = outDV.getUint32(codePos - 8, true);
           if (((w2 >>> 24) & 0xFF) === OP_CMP) {
             if ((w1 === ((OP_PUSH_I16 << 24) | 1) && imm16 === 0) || (w1 === (OP_PUSH_I16 << 24) && imm16 === 1)) {
@@ -229,7 +246,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         return codePos - 4;
       }
     }
-    if ((op === OP_ADD || op === OP_SUB || op === OP_MUL || op === OP_SHL) && codePos >= SPIR_CODE_BASE + 8) {
+    if ((op === OP_ADD || op === OP_SUB || op === OP_MUL || op === OP_SHL) && codePos >= CODE_BASE + 8) {
       const w1 = outDV.getUint32(codePos - 4, true);
       if (((w1 >>> 24) & 0xFF) === OP_PUSH_I16) {
         const c2 = ((w1 & 0xFFFF) << 16) >> 16;
@@ -247,7 +264,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
           codePos -= 4;
           return codePos - 4;
         }
-        if ((op === OP_ADD || op === OP_SUB) && op2 === OP_PUSH_HI && codePos >= SPIR_CODE_BASE + 12) {
+        if (!isModule && (op === OP_ADD || op === OP_SUB) && op2 === OP_PUSH_HI && codePos >= CODE_BASE + 12) {
           const w3 = outDV.getUint32(codePos - 12, true);
           if (((w3 >>> 24) & 0xFF) === OP_PUSH_U16) {
             const c1 = (((w2 & 0xFFFF) << 16) | (w3 & 0xFFFF)) | 0;
@@ -261,12 +278,14 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   }
 
   function emitJump(op, addr24 = 0) {
-    if ((op === OP_JZ || op === OP_JNZ) && addr24 === 0 && codePos >= SPIR_CODE_BASE + 4 && lastPatchPos !== codePos) {
+    if ((op === OP_JZ || op === OP_JNZ) && addr24 === 0 && codePos >= CODE_BASE + 4 && lastPatchPos !== codePos) {
       const w1 = outDV.getUint32(codePos - 4, true);
       if (w1 === (((OP_CMP << 24) | (8 << 16)) >>> 0)) { codePos -= 4; op = (op === OP_JZ) ? OP_JNZ : OP_JZ; }
       else if (w1 === (((OP_CMP << 24) | (9 << 16)) >>> 0)) { codePos -= 4; }
     }
-    return emitWord((((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF)) >>> 0);
+    const instAddr = emitWord((((op & 0xFF) << 24) | (addr24 & 0x00FFFFFF)) >>> 0);
+    if (isModule) relocs.push(((1 << 24) | (instAddr & 0x00FFFFFF)) >>> 0);
+    return instAddr;
   }
 
   function patchJump(instByteAddr, targetByteAddr) {
@@ -291,7 +310,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
 
   function addStringLiteral(bytesArr) {
     const len = bytesArr.length;
-    let p = SPIR_STR_BASE;
+    let p = STR_BASE;
     while (p < strPos) {
       let slen = 0;
       while (p + slen < strPos && outBuf[p + slen] !== 0) slen++;
@@ -304,7 +323,7 @@ function compileSpiralSource(sourceText, readFileFn = null) {
       }
       p += slen + 1;
     }
-    if (strPos + len + 1 > SPIR_CODE_BASE) {
+    if (strPos + len + 1 > CODE_BASE) {
       throw new Error(`SpiralC: String pool overflow at line ${lineNum}`);
     }
     const startAddr = strPos;
@@ -560,6 +579,8 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   function emitVarAddr(v) {
     if (v.scope === "local") {
       emitOp(OP_ADDR_LOCAL, 0, v.slot);
+    } else if (isModule) {
+      emitRelocPtr32(3, v.slot * 4);
     } else {
       emitOp(OP_ADDR_GLOBAL, 0, v.slot);
     }
@@ -572,6 +593,9 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     }
     if (v.scope === "local") {
       emitOp(OP_GET_LOCAL, 0, v.slot);
+    } else if (isModule) {
+      emitRelocPtr32(3, v.slot * 4);
+      emitOp(OP_LOAD32, 0, 0);
     } else {
       emitOp(OP_GET_GLOBAL, 0, v.slot);
     }
@@ -580,6 +604,10 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   function emitVarSet(v) {
     if (v.scope === "local") {
       emitOp(OP_SET_LOCAL, 0, v.slot);
+    } else if (isModule) {
+      emitRelocPtr32(3, v.slot * 4);
+      emitOp(OP_SWAP);
+      emitOp(OP_STORE32, 0, 0);
     } else {
       emitOp(OP_SET_GLOBAL, 0, v.slot);
     }
@@ -770,7 +798,8 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     }
     if (tok === TK_STR) {
       const strAddr = addStringLiteral(tokStrBytes);
-      emitPushConst(strAddr);
+      if (isModule) emitRelocPtr32(2, strAddr);
+      else emitPushConst(strAddr);
       nextToken();
       return;
     }
@@ -822,6 +851,17 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         emitOp(OP_SYSCALL, nargs, sysnum);
         return;
       }
+      if (name === "icall" && tok === 40) {
+        expect(40);
+        parseExpr();
+        while (tok === 44) {
+          nextToken();
+          parseExpr();
+        }
+        expect(41);
+        emitWord((OP_CALL_IND << 24) >>> 0);
+        return;
+      }
       if (name === "fn_addr" && tok === 40) {
         expect(40);
         const targetFn = tokIdent;
@@ -829,11 +869,9 @@ function compileSpiralSource(sourceText, readFileFn = null) {
         expect(41);
         const fn = funcs.get(targetFn);
         if (fn && fn.defined) {
-          emitOp(OP_PUSH_U16, 0, fn.addr & 0xFFFF);
-          emitOp(OP_PUSH_HI, 0, (fn.addr >>> 16) & 0xFFFF);
+          emitRelocPtr32(2, fn.addr);
         } else {
-          const instAddr = emitOp(OP_PUSH_U16, 0, 0);
-          emitOp(OP_PUSH_HI, 0, 0);
+          const instAddr = emitRelocPtr32(2, 0);
           callFixups.push({ instAddr, name: targetFn, line: lineNum, isFnAddr: true });
         }
         return;
@@ -1299,6 +1337,53 @@ function compileSpiralSource(sourceText, readFileFn = null) {
     }
   }
 
+  if (isModule) {
+    const relocOff = codePos;
+    const relocCount = relocs.length;
+    const totalSize = relocOff + relocCount * 4;
+    if (totalSize > MAX_SIZE) {
+      throw new Error(`SpiralC: SAPP module size exceeded ${MAX_SIZE} bytes (${totalSize})`);
+    }
+    for (let i = 0; i < relocCount; i++) {
+      outDV.setUint32(relocOff + i * 4, relocs[i] >>> 0, true);
+    }
+    const fnOff = (n) => { const f = funcs.get(n); return (f && f.defined) ? f.addr : 0; };
+    const version = (opts && opts.formatVersion !== undefined) ? opts.formatVersion : SAPP_VERSION;
+    outDV.setUint32(0x00, SAPP_MAGIC, true);
+    outDV.setUint32(0x04, version >>> 0, true);
+    outDV.setUint32(0x08, (opts && opts.flags) ? (opts.flags >>> 0) : 0, true);
+    outDV.setUint32(0x0C, CODE_BASE, true);
+    outDV.setUint32(0x10, codePos - CODE_BASE, true);
+    outDV.setUint32(0x14, STR_BASE, true);
+    outDV.setUint32(0x18, strPos - STR_BASE, true);
+    outDV.setUint32(0x1C, globalSlotCount * 4, true);
+    outDV.setUint32(0x20, relocOff, true);
+    outDV.setUint32(0x24, relocCount, true);
+    outDV.setUint32(0x28, fnOff("app_init"), true);
+    outDV.setUint32(0x2C, fnOff("app_draw"), true);
+    outDV.setUint32(0x30, fnOff("app_click"), true);
+    outDV.setUint32(0x34, fnOff("app_key"), true);
+    outDV.setUint32(0x38, fnOff("app_tick"), true);
+    outDV.setUint32(0x3C, 0, true);
+    // FNV-1a 32-bit checksum over [0 .. totalSize) with +0x3C zeroed
+    let h = 0x811C9DC5 | 0;
+    for (let i = 0; i < totalSize; i++) {
+      h = Math.imul((h ^ outBuf[i]) | 0, 0x01000193) | 0;
+    }
+    outDV.setUint32(0x3C, h >>> 0, true);
+    const modBuf = outBuf.slice(0, totalSize);
+    return {
+      image: modBuf,
+      totalBytes: totalSize,
+      codeBytes: codePos - CODE_BASE,
+      stringBytes: strPos - STR_BASE,
+      bssBytes: globalSlotCount * 4,
+      relocCount,
+      funcCount: funcs.size,
+      checksum: h >>> 0
+    };
+  }
+
   const mainFn = funcs.get("main");
   if (!mainFn) {
     throw new Error("SpiralC: No 'main()' function defined");
@@ -1310,24 +1395,28 @@ function compileSpiralSource(sourceText, readFileFn = null) {
   outDV.setUint32(0x08, mainFn.addr, true);
   outDV.setUint32(0x0C, codePos, true);
   outDV.setUint32(0x10, globalSlotCount, true);
-  outDV.setUint32(0x14, SPIR_STR_BASE, true);
-  outDV.setUint32(0x18, strPos - SPIR_STR_BASE, true);
+  outDV.setUint32(0x14, STR_BASE, true);
+  outDV.setUint32(0x18, strPos - STR_BASE, true);
 
   let csum = 0;
-  for (let i = SPIR_CODE_BASE; i < codePos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
-  for (let i = SPIR_STR_BASE; i < strPos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
+  for (let i = CODE_BASE; i < codePos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
+  for (let i = STR_BASE; i < strPos; i++) csum = (Math.imul(csum, 31) + outBuf[i]) | 0;
   outDV.setUint32(0x1C, csum >>> 0, true);
 
   return {
     image: outBuf,
     entryPc: mainFn.addr,
-    codeBytes: codePos - SPIR_CODE_BASE,
-    stringBytes: strPos - SPIR_STR_BASE,
+    codeBytes: codePos - CODE_BASE,
+    stringBytes: strPos - STR_BASE,
     globalWords: globalSlotCount,
     funcCount: funcs.size,
     funcs,
     checksum: csum >>> 0
   };
+}
+
+function compileAppModule(sourceText, readFileFn = null, opts = {}) {
+  return compileSpiralSource(sourceText, readFileFn, { ...opts, module: true });
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -1336,7 +1425,10 @@ if (typeof module !== "undefined" && module.exports) {
     expandImports,
     SPIR_MAGIC,
     SPIR_STR_BASE,
-    SPIR_MAX_SIZE
+    SPIR_MAX_SIZE,
+    SAPP_MAGIC,
+    SAPP_VERSION,
+    compileAppModule
   };
 }
 if (typeof globalThis !== "undefined") {

@@ -180,3 +180,30 @@ $$\text{lba\_start} = \left\lfloor \frac{512 \cdot \text{start\_sec}}{729} \righ
    - `core/core_triton.js` matches `core/core_tc32.js` and the two's-complement BigInt oracle (`-2147483648` for `DIV`, `0` for `MOD`).
 2. **OS Machine-ID Branch in `os/os.sp:110` and `os/apps1.sp:627`**:
    - The unmodified `SPIR` OS checks `if (g_machine_id == 1)` (rendering `"TC-32"` / `"CPU: TabComp TC-32"`) `else` (rendering `"i586"` / `"CPU: i586 Protected"`). Because `g_machine_id` is `2` on Hummingbird and `3` on Triton, Hummingbird and Triton execute the exact same `else` branch (`73,311` VM instructions through Frame 3 vs TabComp's `73,212`) and produce 100% byte-identical `320×200` backbuffers.
+
+---
+
+## SpiralOS 1.5 & 1.6 Updates (`CMP` Immediate Form, `OP_CALL_IND`, Real RAM, and Memory Map)
+
+### 1. Immediate-Form `OP_CMP` (`0x20`, added in 1.5)
+- `OP_CMP` supports an immediate right-hand operand when bit 23 (`0x80`) of the instruction's sub-opcode byte is set (`cc = subop & 7`, `imm16 = sign_extend(inst & 0xFFFF)`), comparing the top-of-stack value against `imm16` without an extra `PUSH_I16`.
+
+### 2. Indirect Call `OP_CALL_IND` (`0x28`, added in 1.6)
+- `op_table` is extended to **41 entries** (`0x00..0x28`, `ADDR_OP_TABLE = 186`, `ADDR_CMP_TABLE = 309`, `ADDR_SYS_TABLE = 333`).
+- `OP_CALL_IND` (`0x28`, `op_28_call_ind`) pops a 32-bit VM PC from the data stack, saves `(return_pc, saved_fp)` to the call stack (preserving bit 23 as the drop-return flag), and transfers control to `TRITON_VM_BASE + (target_pc % 0x00800000)`.
+- `vm_loop` sentinel check is raised to `TRITON_VM_BASE + 0x00800000` so dynamically loaded SAPP v2 app modules executing from the heap (`0x370000..0x7EFFFF`) run natively.
+
+### 3. Real Hardware RAM Probing (`SYS_MACHINE_INFO(1)`, added in 1.6)
+- At reset, `boot_rom_entry` reads Triton's hardware memory limit from `SPR #7` (`MFSPR R1, #7`, `ulimit = ramSize = 14,348,907` trytes on default T3), subtracts `TRITON_VM_BASE` (`0x00200000`), and stores the usable VM RAM size (`12,251,755` bytes) in `VAR_VM_RAM_SIZE` (tryte address `144`).
+- `SYS_MACHINE_INFO(1)` (`mi_1`) returns `VAR_VM_RAM_SIZE` rather than a hardcoded constant.
+- All VM memory `LOAD*` and `STORE*` address checks validate `0 <= ea < VAR_VM_RAM_SIZE` directly before falling back to wrap-around.
+
+### 4. Updated Triton Core & VM Memory Map (1.6)
+- **Triton Core Tryte Map:** `VAR_VM_RAM_SIZE = 144`, `ADDR_VEC_TABLE = 150..185`, `ADDR_OP_TABLE = 186..308` (41 entries), `ADDR_CMP_TABLE = 309..332`, `ADDR_SYS_TABLE = 333..401`, `ADDR_POW2_TABLE = 402..497`, `ADDR_POW2C_TABLE = 498..593`, `ADDR_BOOT_BANNER = 594..609`, `ADDR_FONT_8X8 = 610..1377`, `ADDR_INIT_PAL = 1380..2147`, `ADDR_CODE_START = 2160..9449`, `TAB_PAL_LUT = 9500..9755`, `ADDR_FONT_SERIF = 9800..11335`, `TAB_BASE = 12500..15059`, `TRITON_HW_SP = 28000`.
+- **Total Triton Core Image (1.6):** `22,688` bytes (`11,336` trytes, still fits inside the reserved 32 KB SpiralFS hole at Sectors `960..1023`).
+- **SpiralOS 1.6 VM Memory Map:**
+  - `0x000000..0x01FFFF`: Resident SPIR core bytecode & string pool (128 KB; `93,616` B used, `37,456` B free)
+  - `0x04DD80..0x04DF3F`: Core-to-app ABI jump table (59 slots) & `LOADER_ERR_BUF` (`0x04DF40`), `SHARED_ST` (`0x04DFC0`)
+  - `0x0FFD00..0x0FFDFF`: `VMRAM_STATUS` telemetry block (includes `+0x40..+0x48` heap stats, `+0x58` Zork dynamic-memory FNV-1a hash, `+0x5C` Zork prompt counter)
+  - `0x200000..0x367FFF`: Mounted 1.44 MB `spiralos.img` & SpiralFS volume (`0x228000..0x2EFFFF`, 127 entries)
+  - `0x370000..hal_info(1)`: Dynamic coalescing free-list heap (loaded SAPP v2 modules & app allocations; `8.25 MiB` on Triton, `10.56 MiB` on TabComp, `10.6 / 58.6 / 250.6 MiB` on Hummingbird at 16 / 64 / 256 MB RAM).

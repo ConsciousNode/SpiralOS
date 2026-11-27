@@ -58,9 +58,9 @@ int g_local_node_id;
 int g_has_snet;
 
 // App Tick API table (indexed by app_id 0..15)
-int app_tick_interval[16];
-int app_tick_last_ms[16];
-int app_tick_count[16];
+int app_tick_interval[24];
+int app_tick_last_ms[24];
+int app_tick_count[24];
 
 // Preemptive compute worker progress counters
 int g_worker_a_progress;
@@ -179,7 +179,7 @@ void init_spiral_palette() {
 }
 
 void app_register_tick(int app_id, int interval_ms) {
-  if (app_id >= 0 && app_id < 16) {
+  if (app_id >= 0 && app_id < 24) {
     app_tick_interval[app_id] = interval_ms;
     app_tick_last_ms[app_id] = hal_time();
   }
@@ -285,7 +285,7 @@ int ipc_send(int dst_task, int msg_type, int a0, int a1) {
 
 // Single canonical version string used across boot banner, shell, About, Build Station, and /docs/README.txt
 int os_version_str() {
-  return "SpiralOS 1.4 \"Daily Driver\"";
+  return "SpiralOS 1.6 \"Open Shelf\"";
 }
 
 int os_machine_name() {

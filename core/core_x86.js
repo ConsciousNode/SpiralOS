@@ -99,7 +99,7 @@ const X86_FONT_SERIF_8X16_HEX =
   "0010101010101010101010100000000000300808080404080808083000000000" +
   "0000006498000000000000000000000000000038549292925438000000000000";
 
-function buildBootSector(customBanner = "SpiralOS 1.2") {
+function buildBootSector(customBanner = "SpiralOS 1.6") {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
 
@@ -342,7 +342,7 @@ function emitPicPit(x, toBios) {
   }
 }
 
-function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000) {
+function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000, rmProbeRamAddr = 0x00008000, opts = {}) {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
   let p = 0;
@@ -408,10 +408,10 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0xB9); put16(2048);            // mov cx, 2048 words
   put(0xFC);                         // cld
   put(0xF3, 0xAB);                   // rep stosw
-  // Map first 64 MB identity (entries 0..15)
+  // Map first 8 MB identity (entries 0..1); pm_entry maps verified E820 pages up to 256 MB
   put(0x66, 0xB8); put32(0x00000083);// mov eax, 0x83 (Present | RW | PS)
   put(0xBF); put16(0x6000);
-  put(0xB9); put16(16);
+  put(0xB9); put16(2);
   const pdeLoop = p;
   put(0x66, 0x26, 0x89, 0x05);
   put(0x66, 0x05); put32(0x00400000);
@@ -457,9 +457,10 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0x8E, 0xC0);                   // mov es, ax
   put(0x8E, 0xD0);                   // mov ss, ax
   put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
-  put(0xBE); put16(960);             // mov si, 960
-  put(0xBD); put16(960);             // mov bp, 960 (Sectors 960..1919 = 480 KB)
-  put(0xBF); put16(0x1000);          // mov di, 0x1000 (phys 0x00010000)
+  const callProbePos = p;
+  put(0xE8); put16(0);               // call rm_probe_ram
+  dv.setInt16(callProbePos + 1, (rmProbeRamAddr - 0x7E00) - (callProbePos + 3), true);
+  // SI=960, BP=960, DI=0x1000 set by rm_probe_ram
   const callRd2Pos = p;
   put(0xE8); put16(0);               // call read_range
   dv.setInt16(callRd2Pos + 1, (readRangeAddr - 0x7E00) - (callRd2Pos + 3), true);
@@ -480,27 +481,24 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   // 0x20: 16-bit Data segment (base 0, limit 64KB, 0x92, 0x00)
   b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0x00, 0x00], 0x108 + 32);
 
-  // Offset 0x0130 (phys 0x7F30): Real-Mode APM 1.2 Power-Off Helper (16 bytes)
+  // Offset 0x0130 (phys 0x7F30): Real-Mode APM 1.2 Power-Off Helper (14 bytes, near jumps)
   p = 0x0130;
   const apmHelperOff = p;
   put(0xB8); put16(0x5301);          // mov ax, 0x5301 (APM real-mode connect)
   put(0x31, 0xDB);                   // xor bx, bx
   put(0xCD, 0x15);                   // int 15h
-  put(0xB8); put16(0x530E);          // mov ax, 0x530E (APM driver version 1.2)
-  put(0xB9); put16(0x0102);          // mov cx, 0x0102
-  const jmpApm2Pos = p + 1;
-  put(0xEB, 0);                      // jmp apm_step2
+  put(0x0F, 0x82);                   // jc near wr_ok (APM unsupported -> return cleanly)
+  const jcApmFail1 = p; put16(0);
+  put(0xE9);                         // jmp near apm_step2
+  const jmpApm2Pos = p; put16(0);
 
   // --------------------------------------------------------------------------
   // Offset 0x0140 (phys 0x7F40): Real-Mode BIOS INT 13h AH=03h Write & APM Thunk
   // Entered via jmp 0x0018:0x7F40 with CR0.PG=0, sector in 0x5800, LBA in [0x57FC]
   // --------------------------------------------------------------------------
   p = 0x0140;
-  put(0xB8); put16(0x0020);          // mov ax, 0x0020 (16-bit data seg)
-  put(0x8E, 0xD8);                   // mov ds, ax
-  put(0x8E, 0xC0);                   // mov es, ax
-  put(0x8E, 0xD0);                   // mov ss, ax
-  put(0xB0, 0x10);                   // mov al, 0x10 (clear PE, upper EAX=0)
+  // DS/ES/SS/FS/GS already loaded with 0x0020 (16-bit B=0) and IDTR=[0x7FF0] in bios_sync_loop
+  put(0x66, 0xB8); put32(0x00000010);// mov eax, 0x10 (clear PE cleanly)
   put(0x0F, 0x22, 0xC0);             // mov cr0, eax
   const realEntryOff = 0x7E00 + p + 5;
   put(0xEA); put16(realEntryOff); put16(0x0000); // jmp 0x0000:realEntryOff
@@ -567,21 +565,27 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   const jmpWrFailPos = p + 1;
   put(0xEB, 0);                      // jmp wr_ok
   // apm_step2:
-  b[jmpApm2Pos] = (p - (jmpApm2Pos + 1)) & 0xFF;
+  dv.setInt16(jmpApm2Pos, p - (jmpApm2Pos + 2), true);
+  put(0xB8); put16(0x530E);          // mov ax, 0x530E (APM driver version 1.2)
+  put(0x31, 0xDB);                   // xor bx, bx
+  put(0xB9); put16(0x0102);          // mov cx, 0x0102
   put(0xCD, 0x15);                   // int 15h (530Eh driver version 1.2)
   put(0xB8); put16(0x5307);          // mov ax, 0x5307 (set power state)
-  put(0x43);                         // inc bx (bx = 1, all devices)
+  put(0x43);                         // inc bx (0 -> 1, all devices; saves 2B)
   put(0xB9); put16(0x0003);          // mov cx, 0x0003 (Off)
   put(0xCD, 0x15);                   // int 15h
   // wr_ok: return to 32-bit Protected Mode with Paging!
+  dv.setInt16(jcApmFail1, p - (jcApmFail1 + 2), true);
   b[jncWrPos] = (p - (jncWrPos + 1)) & 0xFF;
   b[jmpWrFailPos] = (p - (jmpWrFailPos + 1)) & 0xFF;
+  put(0xFA);                            // cli (BIOS INT 13h/15h may have re-enabled IF!)
   put(0x0F, 0x01, 0x16); put16(0x7F00); // lgdt [0x7F00]
   put(0x66, 0xB8); put32(0x00006000);   // mov eax, 0x6000
   put(0x0F, 0x22, 0xD8);                // mov cr3, eax
   put(0x66, 0xB8); put32(0x80000011);   // mov eax, 0x80000011 (PG | PE | ET)
   put(0x0F, 0x22, 0xC0);                // mov cr0, eax
-  put(0x66, 0xEA); put32(pmBiosWriteRetAddr >>> 0); put16(0x0008);
+  const retAddr = opts.brokenShutdownReturn ? 0x00008000 : (pmBiosWriteRetAddr >>> 0);
+  put(0x66, 0xEA); put32(retAddr); put16(0x0008);
 
   if (p > 0x1F0) throw new Error(`BIOS write thunk overflows into the IDTRs (${p} > 0x1F0)`);
   // Offset 0x01F0 (phys 0x7FF0): Real-Mode IDTR (limit 0x03FF, base 0x00000000)
@@ -612,6 +616,7 @@ function buildProtectedModeCore(opts = {}) {
   const ADDR_KEY_EVENT   = 0x7028;
   const ADDR_HAS_SNET    = 0x7030;
   const ADDR_HAS_FDC     = 0x7034;
+  const ADDR_VM_RAM_SIZE = 0x7038;
 
   // ==========================================================================
   // 1. 32-Bit Protected Mode Entry (0x00008000)
@@ -669,6 +674,108 @@ function buildProtectedModeCore(opts = {}) {
   x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
   x.repMovsd();
 
+  // 1.6: Build contiguous 4 MB PSE Page Directory from E820/E801/88h map at 0x5200 (count at [0x51FC]).
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, 0x5028);       // VBE PhysBasePtr
+  x.andRegImm32(R.EAX, 0xFFC00000);
+  x.movMemReg32(R.EDX, 0x51F0, R.EAX);       // [0x51F0] = vbe_4m_base
+  x.movMemImm32(R.EDX, 0x51F4, 2);           // [0x51F4] = next_pde (starts at 2 = 8 MB)
+  x.movRegImm32(R.EBX, 0x00800000);          // EBX = candidate physical chunk P (starts at 8 MB)
+
+  x.label("e820_chunk_lp");
+  x.cmpRegImm32(R.EBX, 0x10000000);          // up to 256 MB (64 PDEs)
+  x.jgeLabel("e820_map_done");
+
+  // Skip VBE LFB range [vbe_base, vbe_base + 8 MB)
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, 0x51F0);
+  x.cmpRegReg32(R.EBX, R.EAX);
+  x.jeLabel("e820_next_chunk");
+  x.addRegImm32(R.EAX, 0x00400000);
+  x.cmpRegReg32(R.EBX, R.EAX);
+  x.jeLabel("e820_next_chunk");
+
+  x.movMemImm32(R.EDX, 0x51E8, 0);
+  x.movMemImm32(R.EDX, 0x51EC, 0);
+  x.movRegMem32(R.ECX, R.EDX, 0x51FC);
+  x.movRegImm32(R.ESI, 0x00005200);
+  x.cmpRegImm32(R.ECX, 0);
+  x.jleLabel("e820_scan_done");
+
+  x.label("e820_ent_lp");
+  x.movRegMem32(R.EAX, R.ESI, 4);            // baseHi
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("e820_ent_next");
+  x.movRegMem32(R.EAX, R.ESI, 0);            // EAX = baseLo
+  x.movRegMem32(R.EDI, R.ESI, 8);            // EDI = lenLo
+  x.movRegMem32(R.EDX, R.ESI, 12);           // EDX = lenHi
+  x.cmpRegImm32(R.EDX, 0);
+  x.jneLabel("e820_sat_end");
+  x.addRegReg32(R.EDI, R.EAX);               // EDI = baseLo + lenLo
+  x.cmpRegReg32(R.EDI, R.EAX);
+  x.jbLabel("e820_sat_end");
+  x.jmpLabel("e820_end_ok");
+  x.label("e820_sat_end");
+  x.movRegImm32(R.EDI, 0xFFFFFFFF);
+  x.label("e820_end_ok");
+  x.movRegMem32(R.EDX, R.ESI, 16);
+  x.cmpRegImm32(R.EDX, 1);
+  x.jneLabel("e820_ent_non_usable");
+  x.cmpRegReg32(R.EAX, R.EBX);
+  x.jaLabel("e820_ent_next");
+  x.movRegReg32(R.EDX, R.EBX);
+  x.addRegImm32(R.EDX, 0x00400000);
+  x.cmpRegReg32(R.EDI, R.EDX);
+  x.jbLabel("e820_ent_next");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movMemImm32(R.EDX, 0x51E8, 1);
+  x.jmpLabel("e820_ent_next");
+
+  x.label("e820_ent_non_usable");
+  x.cmpRegReg32(R.EDI, R.EBX);
+  x.jleLabel("e820_ent_next");
+  x.movRegReg32(R.EDX, R.EBX);
+  x.addRegImm32(R.EDX, 0x00400000);
+  x.cmpRegReg32(R.EAX, R.EDX);
+  x.jgeLabel("e820_ent_next");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movMemImm32(R.EDX, 0x51EC, 1);
+
+  x.label("e820_ent_next");
+  x.addRegImm32(R.ESI, 20);
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("e820_ent_lp");
+
+  x.label("e820_scan_done");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, 0x51E8);
+  x.cmpRegImm32(R.EAX, 1);
+  x.jneLabel("e820_next_chunk");
+  x.movRegMem32(R.EAX, R.EDX, 0x51EC);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("e820_next_chunk");
+
+  x.movRegMem32(R.ECX, R.EDX, 0x51F4);
+  x.movRegReg32(R.EAX, R.EBX);
+  x.orRegImm32(R.EAX, 0x00000083);
+  x.movRegImm32(R.EDI, 0x00006000);
+  x.movSibReg32(R.EDI, R.ECX, 2, 0, R.EAX);
+  x.addRegImm32(R.ECX, 1);
+  x.movMemReg32(R.EDX, 0x51F4, R.ECX);
+
+  x.label("e820_next_chunk");
+  x.addRegImm32(R.EBX, 0x00400000);
+  x.jmpLabel("e820_chunk_lp");
+
+  x.label("e820_map_done");
+  x.movRegImm32(R.EAX, 0x00006000);
+  x.u8(0x0F); x.u8(0x22); x.u8(0xD8);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, 0x51F4);
+  x.shlRegImm(R.EAX, 22);
+  x.subRegImm32(R.EAX, 0x00200000);
+  x.movMemReg32(R.EDX, ADDR_VM_RAM_SIZE, R.EAX);
+
 
   // 1.2 F2: Proper 8042 PS/2 mouse init handshake (replacing spiralos/core/core_x86.js:506-515)
   x.inAlImm8(0x64);
@@ -715,19 +822,21 @@ function buildProtectedModeCore(opts = {}) {
   x.jneLabel("skip_ps2_init");
 
   // 6. Reset the mouse (0xD4, 0xFF). Expect 0xFA then 0xAA, then optionally ID byte 0x00.
+  // 1.6 USB-Legacy Fix: if 0xFF reset fails/times out on BIOS USB-to-PS/2 legacy emulation,
+  // still fall through to 0xF6 (Set Defaults -> 3-byte mode) and 0xF4 (Enable Streaming)!
   x.movRegImm32(R.ESI, 0xFF);
   x.callLabel("ps2_mouse_cmd");
   x.cmpRegImm32(R.EDX, 0);
-  x.jneLabel("skip_ps2_init");
-  x.callLabel("ps2_in_60_long"); // 1.2.1 H1: BAT can take hundreds of ms on real hardware
+  x.jneLabel("ps2_set_defaults");
+  x.callLabel("ps2_in_60_long");
   x.cmpRegImm32(R.EDX, 0);
-  x.jneLabel("skip_ps2_init");
+  x.jneLabel("ps2_set_defaults");
   x.cmpRegImm32(R.EAX, 0xAA);
-  x.jneLabel("skip_ps2_init");
-  // Optional mouse ID byte (0x00): wait with bounded timeout, ignore if absent
+  x.jneLabel("ps2_set_defaults");
   x.callLabel("ps2_in_60");
 
   // 7. Set defaults (0xF6), then enable streaming (0xF4), checking for 0xFA ACK each time.
+  x.label("ps2_set_defaults");
   x.movRegImm32(R.ESI, 0xF6);
   x.callLabel("ps2_mouse_cmd");
   x.cmpRegImm32(R.EDX, 0);
@@ -1083,7 +1192,7 @@ function buildProtectedModeCore(opts = {}) {
   // EAX = op = EBX >>> 24
   x.movRegReg32(R.EAX, R.EBX);
   x.shrRegImm(R.EAX, 24);
-  x.cmpRegImm32(R.EAX, 0x27);
+  x.cmpRegImm32(R.EAX, 0x28);
   x.jgLabel("vm_halt_bad_op");
 
   x.movRegLabel32(R.EDX, "op_table");
@@ -1227,13 +1336,20 @@ function buildProtectedModeCore(opts = {}) {
   x.addRegImm32(R.EDI, 4);
   x.jmpLabel("vm_loop");
 
+  let eaLblSeq = 0;
   function calcLoadAddr() {
+    const id = eaLblSeq++;
     x.movRegReg32(R.ECX, R.EBX);
     x.shlRegImm(R.ECX, 16);
     x.sarRegImm(R.ECX, 16);
     x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4);
     x.addRegReg32(R.ECX, R.EAX);
+    x.xorRegReg32(R.EDX, R.EDX);
+    x.movRegMem32(R.EAX, R.EDX, ADDR_VM_RAM_SIZE);
+    x.cmpRegReg32(R.ECX, R.EAX);
+    x.jbLabel("ld_ea_ok_" + id);
     x.andRegImm32(R.ECX, 0x003FFFFF);
+    x.label("ld_ea_ok_" + id);
   }
 
   x.label("op_0e_load8u");
@@ -1261,14 +1377,20 @@ function buildProtectedModeCore(opts = {}) {
   x.jmpLabel("vm_loop");
 
   function calcStoreAddrVal() {
+    const id = eaLblSeq++;
     x.subRegImm32(R.EDI, 8);
     x.movRegReg32(R.EDX, R.EBX);
     x.shlRegImm(R.EDX, 16);
     x.sarRegImm(R.EDX, 16);
     x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 0);
-    x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
     x.addRegReg32(R.EDX, R.ECX);
+    x.xorRegReg32(R.ECX, R.ECX);
+    x.movRegMem32(R.EAX, R.ECX, ADDR_VM_RAM_SIZE);
+    x.cmpRegReg32(R.EDX, R.EAX);
+    x.jbLabel("st_ea_ok_" + id);
     x.andRegImm32(R.EDX, 0x003FFFFF);
+    x.label("st_ea_ok_" + id);
+    x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 4);
   }
 
   x.label("op_12_store8");
@@ -1431,6 +1553,25 @@ function buildProtectedModeCore(opts = {}) {
   x.andRegImm32(R.ESI, 0x007FFFFF);
   x.jmpLabel("vm_loop");
 
+  x.label("op_28_call_ind");
+  x.subRegImm32(R.EDI, 4);
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.pushReg32(R.EAX);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.ECX, R.EDX, ADDR_VM_CSP);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_VM_FP);
+  x.movRegReg32(R.EDX, R.EBX);
+  x.andRegImm32(R.EDX, 0x00800000);
+  x.orRegReg32(R.EAX, R.EDX);
+  x.movSibReg32(R.EBP, R.ECX, 0, 0, R.ESI);
+  x.movSibReg32(R.EBP, R.ECX, 0, 4, R.EAX);
+  x.addRegImm32(R.ECX, 8);
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movMemReg32(R.EDX, ADDR_VM_CSP, R.ECX);
+  x.popReg32(R.ESI);
+  x.andRegImm32(R.ESI, 0x007FFFFF);
+  x.jmpLabel("vm_loop");
+
   x.label("op_25_enter");
   x.movRegReg32(R.EAX, R.EBX);
   x.shrRegImm(R.EAX, 16);
@@ -1585,6 +1726,25 @@ function buildProtectedModeCore(opts = {}) {
   // (replacing spiralos/core/core_x86.js 1.2 lines: 8-bit sign-extension of bytes 1 and 2)
   x.movMemImm32(R.EDX, ADDR_MOUSE_STAGE, 0);
   x.movRegMem32(R.EBX, R.EDX, ADDR_MOUSE_B0);
+  // 1.6.1: Record raw 3-byte packet (b0 | b1<<8 | b2<<16) for /home/mouse.log diagnostic
+  x.pushReg32(R.EAX);
+  x.shlRegImm(R.EAX, 16);
+  x.movRegMem32(R.ECX, R.EDX, ADDR_MOUSE_B1);
+  x.andRegImm32(R.ECX, 0xFF);
+  x.shlRegImm(R.ECX, 8);
+  x.orRegReg32(R.EAX, R.ECX);
+  x.movRegReg32(R.ECX, R.EBX);
+  x.andRegImm32(R.ECX, 0xFF);
+  x.orRegReg32(R.EAX, R.ECX);
+  x.movMemReg32(R.EBP, 0x0FFDA4, R.EAX);
+  x.movRegMem32(R.EAX, R.EBP, 0x0FFDA0);
+  x.addRegImm32(R.EAX, 1);
+  x.movMemReg32(R.EBP, 0x0FFDA0, R.EAX);
+  x.popReg32(R.EAX);
+  // Defensive sync check on byte 0 bit 3 before decoding movement
+  x.movRegReg32(R.ECX, R.EBX);
+  x.andRegImm32(R.ECX, 0x08);
+  x.jeLabel("ms_skip_move");
   x.movRegReg32(R.ECX, R.EBX);
   x.andRegImm32(R.ECX, 0xC0);
   x.jneLabel("ms_skip_move");
@@ -1635,7 +1795,19 @@ function buildProtectedModeCore(opts = {}) {
   // every later packet by one byte forever (cursor pinned to an edge).
   x.movRegReg32(R.ECX, R.EAX);
   x.andRegImm32(R.ECX, 0x08);
-  x.jeLabel("ps2_poll_next");
+  x.jneLabel("ms_sync_ok");
+  // Sync drop: bit 3 of byte 0 is 0 -> record bad byte (bit 31 set) & increment drop counter
+  x.movRegReg32(R.ECX, R.EAX);
+  x.orRegImm32(R.ECX, 0x80000000);
+  x.movMemReg32(R.EBP, 0x0FFDA4, R.ECX);
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFDA0);
+  x.addRegImm32(R.ECX, 1);
+  x.movMemReg32(R.EBP, 0x0FFDA0, R.ECX);
+  x.movRegMem32(R.ECX, R.EBP, 0x0FFDA8);
+  x.addRegImm32(R.ECX, 1);
+  x.movMemReg32(R.EBP, 0x0FFDA8, R.ECX);
+  x.jmpLabel("ps2_poll_next");
+  x.label("ms_sync_ok");
   x.movMemReg32(R.EDX, ADDR_MOUSE_B0, R.EAX);
   x.movMemImm32(R.EDX, ADDR_MOUSE_STAGE, 1);
   x.jmpLabel("ps2_poll_next");
@@ -2077,7 +2249,7 @@ function buildProtectedModeCore(opts = {}) {
   x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 0); // EBX = current LBA (or 0xFFFF for APM off)
   x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 4); // EDX = remaining sectors
   x.cmpRegImm32(R.EBX, 0xFFFF);
-  x.jeLabel("bios_sync_loop");
+  x.jeLabel(opts.brokenShutdownReturn ? "bios_sync_loop" : "acpi_poweroff");
 
   // Check if FDC is present
   x.xorRegReg32(R.ECX, R.ECX);
@@ -2163,9 +2335,17 @@ function buildProtectedModeCore(opts = {}) {
   x.movMemReg32(R.ECX, 0x57FC, R.EBX);
   x.movMemReg32(R.ECX, 0x57F8, R.EDX);
   x.movMemReg32(R.ECX, 0x57F4, R.ESP);
-  // Disable interrupts, clear CR0.PG, far jump to 0x0018:0x7F40
+  // Disable interrupts, restore BIOS PIC/PIT, apply Real-HW Fix 2 (16-bit segs, ESP, IVT), then jump to 0x0018:0x7F40
   x.cli();
   emitPicPit(x, true);   // KEHAI REAL-HW FIX 3
+  x.movRegImm32(R.EAX, 0x0020);
+  x.u8(0x8E); x.u8(0xD8); // mov ds, ax
+  x.u8(0x8E); x.u8(0xC0); // mov es, ax
+  x.u8(0x8E); x.u8(0xD0); // mov ss, ax
+  x.u8(0x8E); x.u8(0xE0); // mov fs, ax
+  x.u8(0x8E); x.u8(0xE8); // mov gs, ax
+  x.movRegImm32(R.ESP, 0x00007C00);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF0); // lidt [0x7FF0] (Real-Mode IVT)
   x.movRegImm32(R.EAX, 0x00000011); // PE=1, PG=0
   x.u8(0x0F); x.u8(0x22); x.u8(0xC0); // mov cr0, eax
   x.u8(0xEA); x.u32(0x00007F40); x.u16(0x0018); // jmp 0x0018:0x00007F40
@@ -2298,7 +2478,7 @@ function buildProtectedModeCore(opts = {}) {
   x.cmpRegImm32(R.ECX, 4); x.jeLabel("mi16_4");
   x.movRegImm32(R.EAX, 0x0201); x.jmpLabel("sys_push_eax");
   x.label("mi16_0"); x.movRegImm32(R.EAX, 2); x.jmpLabel("sys_push_eax");
-  x.label("mi16_1"); x.movRegImm32(R.EAX, 0x00400000); x.jmpLabel("sys_push_eax");
+  x.label("mi16_1"); x.xorRegReg32(R.EDX, R.EDX); x.movRegMem32(R.EAX, R.EDX, ADDR_VM_RAM_SIZE); x.jmpLabel("sys_push_eax");
   x.label("mi16_2"); x.xorRegReg32(R.EDX, R.EDX); x.movRegMem32(R.EAX, R.EDX, ADDR_VM_ICNT); x.jmpLabel("sys_push_eax");
   x.label("mi16_4"); x.xorRegReg32(R.EDX, R.EDX); x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SNET); x.jmpLabel("sys_push_eax");
 
@@ -2548,6 +2728,264 @@ function buildProtectedModeCore(opts = {}) {
   // ==========================================================================
   // 4. VM Task Exit / Halt & Jump Tables
   // ==========================================================================
+
+  // ==========================================================================
+  // 3b. ACPI S5 Protected-Mode Power-Off (with APM Fallback, Never Reboots)
+  // ==========================================================================
+  // Helper: identity-map 4 MB page containing physical address EAX (if >= 8 MB)
+  x.label("sub_acpi_map_page");
+  x.cmpRegImm32(R.EAX, 0x00800000);
+  x.jbLabel("acpi_map_ret");
+  x.pushReg32(R.EBX);
+  x.pushReg32(R.ECX);
+  x.movRegReg32(R.EBX, R.EAX);
+  x.shrRegImm(R.EBX, 22);           // PDE index
+  x.movRegReg32(R.ECX, R.EAX);
+  x.andRegImm32(R.ECX, 0xFFC00000);
+  x.orRegImm32(R.ECX, 0x00000083);  // 4 MB Present | RW | PS
+  x.shlRegImm(R.EBX, 2);
+  x.movMemReg32(R.EBX, 0x00006000, R.ECX);
+  x.pushReg32(R.EAX);
+  x.movRegImm32(R.EAX, 0x00006000);
+  x.u8(0x0F); x.u8(0x22); x.u8(0xD8); // mov cr3, eax (TLB flush)
+  x.popReg32(R.EAX);
+  x.popReg32(R.ECX);
+  x.popReg32(R.EBX);
+  x.label("acpi_map_ret");
+  x.ret();
+
+  // Helper: scan [ESI .. EDI) step 16 for valid "RSD PTR " with 20-byte checksum == 0
+  // Returns ESI = RSDP address, or 0 if not found
+  x.label("sub_acpi_scan_rsdp");
+  x.label("rsdp_scan_lp");
+  x.cmpRegReg32(R.ESI, R.EDI);
+  x.jgeLabel("rsdp_not_here");
+  x.movRegMem32(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x20445352); // "RSD "
+  x.jneLabel("rsdp_scan_next");
+  x.movRegMem32(R.EAX, R.ESI, 4);
+  x.cmpRegImm32(R.EAX, 0x20525450); // "PTR "
+  x.jneLabel("rsdp_scan_next");
+  // Verify 20-byte ACPI 1.0 checksum
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.label("rsdp_ck_lp");
+  x.movzxRegSib8(R.EBX, R.ESI, R.ECX, 0, 0);
+  x.addRegReg32(R.EAX, R.EBX);
+  x.addRegImm32(R.ECX, 1);
+  x.cmpRegImm32(R.ECX, 20);
+  x.jbLabel("rsdp_ck_lp");
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("rsdp_found_ret");
+  x.label("rsdp_scan_next");
+  x.addRegImm32(R.ESI, 16);
+  x.jmpLabel("rsdp_scan_lp");
+  x.label("rsdp_not_here");
+  x.xorRegReg32(R.ESI, R.ESI);
+  x.label("rsdp_found_ret");
+  x.ret();
+
+  x.label("acpi_poweroff");
+  x.cli();
+  // Step 1: Search EBDA (1 KB at *(u16*)0x040E << 4)
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.u8(0x0F); x.u8(0xB7); x.memRegDisp(R.ESI, R.EBX, 0x040E); // movzx esi, word [0x040E]
+  x.shlRegImm(R.ESI, 4);
+  x.cmpRegImm32(R.ESI, 0x00080000);
+  x.jbLabel("acpi_scan_bios");
+  x.cmpRegImm32(R.ESI, 0x000A0000);
+  x.jgeLabel("acpi_scan_bios");
+  x.movRegReg32(R.EDI, R.ESI);
+  x.addRegImm32(R.EDI, 1024);
+  x.callLabel("sub_acpi_scan_rsdp");
+  x.cmpRegImm32(R.ESI, 0);
+  x.jneLabel("acpi_got_rsdp");
+
+  // Step 1b: Search main BIOS ROM area 0xE0000..0xFFFFF
+  x.label("acpi_scan_bios");
+  x.movRegImm32(R.ESI, 0x000E0000);
+  x.movRegImm32(R.EDI, 0x00100000);
+  x.callLabel("sub_acpi_scan_rsdp");
+  x.cmpRegImm32(R.ESI, 0);
+  x.jneLabel("acpi_got_rsdp");
+  x.movMemImm32(R.EBP, 0x0FFDB0, 2); // status 2: RSDP not found
+  x.jmpLabel("acpi_fallback_apm");
+
+  // Step 2: Walk RSDT -> find FACP (FADT)
+  x.label("acpi_got_rsdp");
+  x.movRegMem32(R.ESI, R.ESI, 16);   // ESI = RsdtAddress
+  x.cmpRegImm32(R.ESI, 0);
+  x.jeLabel("acpi_no_facp");
+  x.movRegReg32(R.EAX, R.ESI);
+  x.callLabel("sub_acpi_map_page");
+  x.movRegMem32(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x54445352);  // "RSDT"
+  x.jneLabel("acpi_no_facp");
+  x.movRegMem32(R.ECX, R.ESI, 4);    // RSDT Length
+  x.cmpRegImm32(R.ECX, 36);
+  x.jbLabel("acpi_no_facp");
+  x.movRegReg32(R.EDI, R.ESI);
+  x.addRegReg32(R.EDI, R.ECX);       // EDI = RSDT end
+  x.addRegImm32(R.ESI, 36);          // ESI = first entry pointer
+  x.label("acpi_rsdt_lp");
+  x.movRegReg32(R.EAX, R.ESI);
+  x.addRegImm32(R.EAX, 4);
+  x.cmpRegReg32(R.EAX, R.EDI);
+  x.jaLabel("acpi_no_facp");
+  x.movRegMem32(R.EBX, R.ESI, 0);    // EBX = table physical address
+  x.addRegImm32(R.ESI, 4);
+  x.cmpRegImm32(R.EBX, 0);
+  x.jeLabel("acpi_rsdt_lp");
+  x.movRegReg32(R.EAX, R.EBX);
+  x.callLabel("sub_acpi_map_page");
+  x.movRegMem32(R.EAX, R.EBX, 0);
+  x.cmpRegImm32(R.EAX, 0x50434146);  // "FACP"
+  x.jneLabel("acpi_rsdt_lp");
+
+  // Step 3: Read FADT fields into scratch at 0x000051C0..0x000051DF
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EBX, 40);   // DSDT address
+  x.movMemReg32(R.EDX, 0x51C0, R.EAX);
+  x.movRegMem32(R.EAX, R.EBX, 48);   // SMI_CMD
+  x.movMemReg32(R.EDX, 0x51C4, R.EAX);
+  x.movzxRegMem8(R.EAX, R.EBX, 52);  // ACPI_ENABLE
+  x.movMemReg32(R.EDX, 0x51C8, R.EAX);
+  x.movRegMem32(R.EAX, R.EBX, 64);   // PM1a_CNT_BLK
+  x.movMemReg32(R.EDX, 0x51CC, R.EAX);
+  x.movRegMem32(R.EAX, R.EBX, 68);   // PM1b_CNT_BLK
+  x.movMemReg32(R.EDX, 0x51D0, R.EAX);
+
+  x.movRegMem32(R.EAX, R.EDX, 0x51CC);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("acpi_no_facp");
+  x.movRegMem32(R.ESI, R.EDX, 0x51C0);
+  x.cmpRegImm32(R.ESI, 0);
+  x.jeLabel("acpi_no_facp");
+
+  // Step 4: Map DSDT & scan for AML NameOp [RootChar] "_S5_" PackageOp
+  x.movRegReg32(R.EAX, R.ESI);
+  x.callLabel("sub_acpi_map_page");
+  x.movRegMem32(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x54445344);  // "DSDT"
+  x.jneLabel("acpi_no_s5");
+  x.movRegMem32(R.ECX, R.ESI, 4);    // DSDT Length
+  x.cmpRegImm32(R.ECX, 44);
+  x.jbLabel("acpi_no_s5");
+  x.movRegReg32(R.EDI, R.ESI);
+  x.addRegReg32(R.EDI, R.ECX);
+  x.subRegImm32(R.EDI, 8);
+  x.addRegImm32(R.ESI, 36);
+
+  x.label("acpi_s5_lp");
+  x.cmpRegReg32(R.ESI, R.EDI);
+  x.jgeLabel("acpi_no_s5");
+  x.movRegMem32(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x5F35535F);  // "_S5_"
+  x.jneLabel("acpi_s5_next");
+  // Check preceding NameOp (0x08) or NameOp + RootChar (0x08, 0x5C)
+  x.movzxRegMem8(R.EAX, R.ESI, -1);
+  x.cmpRegImm32(R.EAX, 0x08);
+  x.jeLabel("acpi_s5_chk_pkg");
+  x.cmpRegImm32(R.EAX, 0x5C);
+  x.jneLabel("acpi_s5_next");
+  x.movzxRegMem8(R.EAX, R.ESI, -2);
+  x.cmpRegImm32(R.EAX, 0x08);
+  x.jneLabel("acpi_s5_next");
+  x.label("acpi_s5_chk_pkg");
+  x.movzxRegMem8(R.EAX, R.ESI, 4);
+  x.cmpRegImm32(R.EAX, 0x12);        // PackageOp
+  x.jeLabel("acpi_s5_parse");
+  x.label("acpi_s5_next");
+  x.addRegImm32(R.ESI, 1);
+  x.jmpLabel("acpi_s5_lp");
+
+  x.label("acpi_s5_parse");
+  x.addRegImm32(R.ESI, 5);           // point at PkgLength
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.shrRegImm(R.EAX, 6);
+  x.andRegImm32(R.EAX, 3);
+  x.addRegImm32(R.EAX, 2);           // skip PkgLength (1 + lead) + NumElements (1)
+  x.addRegReg32(R.ESI, R.EAX);
+  // Read SLP_TYPa (optional 0x0A BytePrefix)
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x0A);
+  x.jneLabel("acpi_slpa_raw");
+  x.addRegImm32(R.ESI, 1);
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.label("acpi_slpa_raw");
+  x.addRegImm32(R.ESI, 1);
+  x.andRegImm32(R.EAX, 7);
+  x.shlRegImm(R.EAX, 10);
+  x.orRegImm32(R.EAX, 0x2000);       // SLP_TYPa << 10 | SLP_EN
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movMemReg32(R.EDX, 0x51D4, R.EAX);
+  // Read SLP_TYPb (optional 0x0A BytePrefix)
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.cmpRegImm32(R.EAX, 0x0A);
+  x.jneLabel("acpi_slpb_raw");
+  x.addRegImm32(R.ESI, 1);
+  x.movzxRegMem8(R.EAX, R.ESI, 0);
+  x.label("acpi_slpb_raw");
+  x.andRegImm32(R.EAX, 7);
+  x.shlRegImm(R.EAX, 10);
+  x.orRegImm32(R.EAX, 0x2000);       // SLP_TYPb << 10 | SLP_EN
+  x.movMemReg32(R.EDX, 0x51D8, R.EAX);
+
+  // Step 5: Enable ACPI if SCI_EN (bit 0 of PM1a_CNT) is 0
+  x.movRegMem32(R.EDX, R.EDX, 0x51CC); // EDX = PM1a_CNT_BLK
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.inAxDx();
+  x.andRegImm32(R.EAX, 1);
+  x.jneLabel("acpi_do_s5");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EDX, R.EBX, 0x51C4); // SMI_CMD
+  x.cmpRegImm32(R.EDX, 0);
+  x.jeLabel("acpi_do_s5");
+  x.movRegMem32(R.EAX, R.EBX, 0x51C8); // ACPI_ENABLE
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("acpi_do_s5");
+  x.outDxAl();
+  x.movRegImm32(R.ECX, 4096);
+  x.label("acpi_en_wait");
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("acpi_en_wait");
+
+  // Write SLP_TYP | SLP_EN to PM1a_CNT (and PM1b_CNT if non-zero)
+  x.label("acpi_do_s5");
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movRegMem32(R.EDX, R.EBX, 0x51CC); // PM1a_CNT_BLK
+  x.movRegMem32(R.EAX, R.EBX, 0x51D4); // SLP_TYPa | SLP_EN
+  // Record ACPI S5 write in VMRAM_STATUS (+0xB0 = 1, +0xB4 = port | (val << 16))
+  x.movRegReg32(R.ECX, R.EAX);
+  x.shlRegImm(R.ECX, 16);
+  x.orRegReg32(R.ECX, R.EDX);
+  x.movMemImm32(R.EBP, 0x0FFDB0, 1);
+  x.movMemReg32(R.EBP, 0x0FFDB4, R.ECX);
+  x.outDxAx();
+  x.movRegMem32(R.EDX, R.EBX, 0x51D0); // PM1b_CNT_BLK
+  x.cmpRegImm32(R.EDX, 0);
+  x.jeLabel("acpi_s5_halt");
+  x.movRegMem32(R.EAX, R.EBX, 0x51D8); // SLP_TYPb | SLP_EN
+  x.outDxAx();
+  x.label("acpi_s5_halt");
+  // Never reboot: halt cleanly if hardware does not immediately cut power
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.jmpLabel("vm_halt_with_eax");
+
+  x.label("acpi_no_facp");
+  x.movMemImm32(R.EBP, 0x0FFDB0, 3);
+  x.jmpLabel("acpi_fallback_apm");
+
+  x.label("acpi_no_s5");
+  x.movMemImm32(R.EBP, 0x0FFDB0, 4);
+
+  x.label("acpi_fallback_apm");
+  // Fall back to Real-Mode APM 1.2 (returns cleanly to os_shutdown -> cli; hlt if unsupported)
+  x.movRegImm32(R.EBX, 0xFFFF);
+  x.movRegImm32(R.EDX, 1);
+  x.jmpLabel("bios_sync_loop");
+
   x.label("vm_task_exit_or_halt");
   x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, -4); // EAX = return value
   x.movRegMem32(R.ECX, R.EBP, 0x0FFF00);     // ECX = cur_tid
@@ -2574,6 +3012,7 @@ function buildProtectedModeCore(opts = {}) {
   x.movMemReg32(R.EBP, 0x0FFD20, R.ECX);
   x.movMemReg32(R.EBP, 0x0FFD28, R.EAX);
   x.movMemImm32(R.EBP, 0x0FFD2C, 1);
+  x.cli();
   x.label("halt_spin");
   x.hlt();
   x.jmpLabel("halt_spin");
@@ -2588,7 +3027,8 @@ function buildProtectedModeCore(opts = {}) {
     "op_18_div",       "op_19_mod",       "op_1a_and",       "op_1b_or",
     "op_1c_xor",       "op_1d_shl",       "op_1e_shr",       "op_1f_sar",
     "op_20_cmp",       "op_21_jmp",       "op_22_jz",        "op_23_jnz",
-    "op_24_call",      "op_25_enter",     "op_26_ret",       "op_27_syscall"
+    "op_24_call",      "op_25_enter",     "op_26_ret",       "op_27_syscall",
+    "op_28_call_ind"
   ];
   x.label("op_table");
   x.labelTable32(opLabels);
@@ -2666,6 +3106,101 @@ function buildProtectedModeCore(opts = {}) {
   x.label("scancode_shift_tbl");
   for (let i = 0; i < 128; i++) x.u16(shiftMap[i]);
 
+  // 16-bit Real-Mode INT 15h RAM Probe (E820 -> E801 -> 88h) at < 0xFFFF, called from 0x7EC5
+  x.label("rm_probe_ram");
+  {
+    const rb = [];
+    const rput = (...a) => { for (const v of a) rb.push(v & 0xFF); };
+    const rput16 = (v) => { rb.push(v & 0xFF, (v >>> 8) & 0xFF); };
+    const rput32 = (v) => { rb.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF); };
+
+    rput(0x31, 0xED);                       // xor bp, bp
+    rput(0x66, 0x31, 0xDB);                 // xor ebx, ebx
+    rput(0xBF); rput16(0x5200);             // mov di, 0x5200
+
+    const e820Lp = rb.length;
+    rput(0x66, 0xB8); rput32(0x0000E820);   // mov eax, 0xE820
+    rput(0x66, 0xBA); rput32(0x534D4150);   // mov edx, 'SMAP'
+    rput(0x66, 0xB9); rput32(20);           // mov ecx, 20
+    rput(0xCD, 0x15);                       // int 15h
+    const jcE820Done = rb.length + 1;
+    rput(0x72, 0);                          // jc e820_done
+    rput(0x66, 0x3D); rput32(0x534D4150);   // cmp eax, 'SMAP'
+    const jneE820Done = rb.length + 1;
+    rput(0x75, 0);                          // jne e820_done
+    rput(0x45);                             // inc bp
+    rput(0x83, 0xC7, 20);                   // add di, 20
+    rput(0x83, 0xFD, 32);                   // cmp bp, 32
+    const jaeE820Done = rb.length + 1;
+    rput(0x73, 0);                          // jae e820_done
+    rput(0x66, 0x85, 0xDB);                 // test ebx, ebx
+    rput(0x75, (e820Lp - (rb.length + 2)) & 0xFF);
+
+    rb[jcE820Done] = (rb.length - (jcE820Done + 1)) & 0xFF;
+    rb[jneE820Done] = (rb.length - (jneE820Done + 1)) & 0xFF;
+    rb[jaeE820Done] = (rb.length - (jaeE820Done + 1)) & 0xFF;
+    rput(0x85, 0xED);                       // test bp, bp
+    const jnzStoreCnt = rb.length + 1;
+    rput(0x75, 0);                          // jnz store_cnt
+
+    // Fallback 1: INT 15h AX=0xE801
+    rput(0xB8); rput16(0xE801);
+    rput(0x31, 0xC9);
+    rput(0x31, 0xD2);
+    rput(0xCD, 0x15);
+    const jcTry88 = rb.length + 1;
+    rput(0x72, 0);
+    rput(0x85, 0xC9);
+    const jnzUseCx = rb.length + 1;
+    rput(0x75, 0);
+    rput(0x89, 0xC1);
+    rput(0x89, 0xDA);
+    rb[jnzUseCx] = (rb.length - (jnzUseCx + 1)) & 0xFF;
+    rput(0x66, 0x0F, 0xB7, 0xC1);
+    rput(0x66, 0xC1, 0xE0, 10);
+    rput(0x66, 0x0F, 0xB7, 0xDA);
+    rput(0x66, 0xC1, 0xE3, 16);
+    rput(0x66, 0x01, 0xD8);
+    const jmpSynth1 = rb.length + 1;
+    rput(0xEB, 0);
+
+    // Fallback 2: INT 15h AH=0x88
+    rb[jcTry88] = (rb.length - (jcTry88 + 1)) & 0xFF;
+    rput(0xB4, 0x88);
+    rput(0xCD, 0x15);
+    const jcFallback16 = rb.length + 1;
+    rput(0x72, 0);
+    rput(0x66, 0x0F, 0xB7, 0xC0);
+    rput(0x66, 0xC1, 0xE0, 10);
+    const jmpSynth2 = rb.length + 1;
+    rput(0xEB, 0);
+
+    // Fallback 3: 15 MB above 1 MB
+    rb[jcFallback16] = (rb.length - (jcFallback16 + 1)) & 0xFF;
+    rput(0x66, 0xB8); rput32(0x00F00000);
+
+    // synth_entry:
+    rb[jmpSynth1] = (rb.length - (jmpSynth1 + 1)) & 0xFF;
+    rb[jmpSynth2] = (rb.length - (jmpSynth2 + 1)) & 0xFF;
+    rput(0xBF); rput16(0x5200);
+    rput(0x66, 0xC7, 0x05); rput32(0x00100000);
+    rput(0x66, 0xC7, 0x45, 4); rput32(0);
+    rput(0x66, 0x89, 0x45, 8);
+    rput(0x66, 0xC7, 0x45, 12); rput32(0);
+    rput(0x66, 0xC7, 0x45, 16); rput32(1);
+    rput(0xBD); rput16(1);
+
+    // store_cnt:
+    rb[jnzStoreCnt] = (rb.length - (jnzStoreCnt + 1)) & 0xFF;
+    rput(0x66, 0x0F, 0xB7, 0xC5);
+    rput(0x66, 0xA3); rput16(0x51FC);
+    rput(0xBE); rput16(960);
+    rput(0xBD); rput16(960);
+    rput(0xBF); rput16(0x1000);
+    rput(0xC3);
+    x.bytes(rb);
+  }
+
   return { bytes: x.finalize(), labels: x.labels, asmLines: x.asmLines };
 }
 
@@ -2683,10 +3218,10 @@ function formatHexLines(bytesArr, startIdx, endIdx) {
   return lines;
 }
 
-function buildX86Core(customBanner = "SpiralOS 1.2", opts = {}) {
+function buildX86Core(customBanner = "SpiralOS 1.6", opts = {}) {
   const pm = buildProtectedModeCore(opts);
   const bootSector = buildBootSector(customBanner);
-  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr, pm.labels.pm_bios_read2_ret);
+  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr, pm.labels.pm_bios_read2_ret, pm.labels.rm_probe_ram, opts);
   const combined = new Uint8Array(32 * 512); // Sectors 0..31 (16 KB)
   combined.set(bootSector, 0);
   combined.set(stage2, 512);
