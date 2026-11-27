@@ -26,6 +26,11 @@ const SYS_STRLEN        = 19;
 const SYS_ITOA          = 20;
 const SYS_TASK_SPAWN_VM = 21;
 const SYS_DATE          = 22;
+const SYS_DISK2_INFO    = 23;
+const SYS_DISK2_READ    = 24;
+const SYS_DISK2_WRITE   = 25;
+const SYS_AUDIO_INFO    = 26;
+const SYS_AUDIO_WRITE   = 27;
 
 const FONT_SANS_8X8     = 0;
 const FONT_SERIF_8X16   = 1;
@@ -151,6 +156,30 @@ int hal_task_spawn_vm(int entry_pc, int arg0) {
 
 int hal_date() {
   return sys(22);
+}
+
+int hal_tone(int freq_hz, int dur_ms) {
+  return audio_tone(freq_hz, dur_ms);
+}
+
+int hal_disk2_info(int cmd) {
+  return sys(23, cmd);
+}
+
+int hal_disk2_read(int lba, int count, int dst_ptr) {
+  return sys(24, lba, count, dst_ptr);
+}
+
+int hal_disk2_write(int lba, int count, int src_ptr) {
+  return sys(25, lba, count, src_ptr);
+}
+
+int hal_audio_info(int cmd) {
+  return sys(26, cmd);
+}
+
+int hal_audio_write(int src_ptr, int num_frames) {
+  return sys(27, src_ptr, num_frames);
 }
 
 void set_pal_rgb(int idx, int r, int g, int b) {
@@ -285,7 +314,7 @@ int ipc_send(int dst_task, int msg_type, int a0, int a1) {
 
 // Single canonical version string used across boot banner, shell, About, Build Station, and /docs/README.txt
 int os_version_str() {
-  return "SpiralOS 1.6 \"Open Shelf\"";
+  return "SpiralOS 1.7 \"Bring Your Own\"";
 }
 
 int os_machine_name() {

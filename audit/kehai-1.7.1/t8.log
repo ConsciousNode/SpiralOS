@@ -1,0 +1,3 @@
+=== SpiralOS 1.7 "Bring Your Own" Comprehensive Verification Suite (tests/spiralos-17.js) ===
+  [PASS] 8. Positive Controls (7/7 caught): fat1(no-FAT2), fat2(trunc-8.3), z5(undo-no-stack), z6(upper-no-reserve), aud1(drop-last), aud2(swap-pan), tray(direct-spfs)
+=== SpiralOS 1.7 Verification Suite Complete ===

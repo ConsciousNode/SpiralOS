@@ -5,6 +5,8 @@
 
 import "/src/kernel.sp";
 import "/src/fs.sp";
+import "/src/fat.sp";
+import "/src/audio.sp";
 import "/src/gui.sp";
 import "/src/wm.sp";
 import "/src/net.sp";
@@ -32,7 +34,7 @@ int g_ctx_y;
 int g_ctx_sel;
 
 int launcher_item_label(int idx) {
-  int s = "1. Files\02. Editor\03. Shell\04. Compiler\05. Paint\06. Calc\07. SysMon\08. Themes\09. Viewer\010. Snake\011. Blocks\012. NetChat\013. FileBeam\014. SpiralWeb\015. Notes\016. Clock\017. Solitaire\018. About\019. Zork";
+  int s = "1. Files\02. Editor\03. Shell\04. Compiler\05. Paint\06. Calc\07. SysMon\08. Themes\09. Viewer\010. Snake\011. Blocks\012. NetChat\013. FileBeam\014. SpiralWeb\015. Notes\016. Clock\017. Solitaire\018. About\019. Zork\020. Tracker";
   for (int i = 0; i < idx; i++) s = s + hal_strlen(s) + 1;
   return s;
 }
@@ -45,19 +47,19 @@ int launcher_item_app_id(int idx) {
 
 void launcher_rebuild_table() {
   if (g_launcher_sel < 0) g_launcher_sel = 0;
-  if (g_launcher_sel > 18) g_launcher_sel = 18;
+  if (g_launcher_sel > 19) g_launcher_sel = 19;
   if (g_launcher_scroll < 0) g_launcher_scroll = 0;
-  if (g_launcher_scroll > 2) g_launcher_scroll = 2;
+  if (g_launcher_scroll > 3) g_launcher_scroll = 3;
   w32(LAUNCHER_TAB + 0, g_launcher_scroll);
   w32(LAUNCHER_TAB + 4, g_launcher_sel);
   w32(LAUNCHER_TAB + 8, 17);
-  w32(LAUNCHER_TAB + 12, 19);
+  w32(LAUNCHER_TAB + 12, 20);
   // Top hover-scroll arrow box: (x=4, y=12, w=100, h=3)
   w32(LAUNCHER_TAB + 16, (4 << 24) | (12 << 16) | (100 << 8) | 3);
   // Bottom hover-scroll arrow box: (x=4, y=168, w=100, h=8)
   w32(LAUNCHER_TAB + 20, (4 << 24) | (168 << 16) | (100 << 8) | 8);
 
-  for (int i = 0; i < 19; i++) {
+  for (int i = 0; i < 20; i++) {
     int e = LAUNCHER_TAB + 32 + i * 16;
     int row = i - g_launcher_scroll;
     int aid = launcher_item_app_id(i);
@@ -106,9 +108,10 @@ void open_app_by_id(int app_id) {
     app_tick_last_ms[APP_BLOCKS] = hal_time();
   }
   if (app_id == APP_BROWSER)  wm_open(APP_BROWSER,  26, 22, 236, 132, "SpiralWeb");
-  if (app_id == APP_ZORK)     wm_open(APP_ZORK,     18, 16, 284, 164, "Zork I (Z-Machine v3)");
+  if (app_id == APP_ZORK)     wm_open(APP_ZORK,     18, 16, 284, 164, "Z-Machine (v3-v8)");
+  if (app_id == APP_TRACKER)  wm_open(APP_TRACKER,  20, 18, 280, 158, "SpiralTracker (MOD)");
   if (app_id == APP_ABOUT)    wm_open(APP_ABOUT,    24, 24, 272, 108, "About SpiralOS");
-  if (app_id == APP_BROWSER || app_id == APP_ZORK || app_id == APP_ABOUT || app_id < 1 || app_id > 20 || app_id == 15) return;
+  if (app_id == APP_BROWSER || app_id == APP_ZORK || app_id == APP_TRACKER || app_id == APP_ABOUT || app_id < 1 || app_id > 21 || app_id == 15) return;
   int ts = "SpiralFiles\0SpiralEdit\0SpiralSh\0SpiralBuild\0SpiralPaint\0SpiralCalc\0SpiralMon\0SpiralTheme\0SpiralView\0SpiralSnake\0SpiralBlocks\0SpiralChat\0SpiralSend\0\0\0Notes\0Clock & Cal\0Solitaire\0About SpiralOS";
   int t = ts;
   for (int ti = 1; ti < app_id; ti++) t = t + hal_strlen(t) + 1;
@@ -211,13 +214,13 @@ void dispatch_focused_key(int ascii, int vk, int mods) {
       if (g_launcher_sel < g_launcher_scroll) g_launcher_scroll = g_launcher_sel;
       return;
     }
-    if (vk == 40 && g_launcher_sel < 17) {
+    if (vk == 40 && g_launcher_sel < 19) {
       g_launcher_sel = g_launcher_sel + 1;
       if (g_launcher_sel >= g_launcher_scroll + 17) g_launcher_scroll = g_launcher_sel - 16;
       return;
     }
     if (vk == 36 || vk == 33) { g_launcher_sel = 0; g_launcher_scroll = 0; return; }
-    if (vk == 35 || vk == 34) { g_launcher_sel = 18; g_launcher_scroll = 2; return; }
+    if (vk == 35 || vk == 34) { g_launcher_sel = 19; g_launcher_scroll = 3; return; }
     if (ascii == 13 || ascii == 32) {
       g_launcher_open = 0;
       open_app_by_id(launcher_item_app_id(g_launcher_sel));
@@ -404,7 +407,7 @@ void draw_desktop_scene() {
     gui_bevel_rect(2, 12, 104, 166, thm_taskbar_bg, thm_btn_hi, thm_btn_sh);
     // Top hover-scroll arrow at (4, 12, 100, 3)
     hal_rect(4, 12, 100, 3, thm_btn_face + (g_launcher_scroll > 0) * (thm_accent - thm_btn_face));
-    for (int li = 0; li < 19; li++) {
+    for (int li = 0; li < 20; li++) {
       int e = LAUNCHER_TAB + 32 + li * 16;
       int bx = r32(e + 0);
       int by = r32(e + 4);
@@ -427,7 +430,7 @@ void draw_desktop_scene() {
       }
     }
     // Bottom hover-scroll arrow at (4, 168, 100, 8)
-    hal_rect(4, 168, 100, 8, thm_btn_face + (g_launcher_scroll < 2) * (thm_accent - thm_btn_face));
+    hal_rect(4, 168, 100, 8, thm_btn_face + (g_launcher_scroll < 3) * (thm_accent - thm_btn_face));
     hal_str(44, 168, "v v", 15, -1);
   }
 
@@ -505,10 +508,10 @@ void handle_mouse_down(int mx, int my) {
       return;
     }
     if (mx >= 4 && mx < 104 && my >= 168 && my < 177) {
-      if (g_launcher_scroll < 2) g_launcher_scroll = g_launcher_scroll + 1;
+      if (g_launcher_scroll < 3) g_launcher_scroll = g_launcher_scroll + 1;
       return;
     }
-    for (int li = 0; li < 19; li++) {
+    for (int li = 0; li < 20; li++) {
       int e = LAUNCHER_TAB + 32 + li * 16;
       int bx = r32(e + 0);
       int by = r32(e + 4);
@@ -612,6 +615,7 @@ void boot_splash() {
 int main() {
   kernel_init();
   heap_init();
+  audio_reset();
   abi_init();
   wm_init();
   theme_select(0);
@@ -647,8 +651,8 @@ int main() {
     g_mouse_btn = (mpack >> 20) & 7;
 
     // Launcher hover-scroll arrows when launcher is open
-    if (g_launcher_open == 1 && g_mouse_x >= 4 && g_mouse_x < 104) {
-      if (g_mouse_y >= 168 && g_mouse_y < 177 && g_launcher_scroll < 2) {
+    if (g_launcher_open == 1 && (g_mouse_btn & 1) == 0 && g_mouse_x >= 4 && g_mouse_x < 104) {
+      if (g_mouse_y >= 168 && g_mouse_y < 177 && g_launcher_scroll < 3) {
         g_launcher_scroll = g_launcher_scroll + 1;
         launcher_rebuild_table();
       } else if (g_mouse_y >= 12 && g_mouse_y < 15 && g_launcher_scroll > 0) {

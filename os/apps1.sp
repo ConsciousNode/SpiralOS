@@ -503,11 +503,76 @@ void notes_load_file(int path_str) {
   hal_memcpy(NOTES_PATH_BUF, path_str, hal_strlen(path_str));
 }
 
+const APP_LAUNCH_PATH_BUF = 0x047B40;
+
+int is_shelf_path(int path_str) {
+  if (hal_strcmp(path_str, "/shelf")) return 1;
+  if (match_prefix(path_str, "/shelf/")) return 1;
+  return 0;
+}
+
+int path_has_ext_ci(int path_str, int ext_str) {
+  int pl = hal_strlen(path_str);
+  int el = hal_strlen(ext_str);
+  if (pl < el) return 0;
+  for (int i = 0; i < el; i++) {
+    int c1 = r8(path_str + pl - el + i);
+    int c2 = r8(ext_str + i);
+    if (c1 >= 65 && c1 <= 90) c1 = c1 + 32;
+    if (c2 >= 65 && c2 <= 90) c2 = c2 + 32;
+    if (c1 != c2) return 0;
+  }
+  return 1;
+}
+
+int path_is_zstory(int path_str) {
+  if (path_has_ext_ci(path_str, ".z3")) return 1;
+  if (path_has_ext_ci(path_str, ".z4")) return 1;
+  if (path_has_ext_ci(path_str, ".z5")) return 1;
+  if (path_has_ext_ci(path_str, ".z7")) return 1;
+  if (path_has_ext_ci(path_str, ".z8")) return 1;
+  if (path_has_ext_ci(path_str, ".dat")) return 1;
+  return 0;
+}
+
+void shell_launch_path(int app_id, int fpath) {
+  hal_memset(APP_LAUNCH_PATH_BUF, 0, 128);
+  int n = hal_strlen(fpath);
+  if (n > 124) n = 124;
+  hal_memcpy(APP_LAUNCH_PATH_BUF, fpath, n);
+  g_pending_app_arg = APP_LAUNCH_PATH_BUF;
+  open_app_by_id(app_id);
+}
+
 void shell_open_file(int raw_arg) {
-  int rlen0 = hal_strlen(raw_arg);
-  if (rlen0 >= 3 && r8(raw_arg + rlen0 - 3) == 46 && r8(raw_arg + rlen0 - 2) == 122 && r8(raw_arg + rlen0 - 1) == 51) { g_pending_app_arg = raw_arg; open_app_by_id(APP_ZORK); return; }
   int fpath = SRRP_SCRATCH_BUF + 0xE80;
   shell_resolve_path(raw_arg, fpath);
+  if (path_is_zstory(fpath)) {
+    shell_launch_path(APP_ZORK, fpath);
+    return;
+  }
+  if (path_has_ext_ci(fpath, ".mod")) {
+    shell_launch_path(APP_TRACKER, fpath);
+    return;
+  }
+  if (is_shelf_path(fpath)) {
+    if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+    int fsz = fat_stat(fpath);
+    if (fsz < 0) { shell_print("File not found"); return; }
+    int rsz = fsz;
+    if (rsz > 32760) rsz = 32760;
+    int rd = fat_read_file(fpath, NOTES_BUF, rsz);
+    if (rd < 0) { shell_print("FAT read error"); return; }
+    w8(NOTES_BUF + rd, 0);
+    g_notes_len = rd; w32(SHARED_ST + 0x00, rd);
+    g_notes_dirty = 0; w32(SHARED_ST + 0x04, 0);
+    hal_memset(NOTES_PATH_BUF, 0, 64);
+    int pl = hal_strlen(fpath); if (pl > 62) pl = 62;
+    hal_memcpy(NOTES_PATH_BUF, fpath, pl);
+    wm_open(APP_NOTES, 24, 18, 228, 140, "Notes");
+    shell_print("Opened from /shelf");
+    return;
+  }
   int fidx = fs_find(fpath);
   if (fidx < 0) {
     shell_print("File not found");
@@ -554,6 +619,8 @@ int shell_match_app_name(int s) {
     if (c >= 65 && c <= 90) c = c + 32;
     w8(low + i, c);
   }
+  if (hal_strcmp(low, "zork")) return APP_ZORK;
+  if (hal_strcmp(low, "tracker") || hal_strcmp(low, "mod")) return APP_TRACKER;
   int idx = tok_find_idx(low, "files|edit|editor|shell|build|compiler|paint|calc|sysmon|mon|theme|themes|viewer|view|snake|blocks|chat|netchat|transfer|filebeam|send|browser|web|spiralweb|notes|clock|solitaire|sol|about");
   if (idx < 0) return -1;
   return r8("12234456778899:;<<===>>>@ABBC" + idx) - 48;
@@ -707,6 +774,31 @@ void shell_exec_cmd(int cmd_str) {
       filter = cmd_str + 3;
       while (r8(filter) == 32) filter = filter + 1;
     }
+    int ls_target = 0;
+    if (filter != 0 && r8(filter) != 0) {
+      if (is_shelf_path(filter)) ls_target = filter;
+    } else if (is_shelf_path(SHELL_CWD_BUF)) {
+      ls_target = SHELL_CWD_BUF;
+    }
+    if (ls_target != 0) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      int lcnt = fat_list_dir(ls_target, FAT_LIST_BUF, 20);
+      if (lcnt < 0) { shell_print("FAT read error"); return; }
+      if (lcnt == 0) { shell_print("(empty)"); return; }
+      for (int li = 0; li < lcnt; li++) {
+        int ent = FAT_LIST_BUF + li * 48;
+        sb = sh_buf();
+        int lp = srrp_append_str(sb, 0, ent);
+        if ((r32(ent + 44) & 0x10) != 0) {
+          srrp_append_str(sb, lp, "/  <DIR>");
+        } else {
+          lp = srrp_kv(sb, lp, "  ", r32(ent + 40));
+          srrp_append_str(sb, lp, " B");
+        }
+        shell_print(sb);
+      }
+      return;
+    }
     for (int i = 0; i < cnt; i++) {
       int fidx = fs_nth_index(i);
       int ep = fs_entry_ptr(fidx);
@@ -720,6 +812,30 @@ void shell_exec_cmd(int cmd_str) {
   }
   if (match_prefix(cmd_str, "cat ")) {
     shell_resolve_path(cmd_str + 4, sb);
+    if (is_shelf_path(sb)) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      int fsz = fat_stat(sb);
+      if (fsz < 0) { shell_print("File not found"); return; }
+      int rsz = fsz;
+      if (rsz > 16384) rsz = 16384;
+      int hbuf = heap_alloc(rsz + 16);
+      if (hbuf == 0) { shell_print("Out of memory"); return; }
+      int rd = fat_read_file(sb, hbuf, rsz);
+      if (rd < 0) { heap_free(hbuf); shell_print("FAT read error"); return; }
+      int p = 0;
+      while (p < rd) {
+        sb = sh_buf();
+        int ci = 0;
+        while (p < rd && r8(hbuf + p) != 10 && ci < 80) {
+          if (r8(hbuf + p) >= 32) { w8(sb + ci, r8(hbuf + p)); ci = ci + 1; }
+          p = p + 1;
+        }
+        if (p < rd && r8(hbuf + p) == 10) p = p + 1;
+        shell_print(sb);
+      }
+      heap_free(hbuf);
+      return;
+    }
     int fidx = fs_find(sb);
     if (fidx < 0) { shell_print("File not found"); return; }
     int dptr = fs_entry_data_ptr(fidx);
@@ -739,12 +855,35 @@ void shell_exec_cmd(int cmd_str) {
   }
   if (match_prefix(cmd_str, "rm ")) {
     shell_resolve_path(cmd_str + 3, sb);
+    if (is_shelf_path(sb)) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      if (fat_delete(sb) == 0) shell_print("Removed file");
+      else shell_print("File not found");
+      return;
+    }
     if (fs_delete(sb) == 0) shell_print("Removed file");
     else shell_print("File not found");
     return;
   }
+  if (match_prefix(cmd_str, "mkdir ")) {
+    shell_resolve_path(cmd_str + 6, sb);
+    if (is_shelf_path(sb)) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      if (fat_mkdir(sb) >= 0) shell_print("Created folder");
+      else shell_print("mkdir failed");
+    } else {
+      shell_print("SpiralFS uses flat paths");
+    }
+    return;
+  }
   if (match_prefix(cmd_str, "touch ")) {
     shell_resolve_path(cmd_str + 6, sb);
+    if (is_shelf_path(sb)) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      if (fat_stat(sb) < 0) fat_write_file(sb, "", 0);
+      shell_print(sb);
+      return;
+    }
     if (fs_find(sb) < 0) fs_write(sb, "", 0);
     shell_print(sb);
     return;
@@ -755,8 +894,56 @@ void shell_exec_cmd(int cmd_str) {
     shell_split_two_args(cmd_str + 3, a1, a2);
     shell_resolve_path(a1, sp1);
     shell_resolve_path(a2, sp2);
+    if (r8(sp1) == 0 || r8(sp2) == 0) { shell_print("Usage: cp/mv <src> <dst>"); return; }
+    int s1_sh = is_shelf_path(sp1);
+    int s2_sh = is_shelf_path(sp2);
+    if (s1_sh == 1 && s2_sh == 1) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      if (is_mv == 1) {
+        if (fat_rename(sp1, sp2) == 0) shell_print("Moved file");
+        else shell_print("Move failed");
+        return;
+      }
+      int fsz = fat_stat(sp1);
+      if (fsz < 0) { shell_print("File not found"); return; }
+      int hb = heap_alloc(fsz + 16);
+      if (hb == 0) { shell_print("Out of memory"); return; }
+      int rd = fat_read_file(sp1, hb, fsz);
+      int rc = -1;
+      if (rd >= 0) rc = fat_write_file(sp2, hb, rd);
+      heap_free(hb);
+      if (rc >= 0) shell_print("Copied file"); else shell_print("Copy failed");
+      return;
+    }
+    if (s1_sh == 1 && s2_sh == 0) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      int fsz = fat_stat(sp1);
+      if (fsz < 0) { shell_print("File not found"); return; }
+      int hb = heap_alloc(fsz + 16);
+      if (hb == 0) { shell_print("Out of memory"); return; }
+      int rd = fat_read_file(sp1, hb, fsz);
+      int rc = -1;
+      if (rd >= 0) rc = fs_write(sp2, hb, rd);
+      heap_free(hb);
+      if (rc >= 0) {
+        if (is_mv == 1) fat_delete(sp1);
+        if (is_mv == 1) shell_print("Moved file"); else shell_print("Copied file");
+      } else shell_print("Copy failed");
+      return;
+    }
+    if (s1_sh == 0 && s2_sh == 1) {
+      if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+      int sidx = fs_find(sp1);
+      if (sidx < 0) { shell_print("File not found"); return; }
+      int rc = fat_write_file(sp2, fs_entry_data_ptr(sidx), fs_entry_size(sidx));
+      if (rc >= 0) {
+        if (is_mv == 1) fs_delete(sp1);
+        if (is_mv == 1) shell_print("Moved file"); else shell_print("Copied file");
+      } else shell_print("Copy failed");
+      return;
+    }
     int sidx = fs_find(sp1);
-    if (sidx < 0 || r8(sp2) == 0) {
+    if (sidx < 0) {
       shell_print("File not found");
       return;
     }
@@ -858,6 +1045,15 @@ void shell_exec_cmd(int cmd_str) {
   if (hal_strcmp(cmd_str, "df")) {
     srrp_append_str(sb, srrp_kv(sb, 0, "SpiralFS free: ", fs_free_bytes()), " B");
     shell_print(sb);
+    int d2s = hal_disk2_info(0);
+    if (d2s <= 0) {
+      shell_print("/shelf: No disk");
+    } else {
+      sb = sh_buf();
+      int dp = srrp_kv(sb, 0, "/shelf: ", d2s / 2);
+      srrp_append_str(sb, dp, " KB");
+      shell_print(sb);
+    }
     return;
   }
   if (match_prefix(cmd_str, "edit ")) {
@@ -882,18 +1078,39 @@ void shell_exec_cmd(int cmd_str) {
   }
   if (hal_strcmp(cmd_str, "z") || match_prefix(cmd_str, "z ")) {
     if (hal_strcmp(cmd_str, "z")) {
-      g_pending_app_arg = "/games/zork1.z3";
+      shell_launch_path(APP_ZORK, "/games/zork1.z3");
     } else {
       int zarg = cmd_str + 2;
+      while (r8(zarg) == 32) zarg = zarg + 1;
       if (r8(zarg) == 47) {
-        hal_memcpy(sb, zarg, hal_strlen(zarg) + 1);
+        shell_launch_path(APP_ZORK, zarg);
       } else {
         hal_memcpy(sb, "/games/", 7);
         hal_memcpy(sb + 7, zarg, hal_strlen(zarg) + 1);
+        if (fs_find(sb) >= 0) shell_launch_path(APP_ZORK, sb);
+        else { shell_resolve_path(zarg, sb); shell_launch_path(APP_ZORK, sb); }
       }
-      g_pending_app_arg = sb;
     }
-    open_app_by_id(APP_ZORK);
+    return;
+  }
+  if (hal_strcmp(cmd_str, "mod") || match_prefix(cmd_str, "mod ") || hal_strcmp(cmd_str, "tracker") || match_prefix(cmd_str, "tracker ")) {
+    int marg = 0;
+    if (match_prefix(cmd_str, "mod ")) marg = cmd_str + 4;
+    else if (match_prefix(cmd_str, "tracker ")) marg = cmd_str + 8;
+    if (marg != 0) {
+      while (r8(marg) == 32) marg = marg + 1;
+      shell_resolve_path(marg, sb);
+      shell_launch_path(APP_TRACKER, sb);
+    } else {
+      w8(APP_LAUNCH_PATH_BUF, 0);
+      open_app_by_id(APP_TRACKER);
+    }
+    return;
+  }
+  if (hal_strcmp(cmd_str, "beep") || match_prefix(cmd_str, "tone ")) {
+    int rc = audio_tone(440, 120);
+    if (rc < 0) shell_print("No audio device");
+    else shell_print("Tone played");
     return;
   }
   if (match_prefix(cmd_str, "load ")) {
@@ -930,11 +1147,29 @@ void shell_exec_cmd(int cmd_str) {
   }
   if (match_prefix(cmd_str, "write ")) {
     byte wa1[64]; byte wa2[128];
-    shell_split_two_args(cmd_str + 6, wa1, wa2);
+    hal_memset(wa1, 0, 64);
+    hal_memset(wa2, 0, 128);
+    int wp0 = 6;
+    while (r8(cmd_str + wp0) == 32) wp0 = wp0 + 1;
+    int wi1 = 0;
+    while (r8(cmd_str + wp0) != 0 && r8(cmd_str + wp0) != 32 && wi1 < 60) {
+      w8(wa1 + wi1, r8(cmd_str + wp0)); wp0 = wp0 + 1; wi1 = wi1 + 1;
+    }
+    while (r8(cmd_str + wp0) == 32) wp0 = wp0 + 1;
+    int wi2 = 0;
+    while (r8(cmd_str + wp0) != 0 && wi2 < 126) {
+      w8(wa2 + wi2, r8(cmd_str + wp0)); wp0 = wp0 + 1; wi2 = wi2 + 1;
+    }
     if (wa1[0] != 0) {
       byte wp[64];
       shell_resolve_path(wa1, wp);
-      int wrc = fs_write(wp, wa2, hal_strlen(wa2));
+      int wrc = -1;
+      if (is_shelf_path(wp)) {
+        if (hal_disk2_info(0) <= 0) { shell_print("No disk in /shelf"); return; }
+        wrc = fat_write_file(wp, wa2, hal_strlen(wa2));
+      } else {
+        wrc = fs_write(wp, wa2, hal_strlen(wa2));
+      }
       if (wrc >= 0) shell_print("Wrote file");
       else shell_print("Write failed");
     } else {

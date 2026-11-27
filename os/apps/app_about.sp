@@ -8,8 +8,9 @@ void app_draw(int x, int y, int w, int h) {
   wstr(76, 41, abi_os_machine_name(), 10);
   wstr(8, 52, "Node:", 11);
   wstr(52, 52, SNS_DISP_BUF, 15);
-  wstr(8, 64, "Inspired by KolibriOS (kolibrios.org)", 14);
-  wstr(8, 76, "Zork I: Marc Blank, Dave Lebling,", 7);
-  wstr(8, 86, "Bruce Daniels, Tim Anderson (MIT)", 7);
+  wstr(8, 63, "Inspired by KolibriOS (kolibrios.org)", 14);
+  wstr(8, 74, "Zork I, II & III: Marc Blank, Dave", 7);
+  wstr(8, 84, "Lebling, Bruce Daniels, Tim Anderson", 7);
+  wstr(8, 94, "(MIT License, historicalsource)", 7);
 }
 void app_key(int ascii, int vk, int mods) { }

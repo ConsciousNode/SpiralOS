@@ -178,8 +178,8 @@ const ADDR_INIT_PAL     = 1380; // 768 trytes (1380..2147)
 const ADDR_CODE_START   = 2160; // Main Triton Core code start (2160..6650)
 
 // 256-entry fast byte/nibble tables (computed by guest at boot in 6800..9615, all < 9841!)
-const TAB_PAL_LUT       = 9500; // 256 trytes: mapped 729-color palette entries (9000..9255, < 9841)
-const ADDR_FONT_SERIF   = 9800; // 1536 trytes: CNSW Serif 8x16 font bank (9300..10835)
+const TAB_PAL_LUT       = 9750; // 256 trytes: mapped 729-color palette entries (9000..9255, < 9841)
+const ADDR_FONT_SERIF   = 10100; // 1536 trytes: CNSW Serif 8x16 font bank (9300..10835)
 const TAB_BASE          = 12500; // Base for 10x256-entry bitwise/nibble tables (12000..14559, above all code)
 const OFF_NIB_LO        = 0;    // 256 trytes: b & 15
 const OFF_NIB_LO16      = 256;  // 256 trytes: (b & 15) * 16
@@ -607,7 +607,7 @@ function buildTritonCore(options = {}) {
   emit("OUT R1, #17");
   emitImm27(1, 0x00428000 - 544);
   emit("OUT R1, #18");
-  emit("LI R1, #1125");
+  emit("LI R1, #1799");
   emit("OUT R1, #19");
   emit("LI R1, #1");
   emit("OUT R1, #20");
@@ -1606,6 +1606,16 @@ function buildTritonCore(options = {}) {
   emit("JNX sys_unknown");
   emit("CMPI R1, #22");
   emit("JZX sys_22");
+  emit("CMPI R1, #23");
+  emit("JZX sys_23");
+  emit("CMPI R1, #24");
+  emit("JZX sys_24");
+  emit("CMPI R1, #25");
+  emit("JZX sys_25");
+  emit("CMPI R1, #26");
+  emit("JZX sys_26");
+  emit("CMPI R1, #27");
+  emit("JZX sys_27");
   emit("CMPI R1, #21");
   emit("JPX sys_unknown");
   emit("MULI R1, R1, #3");
@@ -2157,7 +2167,7 @@ function buildTritonCore(options = {}) {
   emit("OUT R1, #17");
   emitImm27(1, 0x00400000);
   emit("OUT R1, #18");
-  emit("LI R1, #1349");
+  emit("LI R1, #2023");
   emit("OUT R1, #19");
   emit("LI R1, #2");
   emit("OUT R1, #20");
@@ -2574,6 +2584,92 @@ function buildTritonCore(options = {}) {
   // SYS 22: DATE() -> 0 (no hardware RTC on Triton)
   label("sys_22");
   emit("LI R0, #0");
+  emit("JMP sys_push_r0");
+
+  // SYS 23: DISK2_INFO(cmd) -> Port 29 (512-byte sector count of Disk Unit 1)
+  label("sys_23");
+  emit("IN R0, #29");
+  emit("JMP sys_push_r0");
+
+  // SYS 24: DISK2_READ(lba, count, dst_vm_ptr) -> Ports 28, 17, 18, 19, 20(1)
+  label("sys_24");
+  emitLoadU32(1, 7, 0, 0);
+  emitLoadU32(2, 7, 4, 0);
+  emitLoadU32(3, 7, 8, 0);
+  emitImm27(4, TRITON_VM_BASE);
+  emit("ADD R3, R3, R4");
+  emit("LI R4, #1");
+  emit("OUT R4, #28"); // DISK_UNIT = 1
+  emit("OUT R1, #17"); // DISK_LBA
+  emit("OUT R3, #18"); // DISK_DMA_ADDR
+  emit("OUT R2, #19"); // DISK_COUNT
+  emit("LI R4, #1");
+  emit("OUT R4, #20"); // DMA_READ
+  emit("IN R0, #20");  // DISK_STATUS (1=OK, -1=ERR)
+  emit("LI R4, #0");
+  emit("OUT R4, #28"); // restore DISK_UNIT = 0
+  emit("CMPI R0, #1");
+  emit("JZX sys_d2_ok");
+  emitImm27(0, 4294967295); // -1
+  emit("JMP sys_push_r0");
+  label("sys_d2_ok");
+  emit("LI R0, #0");
+  emit("JMP sys_push_r0");
+
+  // SYS 25: DISK2_WRITE(lba, count, src_vm_ptr) -> Ports 28, 17, 18, 19, 20(2)
+  label("sys_25");
+  emitLoadU32(1, 7, 0, 0);
+  emitLoadU32(2, 7, 4, 0);
+  emitLoadU32(3, 7, 8, 0);
+  emitImm27(4, TRITON_VM_BASE);
+  emit("ADD R3, R3, R4");
+  emit("LI R4, #1");
+  emit("OUT R4, #28"); // DISK_UNIT = 1
+  emit("OUT R1, #17");
+  emit("OUT R3, #18");
+  emit("OUT R2, #19");
+  emit("LI R4, #2");
+  emit("OUT R4, #20"); // DMA_WRITE
+  emit("IN R0, #20");
+  emit("LI R4, #0");
+  emit("OUT R4, #28"); // restore DISK_UNIT = 0
+  emit("CMPI R0, #1");
+  emit("JZX sys_d2_ok");
+  emitImm27(0, 4294967295);
+  emit("JMP sys_push_r0");
+
+  // SYS 26: AUDIO_INFO(cmd) -> 0:Port32(7), 1:22050, 2:0, 3:4096
+  label("sys_26");
+  emitLoadS32(1, 7, 0, 0);
+  emit("CMPI R1, #0");
+  emit("JZX sys_a26_0");
+  emit("CMPI R1, #1");
+  emit("JZX sys_a26_1");
+  emit("CMPI R1, #3");
+  emit("JZX sys_a26_3");
+  emit("LI R0, #0");
+  emit("JMP sys_push_r0");
+  label("sys_a26_0");
+  emit("IN R0, #32");
+  emit("JMP sys_push_r0");
+  label("sys_a26_1");
+  emitImm27(0, 22050);
+  emit("JMP sys_push_r0");
+  label("sys_a26_3");
+  emitImm27(0, 4096);
+  emit("JMP sys_push_r0");
+
+  // SYS 27: AUDIO_WRITE(src_vm_ptr, num_frames) -> Ports 30, 31, 32(1)
+  label("sys_27");
+  emitLoadU32(1, 7, 0, 0);
+  emitLoadU32(2, 7, 4, 0);
+  emitImm27(3, TRITON_VM_BASE);
+  emit("ADD R1, R1, R3");
+  emit("OUT R1, #30"); // AUDIO_DMA_ADDR
+  emit("OUT R2, #31"); // AUDIO_COUNT
+  emit("LI R3, #1");
+  emit("OUT R3, #32"); // AUDIO_CMD = submit
+  emit("MOV R0, R2");
   emit("JMP sys_push_r0");
 
   lines.push(`.org ${ADDR_FONT_SERIF}`);

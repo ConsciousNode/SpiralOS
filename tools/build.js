@@ -32,7 +32,7 @@ const MIN_REQUIRED_FREE_BYTES = 128 * 1024; // 131,072 bytes (128 KB)
 function readCanonicalVersion(rootDir) {
   const ksp = fs.readFileSync(path.join(rootDir, "os/kernel.sp"), "utf8");
   const m = ksp.match(/int\s+os_version_str\s*\(\s*\)\s*\{\s*return\s+"((?:\\.|[^"\\])*)"/);
-  return m ? m[1].replace(/\\"/g, '"') : 'SpiralOS 1.6 "Open Shelf"';
+  return m ? m[1].replace(/\\"/g, '"') : 'SpiralOS 1.7 "Bring Your Own"';
 }
 
 function createProceduralPic(style = 0) {
@@ -109,6 +109,8 @@ function verifyVmMemoryMap(expandedSource, globalWords = 780) {
     { name: "ASM_WORK_BUF",     start: addr("ASM_WORK_BUF"),     size: 0x004000, relocated: true,  orig: 0x0A0000, note: "16 KB assembler output buf" },
     { name: "SRRP_SCRATCH_BUF", start: addr("SRRP_SCRATCH_BUF"), size: 0x001000, relocated: true,  orig: 0x1C0000, note: "4 KB SRRP & sh_buf scratch" },
     { name: "SHELL_CMD_RING",   start: addr("SHELL_CMD_RING"),   size: 0x000C00, relocated: true,  orig: 0x1D1200, note: "32 * 96B Shell history ring" },
+    { name: "FAT_WORK_AREA",    start: addr("FAT_SEC_BUF"),      size: 0x000A00, relocated: false, note: "2.5 KB FAT12/16/32 sector/dir/list buffers" },
+    { name: "AUD_CH_BASE",      start: addr("AUD_CH_BASE"),      size: 0x000140, relocated: false, note: "320 B 8-channel audio mixer state" },
     { name: "NET_TX_BUF",       start: addr("NET_TX_BUF"),       size: 0x000400, relocated: false, note: "1 KB StudioNet TX frame" },
     { name: "NET_RX_BUF",       start: addr("NET_RX_BUF"),       size: 0x000400, relocated: false, note: "1 KB StudioNet RX frame" },
     { name: "CHAT_LOG_BUF",     start: addr("CHAT_LOG_BUF"),     size: 0x000100, relocated: false, note: "256 B Chat log" },
@@ -126,7 +128,7 @@ function verifyVmMemoryMap(expandedSource, globalWords = 780) {
     { name: "SHELL_IN_BUF",     start: addr("SHELL_IN_BUF"),     size: 0x000080, relocated: false, note: "128 B Shell input line" },
     { name: "CHAT_IN_BUF",      start: addr("CHAT_IN_BUF"),      size: 0x000080, relocated: false, note: "128 B Chat input line" },
     { name: "PAINT_CANVAS",     start: addr("PAINT_CANVAS"),     size: 0x001500, relocated: false, note: "96x56 (5,376 B) Paint canvas" },
-    { name: "LAUNCHER_TAB",     start: addr("LAUNCHER_TAB"),     size: 0x000140, relocated: false, note: "320 B Launcher box table" },
+    { name: "LAUNCHER_TAB",     start: addr("LAUNCHER_TAB"),     size: 0x000160, relocated: false, note: "352 B Launcher box table (20 items)" },
     { name: "NUM_STR_BUF",      start: addr("NUM_STR_BUF"),      size: 0x000040, relocated: false, note: "64 B hal_itoa buffer" },
     { name: "SHELL_HIST_BUF",   start: addr("SHELL_HIST_BUF"),   size: 0x000C00, relocated: false, note: "32 * 96B Shell scrollback" },
     { name: "EDIT_BUF",         start: addr("EDIT_BUF"),         size: 0x009000, relocated: false, note: "36 KB SpiralEdit buffer" },
@@ -178,7 +180,7 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
 
   // 1. Build all three Native Cores (TC-32, x86, and Triton T3)
   const tc32Core = buildTC32Core();
-  const x86Core = buildX86Core("SpiralOS 1.6", { brokenTimeMs: pcMode === "b", brokenShutdownReturn: pcMode === "g" });
+  const x86Core = buildX86Core("SpiralOS 1.7", { brokenTimeMs: pcMode === "b", brokenShutdownReturn: pcMode === "g" });
   const tritonCore = buildTritonCore();
 
   // 2. Populate SpiralFS (768 KB usable volume across Sectors 320..1919, skipping 960..1023)
@@ -188,6 +190,8 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     ["os/os.sp",     "/src/os.sp"],
     ["os/kernel.sp", "/src/kernel.sp"],
     ["os/fs.sp",     "/src/fs.sp"],
+    ["os/fat.sp",    "/src/fat.sp"],
+    ["os/audio.sp",  "/src/audio.sp"],
     ["os/gui.sp",    "/src/gui.sp"],
     ["os/wm.sp",     "/src/wm.sp"],
     ["os/net.sp",    "/src/net.sp"],
@@ -207,6 +211,10 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     if (pcMode === "d" && diskRel === "os/apps1.sp") content = content.replace("const PC_LS_COUNT_ONLY = 0;", "const PC_LS_COUNT_ONLY = 1;");
     if (pcMode === "e" && diskRel === "os/apps2.sp") content = content.replace("const PC_SNAKE_NO_SELF = 0;", "const PC_SNAKE_NO_SELF = 1;");
     if (pcMode === "f" && diskRel === "os/os.sp") content = content.replace("const PC_SHUTDOWN_NO_FLUSH = 0;", "const PC_SHUTDOWN_NO_FLUSH = 1;");
+    if (pcMode === "fat1" && diskRel === "os/fat.sp") content = content.replace("const PC_FAT_NO_COPY2 = 0;", "const PC_FAT_NO_COPY2 = 1;");
+    if (pcMode === "fat2" && diskRel === "os/fat.sp") content = content.replace("const PC_FAT_TRUNC_83 = 0;", "const PC_FAT_TRUNC_83 = 1;");
+    if (pcMode === "aud1" && diskRel === "os/audio.sp") content = content.replace("const PC_AUDIO_DROP_LAST = 0;", "const PC_AUDIO_DROP_LAST = 1;");
+    if (pcMode === "aud2" && diskRel === "os/audio.sp") content = content.replace("const PC_AUDIO_SWAP_PAN  = 0;", "const PC_AUDIO_SWAP_PAN  = 1;");
     const cap = Math.max(1024, (content.length + 512) & ~511);
     spfs.writeFile(vfsPath, content, cap);
   }
@@ -287,7 +295,7 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
   const loadableAppNames = [
     "about", "calc", "clock", "sysmon", "theme", "viewer",
     "build", "transfer", "snake", "paint", "blocks", "solitaire",
-    "notes", "edit", "files", "chat", "browser", "zork"
+    "notes", "edit", "files", "chat", "browser", "zork", "tracker"
   ];
   const builtApps = [];
   for (const appName of loadableAppNames) {
@@ -298,6 +306,8 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
     if (pcMode === "z2" && appName === "zork") appSrc = appSrc.replace("const PC_Z_SWAP_INSERT      = 0;", "const PC_Z_SWAP_INSERT      = 1;");
     if (pcMode === "z3" && appName === "zork") appSrc = appSrc.replace("const PC_Z_SPACE_ONLY_TOK   = 0;", "const PC_Z_SPACE_ONLY_TOK   = 1;");
     if (pcMode === "z4" && appName === "zork") appSrc = appSrc.replace("const PC_Z_RESTORE_NO_STACK = 0;", "const PC_Z_RESTORE_NO_STACK = 1;");
+    if (pcMode === "z5" && appName === "zork") appSrc = appSrc.replace("const PC_Z_UNDO_NO_STACK    = 0;", "const PC_Z_UNDO_NO_STACK    = 1;");
+    if (pcMode === "z6" && appName === "zork") appSrc = appSrc.replace("const PC_Z_UPPER_NO_RESERVE = 0;", "const PC_Z_UPPER_NO_RESERVE = 1;");
     spfs.writeFile("/src/app_" + appName + ".sp", appSrc, (appSrc.length + 511) & ~511);
     const modRes = compileAppModule(appSrc, (p) => spfs.readFile(p));
     spfs.writeFile("/apps/" + appName + ".spir", modRes.image, (modRes.image.length + 511) & ~511);
@@ -314,6 +324,18 @@ function buildSpiralOSImage(rootDir = path.resolve(__dirname, ".."), opts = {}) 
   if (zorkLicPath) {
     const lBytes = fs.readFileSync(zorkLicPath, "utf8");
     spfs.writeFile("/games/ZORK-LICENSE", lBytes, (lBytes.length + 511) & ~511);
+  }
+  for (const [zFile, vfsName] of [
+    ["games/zork2.z3", "/games/zork2.z3"],
+    ["games/zork3.z3", "/games/zork3.z3"],
+    ["games/ZORK2-LICENSE", "/games/ZORK2-LICENSE"],
+    ["games/ZORK3-LICENSE", "/games/ZORK3-LICENSE"]
+  ]) {
+    const zp = path.resolve(rootDir, zFile);
+    if (fs.existsSync(zp)) {
+      const zb = fs.readFileSync(zp);
+      spfs.writeFile(vfsName, zb, (zb.length + 511) & ~511);
+    }
   }
 
   const freeBytes = spfs.freeBytes();

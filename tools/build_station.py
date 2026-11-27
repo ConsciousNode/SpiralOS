@@ -82,7 +82,7 @@ def build_station_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Spiral Build Station — SpiralOS 1.4 "Daily Driver" (TabComp TC-32 &amp; Hummingbird i586)</title>
+<title>Spiral Build Station — SpiralOS 1.7 "Bring Your Own" (TabComp TC-32 &amp; Hummingbird i586)</title>
 <style>
   :root {{
     --bg-0: #090c16;
@@ -337,7 +337,7 @@ def build_station_html():
   <div class="brand">
     <div class="brand-glyph">🌀</div>
     <div>
-      <div class="brand-title">SPIRAL BUILD STATION · SpiralOS 1.4 "Daily Driver"</div>
+      <div class="brand-title">SPIRAL BUILD STATION · SpiralOS 1.7 "Bring Your Own"</div>
       <div class="brand-sub">ConsciousNode SoftWorks · Unified Portable VM + Dual Native Cores (TabComp TC-32 &amp; Hummingbird i586) · StudioNet Bridge</div>
     </div>
   </div>
@@ -479,7 +479,7 @@ def build_station_html():
     spfs.writeFile("/www/sonder.hts", "<h1>Sonder Procedural Capsule</h1>\\n<p>Timeline 1991-B: ConsciousNode SoftWorks Aether Network.</p>\\n<a href='/index.hts'>Return to Node Index</a>\\n", 2048);
     spfs.writeFile("/art/spiral.pic", createProceduralPic(0), 6144);
     spfs.writeFile("/art/prism.pic", createProceduralPic(1), 6144);
-    spfs.writeFile("/docs/README.txt", "SpiralOS 1.4 \"Daily Driver\" - ConsciousNode SoftWorks (MIT)\\nUnified VM Bytecode OS for TabComp & Hummingbird.\\n", 2048);
+    spfs.writeFile("/docs/README.txt", "SpiralOS 1.7 \\\"Bring Your Own\\\" - ConsciousNode SoftWorks (MIT)\\nUnified VM Bytecode OS for TabComp, Hummingbird & Triton.\\n", 2048);
 
     const compiled = compileSpiralSource(spfs.readFile("/src/os.sp"), function(p) {{ return spfs.readFile(p); }});
 
@@ -733,9 +733,9 @@ def build_station_html():
     if (!currentBuild) compileAndBootAll();
     const imgB64 = u8ToB64(currentBuild.img);
     const cartHtml =
-      '<!DOCTYPE html><html><head><meta charset="utf-8"><title>SpiralOS 1.4 "Daily Driver" — TabComp Cartridge</title>' +
+      '<!DOCTYPE html><html><head><meta charset="utf-8"><title>SpiralOS 1.7 "Bring Your Own" — TabComp Cartridge</title>' +
       '<style>body{{margin:0;background:#080b14;color:#eef3ff;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}}canvas{{width:640px;height:400px;image-rendering:pixelated;border:2px solid #00e5ff}}</style></head>' +
-      '<body><h3>SpiralOS 1.4 "Daily Driver" — Bootable TabComp Cartridge (ConsciousNode SoftWorks)</h3>' +
+      '<body><h3>SpiralOS 1.7 "Bring Your Own" — Bootable TabComp Cartridge (ConsciousNode SoftWorks)</h3>' +
       '<canvas id="tc-screen" width="320" height="200" tabindex="0"></canvas>' +
       '<script id="spiral-img-b64" type="text/plain">' + imgB64 + '<' + '/script>' +
       '<script>' + document.getElementById("spiral-station-core").textContent +

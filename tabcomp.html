@@ -749,6 +749,33 @@
       this.cpu = cpu;
       this.ctx = null;
       this.channels = [];
+      this.pcmCapture = [];
+      this.pcmTotalFrames = 0;
+      this.nextPlayTime = 0;
+    }
+    submitStereoI16(stereoI16, rate) {
+      this.pcmCapture.push(stereoI16);
+      this.pcmTotalFrames += (stereoI16.length >>> 1);
+      if (typeof window === "undefined") return;
+      this.unlock();
+      if (!this.ctx || !stereoI16 || stereoI16.length < 2) return;
+      try {
+        const frames = stereoI16.length >>> 1;
+        const buf = this.ctx.createBuffer(2, frames, rate || 22050);
+        const chL = buf.getChannelData(0);
+        const chR = buf.getChannelData(1);
+        for (let i = 0; i < frames; i++) {
+          chL[i] = stereoI16[i * 2] / 32768.0;
+          chR[i] = stereoI16[i * 2 + 1] / 32768.0;
+        }
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.ctx.destination);
+        const now = this.ctx.currentTime;
+        const startAt = Math.max(now, this.nextPlayTime);
+        src.start(startAt);
+        this.nextPlayTime = startAt + (frames / buf.sampleRate);
+      } catch (_) {}
     }
     unlock() {
       if (this.ctx) {
@@ -1524,6 +1551,9 @@
       this.mouseY = 100;
       this.mouseButtons = 0;
       this.spiralDiskImage = null;
+      this.disk2Image = null;
+      this.pcmSound = new TabCompSound(this);
+      globalThis._activeSpiralHost = this;
       this.snet = new StudioNetNIC(this, 0x0101);
       this.jit = this.wasmMem ? new TabCompWasmJIT(this) : null;
       this._syncStudioNetMMIO();
@@ -1538,6 +1568,16 @@
       this.ramDV.setInt32(0x0FFD10, this.mouseButtons, true);
     }
 
+    loadDisk2Image(u8) {
+      if (!u8) { this.disk2Image = null; return; }
+      this.disk2Image = new Uint8Array(u8.length);
+      this.disk2Image.set(u8);
+    }
+    ejectDisk2Image() {
+      const out = this.disk2Image;
+      this.disk2Image = null;
+      return out;
+    }
     _syncStudioNetMMIO() {
       if (!this.ramDV || !this.snet) return;
       this.ramDV.setInt32(0x0FFD40, 0x534E4554, true); // 'SNET'
@@ -2437,13 +2477,60 @@
         case 36: { // REBOOT_SPIRAL(img_ram_base) -> reloads SpiralOS image & restarts Core
           const base = r[0] & 0xFFFFFF;
           if (this.spiralDiskImage && base > 0) {
-            const copyLen = Math.min(this.spiralDiskImage.length, 960 * 512);
+            const copyLen = Math.min(this.spiralDiskImage.length, 2880 * 512);
             this.spiralDiskImage.set(this.ram.subarray(base, base + copyLen), 0);
           }
           if (this.spiralDiskImage) {
             bootSpiralDiskImage(this, this.spiralDiskImage);
           }
           r[0] = 0;
+          break;
+        }
+        // [INLINE: TabComp Disk Unit 1 (SYS 37..39) & Stereo 16-bit PCM Device (SYS 40..41)]
+        case 37: { // DISK2_INFO(cmd) -> sector count (0 if ejected)
+          r[0] = this.disk2Image ? Math.floor(this.disk2Image.length / 512) : 0;
+          break;
+        }
+        case 38: { // DISK2_READ(lba, count, dst_phys_addr) -> 0 ok, -1 ejected, -2 err
+          const lba = r[0] >>> 0;
+          const cnt = r[1] | 0;
+          const dst = r[2] >>> 0;
+          if (!this.disk2Image) { r[0] = -1; break; }
+          const tot = Math.floor(this.disk2Image.length / 512);
+          if (cnt <= 0 || lba + cnt > tot || dst + cnt * 512 > this.ram.length) { r[0] = -2; break; }
+          this.ram.set(this.disk2Image.subarray(lba * 512, (lba + cnt) * 512), dst);
+          r[0] = 0;
+          break;
+        }
+        case 39: { // DISK2_WRITE(lba, count, src_phys_addr) -> 0 ok, -1 ejected, -2 err
+          const lba = r[0] >>> 0;
+          const cnt = r[1] | 0;
+          const src = r[2] >>> 0;
+          if (!this.disk2Image) { r[0] = -1; break; }
+          const tot = Math.floor(this.disk2Image.length / 512);
+          if (cnt <= 0 || lba + cnt > tot || src + cnt * 512 > this.ram.length) { r[0] = -2; break; }
+          this.disk2Image.set(this.ram.subarray(src, src + cnt * 512), lba * 512);
+          r[0] = 0;
+          break;
+        }
+        case 40: { // AUDIO_INFO(cmd) -> 0:caps(7), 1:22050, 2:queued, 3:4096
+          const cmd = r[0] | 0;
+          if (cmd === 0) r[0] = 7;
+          else if (cmd === 1) r[0] = 22050;
+          else if (cmd === 2) r[0] = 0;
+          else if (cmd === 3) r[0] = 4096;
+          else r[0] = 0;
+          break;
+        }
+        case 41: { // AUDIO_WRITE(src_phys_addr, num_frames) -> frames_written
+          const src = r[0] >>> 0;
+          const nFrames = r[1] | 0;
+          if (nFrames <= 0 || src + nFrames * 4 > this.ram.length) { r[0] = -1; break; }
+          const out = new Int16Array(nFrames * 2);
+          const dv = new DataView(this.ram.buffer, this.ram.byteOffset + src, nFrames * 4);
+          for (let i = 0; i < nFrames * 2; i++) out[i] = dv.getInt16(i * 2, true);
+          if (this.pcmSound) this.pcmSound.submitStereoI16(out, 22050);
+          r[0] = nFrames;
           break;
         }
         default:
@@ -5571,5 +5658,445 @@ function compileTabTalk(srcPath, fsController) {
   }
 })();
 </script>
+
+<!-- [INLINE: SpiralOS 1.7 Disk Tray UI & Host FAT Image Builder (tools/patch_17_hosts.py)] -->
+<div id="spiral-disk-tray" style="position:fixed;bottom:8px;left:8px;z-index:9998;background:#101522;color:#dce6ff;border:1px solid #354468;padding:6px 10px;font:12px monospace;border-radius:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:680px;box-shadow:0 4px 16px rgba(0,0,0,0.45);">
+  <span style="color:#6be6ff;font-weight:bold;">/shelf Tray:</span>
+  <span id="tray-status" style="color:#9eb0d6;">Empty</span>
+  <label style="background:#1c2540;border:1px solid #3c4f7a;padding:2px 6px;border-radius:4px;cursor:pointer;">
+    Drop/Pick Files<input id="tray-pick-files" type="file" multiple style="display:none;">
+  </label>
+  <label style="background:#1c2540;border:1px solid #3c4f7a;padding:2px 6px;border-radius:4px;cursor:pointer;">
+    Pick Folder<input id="tray-pick-dir" type="file" webkitdirectory directory multiple style="display:none;">
+  </label>
+  <label style="background:#1c2540;border:1px solid #3c4f7a;padding:2px 6px;border-radius:4px;cursor:pointer;">
+    Insert .IMG<input id="tray-pick-img" type="file" accept=".img,.fat,.bin,.vhd" style="display:none;">
+  </label>
+  <button id="tray-eject-img" type="button" style="background:#261a2c;color:#ff9ec4;border:1px solid #6b3a58;padding:2px 7px;border-radius:4px;font:12px monospace;cursor:pointer;">Eject .IMG</button>
+  <button id="tray-eject-files" type="button" style="background:#1a2b28;color:#7ff0c2;border:1px solid #346858;padding:2px 7px;border-radius:4px;font:12px monospace;cursor:pointer;">Eject Files</button>
+</div>
+<script id="spiral-disk-tray-script">
+(function() {
+  "use strict";
+  function trayLfnChecksum(sfn11) {
+    let sum = 0;
+    for (let i = 0; i < 11; i++) sum = ((((sum & 1) ? 0x80 : 0) + (sum >>> 1)) + sfn11[i]) & 0xFF;
+    return sum;
+  }
+  function trayMake83(name, seq) {
+    const out = new Uint8Array(11);
+    out.fill(0x20);
+    const clean = name.replace(/^\.+/, "").toUpperCase();
+    const dot = clean.lastIndexOf(".");
+    let base = (dot >= 0 ? clean.slice(0, dot) : clean).replace(/[^A-Z0-9_$!#%&\-@^_`{}~]/g, "_");
+    let ext = (dot >= 0 ? clean.slice(dot + 1) : "").replace(/[^A-Z0-9_$!#%&\-@^_`{}~]/g, "_");
+    const needTil = (seq > 0) || (base.length > 8) || (ext.length > 3) || (name.toUpperCase() !== name) || (clean !== name.toUpperCase()) || (name.indexOf(" ") >= 0);
+    if (needTil) {
+      const suf = "~" + (seq > 0 ? seq : 1);
+      base = (base.slice(0, 8 - suf.length) || "F") + suf;
+    }
+    for (let i = 0; i < Math.min(8, base.length); i++) out[i] = base.charCodeAt(i) & 0xFF;
+    for (let i = 0; i < Math.min(3, ext.length); i++) out[8 + i] = ext.charCodeAt(i) & 0xFF;
+    return { sfn: out, needsLfn: needTil || name.length > 12 };
+  }
+  function trayBuildDirEntries(items, allocCluster, isFat32, selfClus, parentClus) {
+    const ents = [];
+    const push32 = (u) => ents.push(u);
+    if (selfClus !== 0) {
+      for (const [nm, cl] of [[".          ", selfClus], ["..         ", parentClus]]) {
+        const e = new Uint8Array(32);
+        for (let i = 0; i < 11; i++) e[i] = nm.charCodeAt(i);
+        e[11] = 0x10;
+        e[20] = (cl >>> 16) & 0xFF; e[21] = (cl >>> 24) & 0xFF;
+        e[26] = cl & 0xFF; e[27] = (cl >>> 8) & 0xFF;
+        push32(e);
+      }
+    }
+    let seq = 1;
+    for (const it of items) {
+      const { sfn, needsLfn } = trayMake83(it.name, seq++);
+      if (needsLfn) {
+        const chk = trayLfnChecksum(sfn);
+        const chars = [];
+        for (let i = 0; i < it.name.length; i++) chars.push(it.name.charCodeAt(i));
+        chars.push(0x0000);
+        while (chars.length % 13 !== 0) chars.push(0xFFFF);
+        const nLfn = chars.length / 13;
+        for (let ord = nLfn; ord >= 1; ord--) {
+          const le = new Uint8Array(32);
+          le[0] = ord | (ord === nLfn ? 0x40 : 0);
+          le[11] = 0x0F;
+          le[13] = chk;
+          const base = (ord - 1) * 13;
+          const offs = [1,3,5,7,9, 14,16,18,20,22,24, 28,30];
+          for (let k = 0; k < 13; k++) {
+            const c = chars[base + k];
+            le[offs[k]] = c & 0xFF;
+            le[offs[k] + 1] = (c >>> 8) & 0xFF;
+          }
+          push32(le);
+        }
+      }
+      const de = new Uint8Array(32);
+      de.set(sfn, 0);
+      de[11] = it.isDir ? 0x10 : 0x20;
+      const cl = it.startCluster >>> 0;
+      de[20] = (cl >>> 16) & 0xFF; de[21] = (cl >>> 24) & 0xFF;
+      de[26] = cl & 0xFF; de[27] = (cl >>> 8) & 0xFF;
+      const sz = it.isDir ? 0 : (it.data.length >>> 0);
+      de[28] = sz & 0xFF; de[29] = (sz >>> 8) & 0xFF;
+      de[30] = (sz >>> 16) & 0xFF; de[31] = (sz >>> 24) & 0xFF;
+      push32(de);
+    }
+    const raw = new Uint8Array(ents.length * 32);
+    for (let i = 0; i < ents.length; i++) raw.set(ents[i], i * 32);
+    return raw;
+  }
+
+  // Build a FAT16 disk image (with LFN & nested folders) from a map of { "path/to/file": Uint8Array }
+  function buildTrayFatImage(fileMap, minSizeBytes) {
+    let totalData = 0;
+    const tree = { name: "", isDir: true, children: new Map() };
+    for (const [rawPath, bytes] of Object.entries(fileMap || {})) {
+      const parts = rawPath.replace(/^\/+/, "").split("/").filter(Boolean);
+      if (parts.length === 0) continue;
+      let node = tree;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!node.children.has(parts[i])) {
+          node.children.set(parts[i], { name: parts[i], isDir: true, children: new Map() });
+        }
+        node = node.children.get(parts[i]);
+      }
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      node.children.set(parts[parts.length - 1], { name: parts[parts.length - 1], isDir: false, data: u8 });
+      totalData += ((u8.length + 4095) & ~4095);
+    }
+    // Always use FAT16 with 4 KB clusters (8 sectors/cluster) and >= 4600 clusters (~19 MB max or sized to fit + 2 MB free)
+    const secPerClus = 8; // 4096 B/cluster
+    const bytesPerClus = secPerClus * 512;
+    const minBytes = Math.max(minSizeBytes || (20 * 1024 * 1024), totalData + 4 * 1024 * 1024);
+    const dataClusters = Math.max(4200, Math.min(65000, Math.ceil(minBytes / bytesPerClus)));
+    const fatSectors = Math.ceil(((dataClusters + 2) * 2) / 512);
+    const rootEntries = 512;
+    const rootSectors = (rootEntries * 32) / 512; // 32
+    const rsvdSectors = 1;
+    const numFats = 2;
+    const dataStartSec = rsvdSectors + numFats * fatSectors + rootSectors;
+    const totalSectors = dataStartSec + dataClusters * secPerClus;
+
+    const img = new Uint8Array(totalSectors * 512);
+    const dv = new DataView(img.buffer);
+    img[0] = 0xEB; img[1] = 0x3C; img[2] = 0x90;
+    const oem = "SPIRAL17";
+    for (let i = 0; i < 8; i++) img[3 + i] = oem.charCodeAt(i);
+    dv.setUint16(11, 512, true);
+    img[13] = secPerClus;
+    dv.setUint16(14, rsvdSectors, true);
+    img[16] = numFats;
+    dv.setUint16(17, rootEntries, true);
+    dv.setUint16(19, totalSectors < 65536 ? totalSectors : 0, true);
+    img[21] = 0xF8;
+    dv.setUint16(22, fatSectors, true);
+    dv.setUint16(24, 63, true);
+    dv.setUint16(26, 255, true);
+    dv.setUint32(32, totalSectors >= 65536 ? totalSectors : 0, true);
+    img[36] = 0x80;
+    img[38] = 0x29;
+    dv.setUint32(39, 0x53501701, true);
+    const lbl = "SHELF      ";
+    for (let i = 0; i < 11; i++) img[43 + i] = lbl.charCodeAt(i);
+    const ftype = "FAT16   ";
+    for (let i = 0; i < 8; i++) img[54 + i] = ftype.charCodeAt(i);
+    img[510] = 0x55; img[511] = 0xAA;
+
+    const fat1Off = rsvdSectors * 512;
+    const fat2Off = (rsvdSectors + fatSectors) * 512;
+    const setFat = (cl, val) => {
+      dv.setUint16(fat1Off + cl * 2, val & 0xFFFF, true);
+      dv.setUint16(fat2Off + cl * 2, val & 0xFFFF, true);
+    };
+    setFat(0, 0xFFF8);
+    setFat(1, 0xFFFF);
+
+    let nextClus = 2;
+    function writeChain(bytes) {
+      if (!bytes || bytes.length === 0) return 0;
+      const nClus = Math.ceil(bytes.length / bytesPerClus);
+      const first = nextClus;
+      for (let i = 0; i < nClus; i++) {
+        const c = nextClus++;
+        setFat(c, i === nClus - 1 ? 0xFFFF : c + 1);
+        const dstOff = (dataStartSec + (c - 2) * secPerClus) * 512;
+        const slice = bytes.subarray(i * bytesPerClus, Math.min(bytes.length, (i + 1) * bytesPerClus));
+        img.set(slice, dstOff);
+      }
+      return first;
+    }
+
+    function populateDir(dirNode, selfClus, parentClus) {
+      const items = [];
+      for (const child of dirNode.children.values()) {
+        if (child.isDir) {
+          const cl = nextClus++;
+          setFat(cl, 0xFFFF);
+          child.startCluster = cl;
+          populateDir(child, cl, selfClus);
+        } else {
+          child.startCluster = writeChain(child.data);
+        }
+        items.push(child);
+      }
+      const rawDir = trayBuildDirEntries(items, null, false, selfClus, parentClus);
+      if (selfClus === 0) {
+        img.set(rawDir.subarray(0, rootSectors * 512), (rsvdSectors + numFats * fatSectors) * 512);
+      } else {
+        const nClus = Math.max(1, Math.ceil(rawDir.length / bytesPerClus));
+        let cur = selfClus;
+        for (let i = 0; i < nClus; i++) {
+          if (i > 0) {
+            const nc = nextClus++;
+            setFat(cur, nc);
+            cur = nc;
+          }
+          setFat(cur, 0xFFFF);
+          const dstOff = (dataStartSec + (cur - 2) * secPerClus) * 512;
+          img.set(rawDir.subarray(i * bytesPerClus, Math.min(rawDir.length, (i + 1) * bytesPerClus)), dstOff);
+        }
+      }
+    }
+    populateDir(tree, 0, 0);
+    return img;
+  }
+
+  // Extract all files from a FAT12/16/32 image (with LFN) into { "/path": Uint8Array }
+  function extractTrayFatFiles(img) {
+    if (!img || img.length < 512) return {};
+    const dv = new DataView(img.buffer, img.byteOffset, img.byteLength);
+    let baseOff = 0;
+    // Check for MBR partition table
+    if (img[510] === 0x55 && img[511] === 0xAA && (img[0] !== 0xEB && img[0] !== 0xE9)) {
+      for (let p = 0; p < 4; p++) {
+        const pOff = 446 + p * 16;
+        const pType = img[pOff + 4];
+        const lba = dv.getUint32(pOff + 8, true);
+        if (pType !== 0 && lba > 0 && lba * 512 < img.length) { baseOff = lba * 512; break; }
+      }
+    }
+    const bps = dv.getUint16(baseOff + 11, true) || 512;
+    const spc = img[baseOff + 13] || 1;
+    const rsvd = dv.getUint16(baseOff + 14, true);
+    const nfats = img[baseOff + 16];
+    const rootEnt = dv.getUint16(baseOff + 17, true);
+    const tot16 = dv.getUint16(baseOff + 19, true);
+    const fsz16 = dv.getUint16(baseOff + 22, true);
+    const tot32 = dv.getUint32(baseOff + 32, true);
+    const fsz32 = dv.getUint32(baseOff + 36, true);
+    const fatSz = fsz16 || fsz32;
+    const totSec = tot16 || tot32;
+    const rootSecs = Math.ceil((rootEnt * 32) / bps);
+    const dataSec = rsvd + nfats * fatSz + rootSecs;
+    const countClus = Math.floor((totSec - dataSec) / spc);
+    const fatType = countClus < 4085 ? 12 : (countClus < 65525 ? 16 : 32);
+    const fatOff = baseOff + rsvd * bps;
+    const eoc = fatType === 12 ? 0xFF8 : (fatType === 16 ? 0xFFF8 : 0x0FFFFFF8);
+
+    function nextCluster(c) {
+      if (fatType === 12) {
+        const o = fatOff + Math.floor(c * 3 / 2);
+        const v = img[o] | (img[o + 1] << 8);
+        return (c & 1) ? (v >>> 4) : (v & 0xFFF);
+      } else if (fatType === 16) {
+        return dv.getUint16(fatOff + c * 2, true);
+      } else {
+        return dv.getUint32(fatOff + c * 4, true) & 0x0FFFFFFF;
+      }
+    }
+    function readChain(startClus, maxBytes) {
+      if (startClus < 2) return new Uint8Array(0);
+      const chunks = [];
+      let cur = startClus, total = 0, guard = 0;
+      const clusBytes = spc * bps;
+      while (cur >= 2 && cur < eoc && guard++ < 65536) {
+        const off = baseOff + (dataSec + (cur - 2) * spc) * bps;
+        if (off + clusBytes > img.length) break;
+        chunks.push(img.subarray(off, off + clusBytes));
+        total += clusBytes;
+        if (maxBytes !== undefined && total >= maxBytes) break;
+        cur = nextCluster(cur);
+      }
+      const outLen = maxBytes !== undefined ? Math.min(total, maxBytes) : total;
+      const out = new Uint8Array(outLen);
+      let pos = 0;
+      for (const ch of chunks) {
+        const n = Math.min(ch.length, outLen - pos);
+        if (n <= 0) break;
+        out.set(ch.subarray(0, n), pos);
+        pos += n;
+      }
+      return out;
+    }
+
+    const outFiles = {};
+    function walkDir(dirBytes, prefix) {
+      const ddv = new DataView(dirBytes.buffer, dirBytes.byteOffset, dirBytes.byteLength);
+      let lfnParts = [];
+      for (let off = 0; off + 32 <= dirBytes.length; off += 32) {
+        const first = dirBytes[off];
+        if (first === 0x00) break;
+        if (first === 0xE5) { lfnParts = []; continue; }
+        const attr = dirBytes[off + 11];
+        if (attr === 0x0F) {
+          const ord = first & 0x1F;
+          const offs = [1,3,5,7,9, 14,16,18,20,22,24, 28,30];
+          let seg = "";
+          for (const o of offs) {
+            const code = dirBytes[off + o] | (dirBytes[off + o + 1] << 8);
+            if (code === 0x0000 || code === 0xFFFF) break;
+            seg += String.fromCharCode(code);
+          }
+          lfnParts[ord - 1] = seg;
+          continue;
+        }
+        if ((attr & 0x08) !== 0) { lfnParts = []; continue; }
+        let name = lfnParts.filter(Boolean).join("");
+        lfnParts = [];
+        if (!name) {
+          let b = "", e = "";
+          for (let i = 0; i < 8; i++) b += String.fromCharCode(dirBytes[off + i]);
+          for (let i = 0; i < 3; i++) e += String.fromCharCode(dirBytes[off + 8 + i]);
+          b = b.trim(); e = e.trim();
+          name = e ? (b + "." + e) : b;
+        }
+        if (name === "." || name === "..") continue;
+        const hi = ddv.getUint16(off + 20, true);
+        const lo = ddv.getUint16(off + 26, true);
+        const clus = fatType === 32 ? ((hi << 16) | lo) : lo;
+        const fsz = ddv.getUint32(off + 28, true);
+        const fullPath = prefix + "/" + name;
+        if ((attr & 0x10) !== 0) {
+          if (clus >= 2) walkDir(readChain(clus), fullPath);
+        } else {
+          outFiles[fullPath] = readChain(clus, fsz);
+        }
+      }
+    }
+    if (fatType === 32) {
+      const rootClus = dv.getUint32(baseOff + 44, true);
+      walkDir(readChain(rootClus), "");
+    } else {
+      const rootOff = baseOff + (rsvd + nfats * fatSz) * bps;
+      walkDir(img.subarray(rootOff, rootOff + rootSecs * bps), "");
+    }
+    return outFiles;
+  }
+
+  function getActiveHost() {
+    return globalThis._activeSpiralHost || null;
+  }
+  function updateTrayStatus(text) {
+    const el = typeof document !== "undefined" ? document.getElementById("tray-status") : null;
+    if (el) el.textContent = text;
+  }
+  function insertImageToHost(u8, label) {
+    const host = getActiveHost();
+    if (!host || typeof host.loadDisk2Image !== "function") {
+      updateTrayStatus("No active VM");
+      return false;
+    }
+    host.loadDisk2Image(u8);
+    updateTrayStatus((label || "Disk") + " (" + Math.round(u8.length / 1024) + " KB)");
+    return true;
+  }
+  function ejectFromHost() {
+    const host = getActiveHost();
+    if (!host || typeof host.ejectDisk2Image !== "function") return null;
+    const img = host.ejectDisk2Image();
+    updateTrayStatus("Empty");
+    return img;
+  }
+
+  globalThis.spiralDiskTray = {
+    buildFatImage: buildTrayFatImage,
+    extractFatFiles: extractTrayFatFiles,
+    insertFiles(fileMap, label) {
+      const img = buildTrayFatImage(fileMap);
+      insertImageToHost(img, label || (Object.keys(fileMap).length + " file(s)"));
+      return img;
+    },
+    insertImage(u8, label) {
+      return insertImageToHost(u8 instanceof Uint8Array ? u8 : new Uint8Array(u8), label || "Disk.img");
+    },
+    ejectImage() {
+      return ejectFromHost();
+    },
+    ejectFiles() {
+      const img = ejectFromHost();
+      return img ? extractTrayFatFiles(img) : {};
+    }
+  };
+
+  if (typeof document !== "undefined") {
+    const handleFileList = async (fileList) => {
+      const map = {};
+      for (const f of Array.from(fileList || [])) {
+        const rel = f.webkitRelativePath || f.name;
+        const buf = await f.arrayBuffer();
+        map[rel] = new Uint8Array(buf);
+      }
+      if (Object.keys(map).length > 0) {
+        globalThis.spiralDiskTray.insertFiles(map, Object.keys(map).length + " file(s)");
+      }
+    };
+    const fPick = document.getElementById("tray-pick-files");
+    if (fPick) fPick.addEventListener("change", (e) => handleFileList(e.target.files));
+    const dPick = document.getElementById("tray-pick-dir");
+    if (dPick) dPick.addEventListener("change", (e) => handleFileList(e.target.files));
+    const iPick = document.getElementById("tray-pick-img");
+    if (iPick) iPick.addEventListener("change", async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const u8 = new Uint8Array(await f.arrayBuffer());
+      globalThis.spiralDiskTray.insertImage(u8, f.name);
+    });
+    const ejImg = document.getElementById("tray-eject-img");
+    if (ejImg) ejImg.addEventListener("click", () => {
+      const img = globalThis.spiralDiskTray.ejectImage();
+      if (!img) return;
+      const blob = new Blob([img], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "shelf-disk.img";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    });
+    const ejFiles = document.getElementById("tray-eject-files");
+    if (ejFiles) ejFiles.addEventListener("click", () => {
+      const files = globalThis.spiralDiskTray.ejectFiles();
+      for (const [p, u8] of Object.entries(files)) {
+        const blob = new Blob([u8], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = p.replace(/^\/+/, "").replace(/\//g, "_");
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    });
+    window.addEventListener("dragover", (e) => { e.preventDefault(); });
+    window.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length === 1 && /\.(img|fat|vhd)$/i.test(files[0].name)) {
+          const u8 = new Uint8Array(await files[0].arrayBuffer());
+          globalThis.spiralDiskTray.insertImage(u8, files[0].name);
+        } else {
+          await handleFileList(files);
+        }
+      }
+    });
+  }
+})();
+</script>
+
 </body>
 </html>

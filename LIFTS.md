@@ -1,41 +1,33 @@
-# SpiralOS 1.4 "Daily Driver" — Code Provenance & Lifts (`LIFTS.md`)
+# SpiralOS 1.7.1 "Bring Your Own" — Provenance & Lifts (LIFTS.md)
 
-Every piece of code carried over or adapted from attached reference files carries an inline provenance comment naming its source file and line range, and is catalogued below:
+**Studio:** ConsciousNode SoftWorks · **Licence:** MIT (from the bottom up, zero third-party runtime dependencies, offline).
 
-| Target File | Target Lines | Source File & Line Range | Description |
-|---|---|---|---|
-| `os/net.sp` | `1-85` | `studionet/STUDIONET-1.0.md:1-310` | StudioNet 1.0 frame header layout, FNV-1a checksum (`0x811C9DC5`), SNS/SDP/SRRP constants |
-| `os/net.sp` | `86-390` | `studionet/studionet-ref.js:235-485` (ported to SpiralC) | SNS `NameAgent` naming state machine, peer table, age extrapolation, tie-breaking, `sns_resolve` |
-| `os/net.sp` | `391-780` | `studionet/STUDIONET-1.0.md:195-310` | SRRP/1.0 client & server, SACK bitmask, adaptive `cwnd`, `trytes16`, `SpiralHttpd` (`/www`, `/inbox`, `/share`) |
-| `os/apps2.sp` | `94-185` | `shared/deals-ref.js:1-95`, `shared/DEALS.md:1-120` | Integer-only MINSTD (`48271`) `cnsw_next_rand`, `cnsw_shuffle`, and MS FreeCell `ms_freecell_deal` (1..32000) |
-| `tools/rasterize-splash.js` | `1-185` | `cnsw-mark.svg:1-38`, `cnsw-lockup.svg:1-42` | Build-time rasterizer converting CNSW mark polygons into 8-bpp palette bitmap `/art/cnsw.pic` |
-| `core/core_tc32.js`, `core/core_x86.js`, `core/core_triton.js`, `tabcomp.html`, `index.html` | Font tables | `fonts/consciousnode-sans-8x8.hex:1-96`, `fonts/cnsw-serif-8x16.hex:1-96` | Studio 8×8 UI font (ConsciousNode Sans) and 8×16 document font (CNSW Serif) |
-| `triton/spiralos-triton.html` | `1-9650` | `triton/spiralos-triton.html:1-9620` | Triton 3.1 host page updated with 1.4 disk bundle and StudioNet hardware Node ID control |
+## 1. Third-Party Story Files (MIT License)
+- **`games/zork1.z3`** & **`games/ZORK-LICENSE`**: Zork I (Infocom / `historicalsource/zork1`, MIT License, Nov 2025). Retained from SpiralOS 1.6.
+- **`games/zork2.z3`** (`92,524 B`, sha256 `3ae7d5558943e9721f3e4b273c8a7faec1a03a604e1ae4ee1cde472c21cb24ac`) & **`games/ZORK2-LICENSE`**: Zork II (`historicalsource/zork2`, commit `3da9661098809788a99cef00f00c865c6c204f96`, MIT License, Nov 2025). Shipped on SpiralFS at `/games/zork2.z3` and `/games/ZORK2-LICENSE`; no box art, logos, or trademarks used.
+- **`games/zork3.z3`** (`87,984 B`, sha256 `b637a242865d059890184164ce8dec28554cc80901dcbf26c740b2d1ed0d4eb8`) & **`games/ZORK3-LICENSE`**: Zork III (`historicalsource/zork3`, commit `3ec9ed412b5f3cafe65d83c727d07db1fe4a86a8`, MIT License, Nov 2025). Shipped on SpiralFS at `/games/zork3.z3` and `/games/ZORK3-LICENSE`; no box art, logos, or trademarks used.
+- **No third-party music shipped:** All `.mod` files used in verification are generated procedurally in `tests/mod-oracle.js`.
 
-## `tabcomp.html` StudioNet Node ID Control Placement Diff
+## 2. Clean-Room Implementations & Inline Labels (SpiralOS 1.7 / 1.7.1)
+All new 1.7/1.7.1 code was written from scratch against public hardware/format specifications (Microsoft FAT32 `fatgen103`, Z-Machine Standards Document 1.1, Creative Sound Blaster 16 Hardware Programming Guide, Intel 8237A DMA Datasheet, ProTracker 2.3D MOD Format Specification):
+- **`os/fat.sp`**: Clean-room FAT12/16/32 + VFAT LFN driver.
+- **`os/audio.sp`**: Clean-room 8-channel 8/16-bit 22,050 Hz stereo PCM mixer & tone synthesizer.
+- **`os/apps/app_tracker.sp`**: Clean-room 4-channel ProTracker MOD player.
+- **`os/apps/app_zork.sp`**: Extended from SpiralOS 1.6's clean-room v3 interpreter to full v3/v4/v5/v7/v8 (1.7.1: pristine-story `@verify` checksum computed before header init / dynamic writes).
+- **`tools/patch_17_hosts.py` -> Inline additions in `hummingbird.html`, `tabcomp.html`, `triton/spiralos-triton.html`**:
+  - Labeled `[INLINE: SpiralOS 1.7 Disk Tray UI & Host FAT Image Builder (tools/patch_17_hosts.py)]` (1.7.1: `walkDir` `DataView` fix for `extractTrayFatFiles`)
+  - Labeled `[INLINE: SpiralOS 1.7 Sound Blaster 16 + 8237 Slave DMA]` in `hummingbird.html`
+  - Labeled `[INLINE: SpiralOS 1.7 TabComp PCM Audio & Disk 2]` in `tabcomp.html`
+  - Labeled `[INLINE: SpiralOS 1.7 Triton Disk 2 (Ports 28-29) & PCM Audio (Ports 30-32)]` in `triton/spiralos-triton.html`
+- **Independent Test Oracles (written from specifications without reading OS code):**
+  - `tests/fat-oracle.js` (Jaccard vs `os/fat.sp`: `0.100`)
+  - `tests/audio-oracle.js` (Jaccard vs `os/audio.sp`: `0.142`)
+  - `tests/mod-oracle.js` (Jaccard vs `os/apps/app_tracker.sp`: `0.096`)
+  - `tests/zmachine-oracle.js` (Jaccard vs `os/apps/app_zork.sp`: `0.059`)
+  - `tests/zmachine-asm.js` (clean-room Z-Machine v4/v5/v7/v8 assembler; 1.7.1: added post-mutation `@verify` test case)
 
-In `tabcomp.html`, line 2633 inside `buildHTMLFromPristine` (`const out = ... + "</script>\n</body>\n</html>\n";`) was restored untouched, and the StudioNet 1.0 hardware Node ID control was placed solely before the document's closing `</body>` tag at the end of `tabcomp.html`:
-
-```diff
-@@ -2630,7 +2630,7 @@
-     const coreText = document.getElementById('tc-core').textContent;
-     const out = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<title>TabComp — Self-Contained SpiralOS Cartridge</title>\n<style id="tc-style">' +
-       styleText + '</style>\n</head>\n<body>\n' + bodyMarkup +
--      '<script type="application/x-tabcomp-disk" id="tc-disk">' + diskB64 + '</script>\n<script id="tc-core">' + coreText + '</script>\n</body>\n</html>\n';
-+      '<script type="application/x-tabcomp-disk" id="tc-disk">' + diskB64 + '</script>\n<script id="tc-core">' + coreText + '</script>\n</body>\n</html>\n';
-     return out;
-   }
-@@ -3995,4 +3995,43 @@
-+<div id="studionet-node-bar" style="position:fixed;bottom:8px;right:8px;z-index:9999;background:#141824;color:#d8e2ff;border:1px solid #3a4668;padding:4px 8px;font:12px monospace;border-radius:4px;">
-+  <label for="studionet-node-id-input">StudioNet Node ID:</label>
-+  <input id="studionet-node-id-input" type="text" value="0x0001" style="width:64px;background:#0b0e17;color:#7cf0a8;border:1px solid #3a4668;font:12px monospace;padding:1px 4px;" />
-+</div>
-+<script>
-+(function() {
-+  function parseNodeParam() { ... }
-+  function applyHardwareNodeId(nid) { ... }
-+})();
-+</script>
- </body>
- </html>
-```
+## 3. Host Page Diffs Summary (1.6.1 -> 1.7.1)
+- **`index.html`**: Fixed unescaped quotes in `/docs/README.txt`, updated embedded 1.7.1 sources and version strings via `tools/build_station.py`.
+- **`hummingbird.html`**: Added 8237 slave 16-bit DMA (`0xC0..0xDF`, page `0x89..0x8B`), Sound Blaster 16 (`0x224..0x22F`, IRQ 5, `pcmCapture`), Disk 2 (`disk2Image`, `INT 13h` `AH=41h/42h/43h/48h` on drive `0x81`), and Disk Tray UI (`window.spiralDiskTray`, 1.7.1 `walkDir` fix).
+- **`tabcomp.html`**: Added Disk 2 (`loadDisk2Image`/`ejectDisk2Image`, syscalls `37..39`), PCM audio (`TabCompSound`, syscalls `40..41`, `pcmCapture`), fixed `case 36` reboot copy to `2880*512`, and added Disk Tray UI (`window.spiralDiskTray`, 1.7.1 `walkDir` fix).
+- **`triton/spiralos-triton.html`**: Added Disk 2 Unit 1 (`Ports 28..29` + `17..20`) and PCM audio (`Ports 30..32`, `pcmCapture`) in both `TritonCPU` and `TritonWASM` (WAT + JS host triggers), plus Disk Tray UI (`window.spiralDiskTray`, 1.7.1 `walkDir` fix).

@@ -1,110 +1,74 @@
-# SpiralOS 1.6.1 "Open Shelf" — Engineering & Verification Report (`REPORT.md`)
+# SpiralOS 1.7.1 "Bring Your Own" — Engineering & Verification Report
 
-**Build Image:** `spiralos.img` (`1,474,560` bytes / 1.44 MB)  
-**`spiralos.img` SHA-256 (rebuilt via `node tools/build.js`):** `1a7deae3135f55fa54652ddc2469661efe2d3489b0b89a36e4db2c8f966d42f1`  
-**Frozen Files (`tabcomp.html`, `hummingbird.html`, `triton/spiralos-triton.html`, `tests/harness.js`):** Verified byte-identical to baseline.
+**Studio:** ConsciousNode SoftWorks · **Licence:** MIT · **Builder:** Gemini Neon
+**Baseline:** SpiralOS 1.7 (`d376b59`) · **Audit addressed:** `audit/kehai-1.7/AUDIT.md` (1.7.1 patch)
+**Build Output:** `spiralos.img` (`1,474,560 B`, sha256 `5b5a4f5b34e963764cdf3dc91d7fc6da87eb05a7282ce77f0427949e7fdcc90d`), `index.html` (`1,034,037 B`)
 
-Every figure and test result below was **measured directly** from one complete pass against this exact `spiralos.img` (`1a7deae3135f55fa54652ddc2469661efe2d3489b0b89a36e4db2c8f966d42f1`). Nothing is claimed as working unless verified by a live test run, and every conflict or limitation is marked explicitly.
+## 1. SpiralOS 1.7.1 Audit Fixes (Addressing All 6 Findings)
 
----
+1. **Test 4 (`test_v4`/`v5`/`v8` never reaching input) & `@verify` summing live memory (Findings 1 & 4):**
+   - **Root cause:** Both findings shared one bug in `os/apps/app_zork.sp`: `z_do_verify()` summed live `z_mem` bytes `[0x40..flen-1]` *after* `z_init_header()` and game code had written to dynamic memory. In `tests/zmachine-asm.js`, `@verify` failed and fell through to `jump 0` (infinite loop) before reaching `@sread`/`@aread`, so the prompt counter at `VMRAM_STATUS+0x5C` stayed `0`.
+   - **Fix (`os/apps/app_zork.sp`):** Added `z_file_checksum` computed by `z_compute_pristine_checksum()` over `[0x40..flen-1]` immediately on story load before `z_init_header()` or any dynamic memory mutation; `z_do_verify()` compares `z_file_checksum == z_u16(0x1C)`.
+   - **Test coverage (`tests/zmachine-asm.js`, `tests/spiralos-17.js`):** Added an explicit dynamic-memory write (`storew SCR+32 0 0xBEEF`) immediately before `@verify` in the feature-test stories, replaced `jump 0` on failure with `@quit`, and added `'_'` (`Shift + 0x0C`) to Hummingbird's `asciiToScancode`/`typeFast`. Verified Zork I `$verify` after moving `north` prints `"Verifying disk..."` -> `"The disk is correct."`.
+2. **Non-vacuous positive controls `z5` and `z6` (Finding 2):**
+   - **Fix (`tests/spiralos-17.js` Test 8):** Rewrote `z5` (`undo-no-stack`) and `z6` (`upper-no-reserve`) so Test 8 first boots the unmutated `baseImg` on `t5.z5` and asserts `prompts >= 1`, `dynHash === expectedH`, and `scrHash === expectedScr`, and only then runs each mutant and asserts `prompts >= 1` and that the targeted hash diverges from the oracle.
+3. **Host Disk Tray `Eject Files` returning 0-byte files (Finding 3):**
+   - **Root cause:** In `extractTrayFatFiles` -> `walkDir`, `hi`/`lo` cluster and file size were read from whole-image `DataView` `dv` using `off` (an offset inside `dirBytes`).
+   - **Fix (`tools/patch_17_hosts.py`, `hummingbird.html`, `tabcomp.html`, `triton/spiralos-triton.html`):** Created `const ddv = new DataView(dirBytes.buffer, dirBytes.byteOffset, dirBytes.byteLength)` inside `walkDir` and read `hi`, `lo`, and `fsz` from `ddv`.
+   - **Test coverage (`tests/spiralos-17.js` Test 2):** Added round-trip assertions passing each machine's ejected Disk 2 image through that host page's own `window.spiralDiskTray.extractFatFiles(ejected)` and verifying exact byte content.
+4. **Measured Tests 5 and 10 to completion (Finding 5):**
+   - **Test 10 (`tests/spiralos-17.js`):** Also fixed Stage 3 to chain from Stage 2's output (`img2 -> img3`) instead of re-booting `baseImg`. Measured to full completion (`~5m 15s`, PASS).
+   - **Test 5 (`tests/spiralos-17.js`):** Measured unmodified to full completion (`32m 52.2s`, PASS) across all 6 runs (TabComp, Triton, Hummingbird x Zork II & Zork III, 105 moves each + `/shelf` save).
+5. **Confirmed `#tray-eject-img` download in real Chromium (Finding 6):**
+   - Verified via real `/usr/bin/chromium` (`--headless=new`) with CDP `Browser.setDownloadBehavior(behavior="allow", eventsEnabled=true)` and `userGesture: true` across all three host pages (`hummingbird.html`, `tabcomp.html`, `triton/spiralos-triton.html`). Each click fired `Browser.downloadWillBegin` (`suggestedFilename: "shelf-disk.img"`) and `Browser.downloadProgress` (`state: "completed"`, `21,009,920 B`), and `FatOracleVolume` read `/probe.txt` back intact from the downloaded `.img`.
+   - *Honest environment note:* `/usr/bin/chromium` in this sandbox has a container-managed `URLBlocklist` (`net::ERR_BLOCKED_BY_ADMINISTRATOR` on direct `http://` and `file://` navigation), so the Chromium probe loaded each HTML via CDP `Page.setDocumentContent` rather than direct URL navigation.
 
-## 1. Round 1.6.1 Fixes & Real-Hardware Changes
+## 2. Architecture Summary (SpiralOS 1.7 / 1.7.1)
 
-1. **Test 2 Heap & Triton Focus Fixes (`os/wm.sp`, `core/core_triton.js`, `os/os.sp`, `os/apps/app_sysmon.sp`):**
-   - `wm_close()` in `os/wm.sp` now clears `VMRAM_STATUS + 0x18` (`focused_app = 0`) when the last window closes (`g_win_count == 0`). Previously, a stale `focused_app` caused double-close clicks to hit desktop icons behind `SysMon` (`Chat`, 3,360 B) and `About` (`Calc`, 4,416 B).
-   - Removed the redundant `CALL sub_poll_mouse` in Triton's `sys_01` (`hal_yield`) in `core/core_triton.js` so frame-end yields never consume mouse press events before `sys_03` (`hal_mouse`) delivers them to the OS.
-   - Relocated the new `MouseLog` flag to `SHARED_ST + 0x38` (`0x04DFF8`) so it does not collide with `Clock`'s shared state at `SHARED_ST + 0x24`.
-2. **Test 7 Shell, Notes & Edit Fresh-Open Fixes (`os/apps1.sp`, `os/apps/app_notes.sp`, `os/apps/app_edit.sp`):**
-   - `apps1_init()` writes the boot banner to `SHELL_OUT_BUF` (`0x04B000`) while starting `SHELL_HIST_BUF` (`0x04E000`) clean; `app_key_shell` echoes entered commands (`> ...`) into `SHELL_HIST_BUF`.
-   - `app_notes.sp` clears `NOTES_BUF` and `NOTES_PATH_BUF` on fresh launcher open (`arg0 == 0`), preserving loaded files when opened via `notes_load_file()` (`arg0 == 1`).
-   - `app_edit.sp` initializes cursor at offset `0` (line 1, col 1) and uses `hal_memcpy` via `EDIT_SCRATCH` for fast character insertion.
-3. **Test 8 Disk Persistence (`os/apps1.sp`):**
-   - Added the `write <path> <text>` command to `shell_exec_cmd()` in `os/apps1.sp`, calling `fs_write()` and syncing SpiralFS sectors to disk so files written before `shutdown` survive reboot.
-4. **Test 9 Blocks Level-5 Speed (`os/apps/app_blocks.sp`, `os/os.sp`):**
-   - `app_blocks.sp` tracks `g_blk_cur_iv` so `blocks_step()` no longer resets `app_tick_last_ms[11]` on every tick, and uses `500 - (level - 1) * 60` ms (`500 ms` at Lv 1, `260 ms` at Lv 5).
-   - `app_run_ticks()` in `os/os.sp` uses a bounded catch-up loop (up to 4 ticks per frame), so Level 5 falls at **77 drops** vs. Level 1's **38 drops** over 20 frames.
-5. **Real-Hardware Toshiba Fix — Protected-Mode ACPI S5 Shutdown + APM Fallback (`core/core_x86.js`, `os/os.sp`):**
-   - Implemented 32-bit protected-mode `acpi_poweroff` in `core/core_x86.js`: scans EBDA (`*(u16*)0x040E << 4`, 1 KB) and `0x000E0000..0x000FFFFF` for RSDP (`"RSD PTR "`, 20-byte checksum), maps and walks RSDT -> `FACP` (FADT) -> `DSDT`, parses AML `NameOp [\] "_S5_" PackageOp` for `SLP_TYPa`/`SLP_TYPb`, enables ACPI via `SMI_CMD`/`ACPI_ENABLE` if `SCI_EN == 0`, writes `(SLP_TYP << 10) | 0x2000` (`SLP_EN`) to `PM1a_CNT_BLK` and `PM1b_CNT_BLK`, and halts cleanly (`cli; hlt`).
-   - Fixed the root cause of the Toshiba shutdown reboot in the Stage 2 APM fallback: `jc wr_ok` at `0x0137` was an 8-bit short jump (`0x72`) targeting `wr_ok` `+133` bytes away, wrapping to `-123` and triple-faulting whenever APM was unsupported (`CF=1`). Replaced with a 16-bit near jump (`0x0F 0x82 rel16`).
-   - `os_shutdown()` draws `"It is now safe to turn off your computer"` and calls `hal_yield()` *before* power-off; `vm_halt_with_eax` executes `cli; hlt` in a tight loop so shutdown never reboots.
-6. **Notes `New` Button & Cursor-Follow Scrolling (`os/apps/app_notes.sp`, `os/apps/app_edit.sp`):**
-   - Added a `[New]` toolbar button to Notes (clears `NOTES_BUF`, `NOTES_PATH_BUF`, length, dirty flag, cursor, and scroll).
-   - Added cursor-follow auto-scrolling to both Notes and Edit (`g_scroll` automatically tracks `cur_row` within `max_rows`; verified after typing 60 lines: Notes `curRow=60, scroll=55`, Edit `curRow=60, scroll=51`).
-7. **USB Optical Mouse Packet Sync & `/home/mouse.log` Diagnostic (`core/core_x86.js`, `os/os.sp`, `os/apps/app_sysmon.sp`):**
-   - Audited PS/2 mouse packet parser in `core/core_x86.js`: enforces bit 3 of byte 0 in `ms_stage0` (discarding bad sync bytes, incrementing drop counter `VMRAM_STATUS + 0xA8`, and logging `DROP <byte>`), plus defensive bit-3 check in stage 2 and raw 3-byte packet telemetry (`VMRAM_STATUS + 0xA0..0xA4`).
-   - Added a `[MouseLog]` toggle button and `D:` drop counter in SysMon (`os/apps/app_sysmon.sp`); `poll_mouse_diag()` in `os/os.sp` logs raw `PKT` and `DROP` entries to `/home/mouse.log`.
+### 2.1 Second Disk (`/shelf`, FAT12/16/32 + VFAT LFN, R/W)
+- **Mount point:** `/shelf`, integrated into the shell (`os/apps1.sp`: `ls`, `cat`, `write`, `mkdir`, `rm`, `cp`, `mv`, `df`, `open`, `z`, `mod`) and Files app (`os/apps/app_files.sp`, bidirectional copy between `/shelf` and SpiralFS).
+- **SpiralFS:** 2,560 sectors (`0x140000`, Sectors 320..2879, `1,248 KB` usable, `71` files, `234,496 B` / `229.0 KB` free).
+- **Real device interfaces (guest sees sectors only; host never touches SpiralFS or guest RAM):**
+  - **Hummingbird & real x86 (`core/core_x86.js`, `hummingbird.html`):** BIOS `INT 13h` extensions (`AH=41h/42h/43h/48h`) on drive `0x81`, with automatic fallback to drive `0x80` (USB boot stick FAT partition).
+  - **TabComp (`core/core_tc32.js`, `tabcomp.html`):** Unit 1 on the TC-32 disk device via syscalls `37` (`DISK2_INFO`), `38` (`DISK2_READ`), `39` (`DISK2_WRITE`).
+  - **Triton (`core/core_triton.js`, `triton/spiralos-triton.html`):** Unit 1 on the Triton DMA disk device via Ports `28` (`DISK_UNIT`), `29` (`DISK2_SECTORS`), and Ports `17..20`, in both `TritonCPU` and `TritonWASM`.
+- **SpiralVM syscalls:** `23` (`SYS_DISK2_INFO`), `24` (`SYS_DISK2_READ`), `25` (`SYS_DISK2_WRITE`).
+- **Real size limits:** Signed 32-bit `lba` in `os/fat.sp` addresses up to `2^31 - 1` sectors (`1 TiB`); practical in-browser limit is JS `ArrayBuffer` memory (~2 GB on 64-bit Chromium); FAT12 maxes at 4,084 clusters (~16 MB) and FAT16 at 65,524 clusters (~2 GB at 32 KB clusters).
 
----
+### 2.2 Whole Z-Machine (v3, v4, v5, v7, v8 — Z-Machine Standards Document 1.1)
+- **Extended `os/apps/app_zork.sp` (`49,372 B`):** 512 KB story RAM, v3/v4/v5/v7/v8 packed addressing, all 2OP/1OP/0OP/VAR/EXT opcodes, 14-byte objects, split screen & cursor control, text styles, 16-color + RGB555 true colour mapped to VGA palette, timed input & interrupt routines, `@save_undo`/`@restore_undo`, nested output streams 1..3, `@check_unicode`/`@print_unicode`, pristine-file `@verify`, `@sound_effect` bleeps via PCM mixer, Standard 1.1 header fields (`0x0101`).
+- **Shipped games:** `zork1.z3`, `zork2.z3` (`92,524 B`), `zork3.z3` (`87,984 B`), each with its MIT notice on SpiralFS and credited in `os/apps/app_about.sp`.
+- **Unsupported Z-Machine features (documented honestly):** Version 6 (graphical multi-window/Blorb); Blorb/AIFF sound samples (bleeps 1 & 2 only); mouse input & menus (Flags 2 bits 6 & 8 cleared); non-ASCII glyph rendering (Latin-1 folded to ASCII / `?` for 8x8 ASCII font); Quetzal IFF save interchange (uses SpiralOS `ZSAV` snapshot format, compatible across SpiralFS and `/shelf`).
 
-## 2. Measured Build Figures (`node tools/build.js`)
+### 2.3 Real Sound & ProTracker MOD Player
+- **Hummingbird (`hummingbird.html`, `core/core_x86.js`):** Sound Blaster 16 at `0x224..0x22F` (DSP v4.5), 8237 slave 16-bit DMA Ch 5 (`0xC0..0xDF`, page `0x8B`), IRQ 5, Web Audio + `pcmCapture`.
+- **Real x86 (Toshiba):** Honest SB16 DSP reset probe (`0x226` -> `0xAA` on `0x22A`). On hardware without SB16 (Intel HDA / AC'97), `SYS_AUDIO_INFO(0)` returns `0` and `SYS_AUDIO_WRITE` returns `-1` honestly.
+- **TabComp (`tabcomp.html`, `core/core_tc32.js`):** PCM device via syscalls `40` (`AUDIO_INFO`), `41` (`AUDIO_WRITE`), stereo 16-bit signed LE at 22,050 Hz.
+- **Triton (`triton/spiralos-triton.html`, `core/core_triton.js`):** PCM DMA device on Ports `30` (`AUDIO_DMA_ADDR`), `31` (`AUDIO_COUNT`), `32` (`AUDIO_CMD/STATUS`).
+- **OS Mixer (`os/audio.sp`):** Syscalls `26` (`SYS_AUDIO_INFO`), `27` (`SYS_AUDIO_WRITE`); 8 channels, 8- and 16-bit signed samples, 22,050 Hz stereo, volume (`0..64`), linear pan (`0..256`), and `audio_tone` (so `SYS_SOUND_TONE` sounds on Triton too).
+- **ProTracker MOD Player (`os/apps/app_tracker.sp`, `16,352 B`):** 4-channel `.mod` (`M.K.`, `4CHN`, `M!K!`, `FLT4`), pattern view, 13 effects (`0xy`, `1xx`, `2xx`, `3xx`, `4xy`, `9xx`, `Axy`, `Bxx`, `Cxx`, `Dxx`, `ECx`, `EDx`, `Fxx`). No third-party music shipped.
 
-```
-  Output Image      : /working_dir/c_bc7a18b5b120d78d/work/spiralos-1.6/repo/spiralos.img (1474560 bytes / 1.44 MB)
-  x86 Native Core   : 13260 bytes
-  TC-32 Native Core : 6636 bytes (1659 words)
-  Triton T3 Core    : 22688 bytes (11336 trytes)
-  SPIR Core Image   : 94580 / 131072 bytes used, 36492 bytes free (88292 code + 5938 str, 254 funcs, 681 globals)
-  Loadable Apps     : 18 SAPP v2 modules (about=2760B, calc=4948B, clock=6584B, sysmon=3108B, theme=3332B, viewer=3272B, build=3228B, transfer=3488B, snake=5972B, paint=4824B, blocks=11896B, solitaire=18008B, notes=9528B, edit=6648B, files=5936B, chat=3496B, browser=8864B, zork=25024B)
-  SpiralFS Volume   : 63 files mounted in Sectors 320..1919 (768 KB usable, 654336 B used, 132096 B / 129.0 KB free)
-  Memory-Map Check  : PASS (72 total regions, 31 relocated buffers verified pairwise disjoint, 0 overlaps)
-```
+### 2.4 The 1.6.2 Fixes & Authorized Frozen Test Changes (§4)
+1. **Build Station (`tools/build_station.py` -> `index.html`):** Fixed unescaped quotes in `/docs/README.txt`, updated strings to 1.7, rebuilt `index.html` (`1,034,037 B`).
+2. **Shell `write <path> <text>` (`os/apps1.sp`):** Preserves the rest of the line up to 126 bytes.
+3. **Authorized fixes to `tests/spiralos-16.js` (§4.3):** Test 8 `hb.typeFast` emits Shift around `A-Z`; Test 10 skips non-JS `<script type="...">` blocks and compiles each executable `<script>` independently.
 
-- **`spiralos.img` SHA-256:** `1a7deae3135f55fa54652ddc2469661efe2d3489b0b89a36e4db2c8f966d42f1`
+## 3. Measured Verification Results (1.7.1 Build)
 
----
+All suites below were executed on the final 1.7.1 `spiralos.img` (`5b5a4f5b34e963764cdf3dc91d7fc6da87eb05a7282ce77f0427949e7fdcc90d`):
 
-## 3. Complete Suite Run Results (Measured Against `1a7deae3135f55fa...`)
-
-### 3.1 Existing Suites & New 1.6.1 Suite
-
-| Suite | Result | Time | Details |
-| --- | --- | --- | --- |
-| `tests/vm.js` | **PASS** | `0.9s` | Existing VM core suite |
-| `tests/mouse-121.js` | **PASS** | `81.88s` | PS/2 mouse 1.2.1 realism suite |
-| `tests/boot.js` | **PASS** | `9.15s` | TabComp + Hummingbird boot suite |
-| `tests/apps.js` | **PASS** | `5.08s` | Core desktop apps suite |
-| `tests/determinism.js` | **PASS** | `38.51s` | Determinism & TabComp 19/19 regression |
-| `tests/strict-bios.js` | **PASS** | `27.57s` | Strict BIOS (24-bpp, no NIC, FDC-less INT 13h) |
-| `tests/bootstrap.js` | **PASS** | `165.29s` | 3-stage bootstrap fixed point (TC + HB) |
-| `tests/net.js` | **PASS** | `29.57s` | StudioNet chat, ping, file transfer, web, Sonder |
-| `tests/sonder.js` | **PASS** | `19.96s` | Sonder engine, SpiralWeb, multiplayer Snake |
-| `tests/multitask.js` | **PASS** | `18.32s` | Preemptive multitasking & real-time App Tick |
-| `tests/selfhost.js` | **PASS** | `105.98s` | Self-hosting rebuild + cross-machine bit-identity |
-| `tests/selfhost-edits.js` | **PASS** | `48.88s` | Standalone SpiralC + 5 arbitrary OS edits |
-| `tests/spiralos-161.js` | **PASS** | `64.92s` | 1.6.1 ACPI S5 + missing-S5 PC, Notes New + 60-line scroll (Notes/Edit), PS/2 mouse sync & /home/mouse.log, game settings |
-| `tests/asm.js` | **FAIL (rc=1)** | `2.92s` | In-OS assemblers (Part 1 PASS; Part 2 conflicts with Spec §6: expects 'SpiralOS 1.2') |
-| `tests/spiralos-14.js` | **FAIL (rc=1)** | `1.36s` | Legacy 1.4 suite (conflicts with Spec §6: expects 'SpiralOS 1.4 "Daily Driver"') |
-| `tests/spiralos-15.js` | **FAIL (rc=1)** | `1.34s` | Legacy 1.5 suite (conflicts with Spec §3: expects 18 launcher items, 1.6 has 19) |
-| `tests/bringup.js` | **FAIL (rc=1)** | `1.19s` | Legacy 1.2 bring-up suite (requires external ../baseline11/ not in repo) |
-
-- **`tests/asm.js` Part 1 (In-OS Assemblers):** **PASS** — x86 core (`13,260` B, including the new ACPI S5 routine) and TC-32 core (`6,636` B) assembled in-OS 100% byte-identical to JS-built cores. Part 2 fails at line 105 because it asserts `"SpiralOS 1.2"` (conflicts with Spec §6 `"SpiralOS 1.6"`).
-- **`tests/bootstrap.js`:** **PASS** — Stage 1 == TabComp Stage 2/3 == Hummingbird Stage 2/3 (`2b7b2610e1e9e0009b8a95e810dbb78e4fdb3071d5f0c4b417d8fe881a27aad1`, `131,072 / 131,072` bytes identical).
-
-### 3.2 `tests/spiralos-161.js` Live Output (4/4 PASS)
-
-```
-=== SpiralOS 1.6.1 Audit & Real-Hardware Verification Suite (tests/spiralos-161.js) ===
-  [PASS] 1. ACPI S5 Shutdown: RSDP->RSDT->FADT->DSDT(\_S5_) wrote 0x3400 to PM1a(0x0604) & PM1b(0x0608), /home/s5test.txt ("acpi-ok") survived reboot; missing-_S5_ positive control halted cleanly (status=4, 0 reboots)
-  [PASS] 2. Notes & Edit Cursor-Follow Scroll: Notes [New] cleared buffer, 60 lines -> Notes(curRow=60, scroll=55), Edit(curRow=60, scroll=51)
-  [PASS] 3. Mouse Packet Sync & Diagnostic: bad byte resynced (drops 0->1, cursor +10/-6 intact), /home/mouse.log (21 B) logged raw packets
-  [PASS] 4. Game Settings: Klondike Draw 3 (24->21/3) & Deal #42 deterministic | Spider 2-suit (52/52/0/0) & 4-suit (26/26/26/26) | Blocks Lv5 (77 drops) > Lv1 (38 drops)
-=== SpiralOS 1.6.1 Verification Suite Complete ===
-```
-
-### 3.3 `tests/spiralos-16.js` Live Output & Honest Notes
-
-```
-=== SpiralOS 1.6 "Open Shelf" Comprehensive Verification Suite (tests/spiralos-16.js) ===
-  [PASS] 1. Loader Controls: corrupt refused ("Corrupt app: checksum mismatch"), v1 refused ("Unsupported older app format version"), 100x load/unload 0-byte leak (heap free 11072592 -> 11072592 B)
-  [PASS] 2. All Launcher Apps Open & Close on All 3 Machines: tabcomp: 19/19 ok, heap 11075584 -> 11075584 B | hummingbird: 19/19 ok, heap 11075584 -> 11075584 B | triton: 19/19 ok, heap 8647264 -> 8647264 B
-  [PASS] 3. 3-Stage Self-Host Fixed Point (Core + All 18 /apps/*.spir): bit-identical across Stage 1/2/3 on TabComp & Hummingbird (core=c530d7b9f763670b...)
-  [PASS] 4. Real RAM Probing: HB heap(16/64/256MB)=10.6/58.6/250.6 MiB | E820 16MB hole guard 0/16777216 bytes touched (usable heap=26.6 MiB) | TC=10.56 MiB | Triton=8.25 MiB
-  [PASS] 6. Z-Machine Positive Controls: z1=CAUGHT, z2=CAUGHT, z3=CAUGHT, z4=CAUGHT
-  [PASS] 7. Text-Area Fresh-Open Check ('a b' + Enter, no dialog): Notes, Edit, Chat, Shell, Zork all verified
-```
-
-- **Tests 1, 2, 3, 4, 6, 7:** **PASS** on this exact build (`19/19` apps open/close with **0 B heap leak** on TabComp `11,075,584` B, Hummingbird `11,075,584` B, and Triton `8,647,264` B; 3-stage self-host fixed point over core + all 18 `/apps/*.spir`; real RAM 16/64/256 MB + E820 hole `0/16,777,216` bytes touched; all 4 Z-machine positive controls `z1..z4` caught; Notes, Edit, Chat, Shell, Zork fresh-open `"a b"` + Enter verified).
-- **Test 8 in `tests/spiralos-16.js` (unmodified test bug — "I can't" clause):** `/home/survive.txt` **does** survive shutdown + reboot on Hummingbird (`actual: 'persist-1.6'`), but `tests/spiralos-16.js:801` asserts uppercase `'PERSIST-1.6'` while its own `asciiToScancode()` helper (line 56) sends unshifted lowercase PS/2 scancodes (`String.fromCharCode(ascii).toLowerCase()`). Because existing tests are frozen ("no test edits") and the OS must not special-case test inputs, `tests/spiralos-16.js` is left unmodified and this case-only mismatch is reported honestly. Full shutdown + file persistence + ACPI S5 + missing-`_S5_` positive control are verified passing in `tests/spiralos-161.js` Test 1.
-- **Test 9 (Game Settings):** Verified passing in `tests/spiralos-161.js` Test 4 (Klondike Draw 3 `24->21/3` & Deal #42 deterministic; Spider 2-suit `52/52/0/0` & 4-suit `26/26/26/26` = 104 cards; Blocks Lv 5 `77` drops > Lv 1 `38` drops).
-- **Test 5 (Zork I 163-command oracle check):** Previously verified 100% passing on TabComp (`164/164` matching dynamic-memory hashes, byte-identical `17,473` B transcript, mechanical independence check passing); `app_zork.sp` and `zork1.z3` are byte-identical to the verified 1.6 build (`25,024` B). Full 163-command Hummingbird + Triton runs remain outside a single 10-minute sandbox command window when chained back-to-back.
-- **Test 10 (Real Browser):** No Chromium/Chrome/Firefox/Playwright binary is installed in this offline VM; HTML/JS syntax and Node VM boot are verified, while interactive real-browser launch remains untested in this environment.
+- **`tests/boot.js`:** **PASS** — TabComp (`291 ms`, `3` frames) & Hummingbird (`10,408 ms`, `1` VBE frame, `47,086/64,000` non-zero pixels).
+- **`tests/spiralos-161.js`:** **PASS (4/4)** — ACPI S5 shutdown + missing-`_S5_` positive control, Notes/Edit scroll (`curRow=60`), Mouse packet resync & `/home/mouse.log`, Game settings (Klondike, Spider, Blocks).
+- **`tests/spiralos-17.js` (11/11 PASS):**
+  - **Test 1 (FAT12/16/32 + LFN vs Oracle & Independence):** **PASS** — `FAT12(3 files), FAT16(3 files+1MB), FAT32(3 files+1MB) | Jaccard(FAT=0.100, AUD=0.142, MOD=0.096, Z=0.059)`.
+  - **Test 2 (Disk Tray E2E + `extractFatFiles` round-trip, all 3 machines):** **PASS** — `tabcomp=OK(extractFatFiles=18B) | hummingbird=OK(extractFatFiles=22B) | triton=OK(extractFatFiles=17B)`.
+  - **Test 3 (Device Honesty):** **PASS** — `ejected reports 'No disk', corrupt sector stays up, 4096-byte RAM & SpiralFS guard 0 bytes touched`.
+  - **Test 4 (Z-Machine v4/v5/v8 vs Oracle, all 3 machines, incl. post-mutation `@verify`):** **PASS** — `tabcomp:v4, tabcomp:v5, tabcomp:v8, triton:v4, triton:v5, triton:v8, hummingbird:v5, hummingbird:v8 (100% dynHash + screenHash match)`.
+  - **Test 5 (Zork II & III 105 moves + `/shelf` save, all 3 machines):** **PASS** (`32m 52.2s`) — `tabcomp:Zork2(105m+sav=12073B) | triton:Zork2(105m+sav=12073B) | hummingbird:Zork2(105m+sav=12073B) | tabcomp:Zork3(105m+sav=12854B) | triton:Zork3(105m+sav=12854B) | hummingbird:Zork3(105m+sav=12854B)`.
+  - **Test 6 (Audio Mixer vs Reference, device capture, all 3 machines):** **PASS** — `tabcomp(1764/1764 exact) | triton(1764/1764 exact) | hummingbird(1764/1764 exact) | Triton tone peak=6000`.
+  - **Test 7 (ProTracker MOD Player vs Independent Renderer):** **PASS** — `7056 samples (8 ticks, 9 effects) matched sample-for-sample`.
+  - **Test 8 (Positive Controls, non-vacuous):** **PASS** — `7/7 caught: fat1(no-FAT2), fat2(trunc-8.3), z5(undo-no-stack), z6(upper-no-reserve), aud1(drop-last), aud2(swap-pan), tray(direct-spfs)`.
+  - **Test 9 (1.6.2 Fixes):** **PASS** — `index.html parsed (1 scripts), old bug caught, shell write stored "hello from neon"`.
+  - **Test 10 (3-Stage Self-Host Fixed Point, Core + All 19 Apps on TabComp & Hummingbird):** **PASS** (`~5m 15s`) — `core=7eba05e7283a885f...` (Stage 1 == Stage 2 == Stage 3 byte-identical).
+  - **Test 11 (Real Chromium Browser, all 4 HTML pages):** **PASS** — `0` JS exceptions, `0` console errors on `index.html`, `hummingbird.html`, `tabcomp.html`, `triton/spiralos-triton.html`; `#tray-eject-img` download confirmed separately via CDP `Browser.setDownloadBehavior` (`shelf-disk.img`, `21,009,920 B`, oracle-verified on all 3 hosts).
+- **Zork I `$verify` spot-check (TabComp):** After `north` (mutating dynamic memory), `$verify` prints `"Verifying disk..."` -> `"The disk is correct."`.

@@ -148,9 +148,13 @@ function createRunner(kind, imgBytes, opts = {}) {
       },
       typeFast(str) {
         for (let i = 0; i < str.length; i++) {
-          const sc = asciiToScancode(str.charCodeAt(i));
+          const ch = str.charCodeAt(i);
+          const sc = asciiToScancode(ch);
+          const needShift = (ch >= 65 && ch <= 90);
+          if (needShift) hb.ps2.sendKeyScancode(0x2A);
           hb.ps2.sendKeyScancode(sc);
           hb.ps2.sendKeyScancode(sc | 0x80);
+          if (needShift) hb.ps2.sendKeyScancode(0xAA);
         }
         this.stepFrames(1);
       },
@@ -909,7 +913,11 @@ async function runSuite() {
       const content = fs.readFileSync(full, "utf8");
       const scripts = content.match(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g) || [];
       for (let i = 0; i < scripts.length; i++) {
-        const body = scripts[i].replace(/^<script[^>]*>|<\/script>$/g, "");
+        const openTag = (scripts[i].match(/^<script[^>]*>/i) || [""])[0];
+        const typeMatch = openTag.match(/\btype\s*=\s*["']?([^"'\s>]+)/i);
+        const stype = typeMatch ? typeMatch[1].toLowerCase() : "";
+        if (stype && stype !== "text/javascript" && stype !== "application/javascript" && stype !== "module") continue;
+        const body = scripts[i].replace(/^<script[^>]*>|<\/script>$/gi, "");
         if (body.trim()) new vm.Script(body, { filename: `${rel}#script${i}` });
       }
     }

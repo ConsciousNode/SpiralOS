@@ -9,7 +9,7 @@
 
 // from spiralos/os/fs.sp:1-123
 const FS_MAX_ENTRIES = 127;
-const SPFS_SIZE      = 0xC8000;
+const SPFS_SIZE      = 0x140000;
 const SPFS_HOLE_LO   = 0x50000;
 const SPFS_HOLE_HI   = 0x58000;
 

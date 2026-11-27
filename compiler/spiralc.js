@@ -93,10 +93,10 @@ const SPIR_MAGIC     = 0x52495053;
 const SAPP_MAGIC     = 0x50504153; // 'SAPP'
 const SAPP_VERSION   = 2;
 const SAPP_STR_BASE  = 0x000040;
-const SAPP_CODE_BASE = 0x000240;
+const SAPP_CODE_BASE = 0x000400;
 const SAPP_MAX_SIZE  = 0x010000;   // 64 KB max app module // 'SPIR'
 const SPIR_STR_BASE  = 0x000020;
-const SPIR_CODE_BASE = 0x001890;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
+const SPIR_CODE_BASE = 0x002000;   // String pool base in 128KB SPIR image (114,688 .. 131,071)
 const SPIR_MAX_SIZE  = 0x020000;   // 128 KB total SPIR image size
 
 function expandImports(entryPath, readFileTextFn) {

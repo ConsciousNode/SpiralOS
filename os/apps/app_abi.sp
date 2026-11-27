@@ -16,6 +16,11 @@ int hal_strcmp(int a, int b) { return sys(18, a, b); }
 int hal_strlen(int s) { return sys(19, s); }
 int hal_itoa(int v, int b, int r) { return sys(20, v, b, r); }
 int hal_date() { return sys(22); }
+int hal_disk2_info(int cmd) { return sys(23, cmd); }
+int hal_disk2_read(int lba, int cnt, int dst) { return sys(24, lba, cnt, dst); }
+int hal_disk2_write(int lba, int cnt, int src) { return sys(25, lba, cnt, src); }
+int hal_audio_info(int cmd) { return sys(26, cmd); }
+int hal_audio_write(int src, int frames) { return sys(27, src, frames); }
 int abi_fs_find(int p) { return icall(p, r32(ABI_BASE + 0 * 4)); }
 int abi_fs_count() { return icall(r32(ABI_BASE + 1 * 4)); }
 int abi_fs_nth(int n) { return icall(n, r32(ABI_BASE + 2 * 4)); }
@@ -95,3 +100,25 @@ int abi_field_key(int b, int l, int ml, int a) { return icall(b, l, ml, a, r32(A
 void abi_open_app(int id) { icall(id, r32(ABI_BASE + 46 * 4)); }
 int abi_sns_resolve(int h) { return icall(h, r32(ABI_BASE + 57 * 4)); }
 void abi_web_set_page_buf(int p, int l) { icall(p, l, r32(ABI_BASE + 58 * 4)); }
+const APP_LAUNCH_PATH_BUF = 0x047B40;
+const FAT_LIST_BUF_ADDR   = 0x047600;
+int abi_fat_mount() { return icall(r32(ABI_BASE + 59 * 4)); }
+int abi_fat_ensure() { return icall(r32(ABI_BASE + 60 * 4)); }
+int abi_fat_stat(int p) { return icall(p, r32(ABI_BASE + 61 * 4)); }
+int abi_fat_read(int p, int d, int m) { return icall(p, d, m, r32(ABI_BASE + 62 * 4)); }
+int abi_fat_write(int p, int s, int l) { return icall(p, s, l, r32(ABI_BASE + 63 * 4)); }
+int abi_fat_append(int p, int s, int l) { return icall(p, s, l, r32(ABI_BASE + 64 * 4)); }
+int abi_fat_mkdir(int p) { return icall(p, r32(ABI_BASE + 65 * 4)); }
+int abi_fat_delete(int p) { return icall(p, r32(ABI_BASE + 66 * 4)); }
+int abi_fat_rename(int o, int n) { return icall(o, n, r32(ABI_BASE + 67 * 4)); }
+int abi_fat_list(int d, int b, int m) { return icall(d, b, m, r32(ABI_BASE + 68 * 4)); }
+int abi_audio_caps() { return icall(r32(ABI_BASE + 69 * 4)); }
+int abi_audio_rate() { return icall(r32(ABI_BASE + 70 * 4)); }
+void abi_audio_reset() { icall(r32(ABI_BASE + 71 * 4)); }
+void abi_audio_ch_play(int ch, int ptr, int len, int bits, int step_fp, int vol, int pan, int ls, int ll) { icall(ch, ptr, len, bits, step_fp, vol, pan, ls, ll, r32(ABI_BASE + 72 * 4)); }
+void abi_audio_ch_stop(int ch) { icall(ch, r32(ABI_BASE + 73 * 4)); }
+void abi_audio_ch_vol_pan(int ch, int vol, int pan) { icall(ch, vol, pan, r32(ABI_BASE + 74 * 4)); }
+void abi_audio_ch_step(int ch, int step_fp) { icall(ch, step_fp, r32(ABI_BASE + 75 * 4)); }
+int abi_audio_mix_render(int dst, int nf) { return icall(dst, nf, r32(ABI_BASE + 76 * 4)); }
+int abi_audio_mix_submit(int nf) { return icall(nf, r32(ABI_BASE + 77 * 4)); }
+int abi_audio_tone(int freq, int dur) { return icall(freq, dur, r32(ABI_BASE + 78 * 4)); }

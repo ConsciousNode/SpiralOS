@@ -1385,10 +1385,14 @@ int cc_compile_core(int src_ptr, int src_len, int dst_buf, int str_base, int max
   g_cc_out_buf = dst_buf;
   g_cc_str_base = str_base;
   g_cc_max_size = max_size;
-  if (str_base == 0x0020) {
-    g_cc_code_base = 0x001890;
+  if (g_cc_is_mod == 1) {
+    g_cc_code_base = 0x000400;
     g_cc_code_limit = max_size;
-    g_cc_str_limit = 0x001890;
+    g_cc_str_limit = 0x000400;
+  } else if (str_base == 0x0020) {
+    g_cc_code_base = 0x002000;
+    g_cc_code_limit = max_size;
+    g_cc_str_limit = 0x002000;
   } else {
     g_cc_code_base = 0x0020;
     g_cc_code_limit = str_base;
@@ -1796,6 +1800,7 @@ int cc_exec_standalone(int spir_buf) {
 
 int cc_compile_app(int src_ptr, int src_len, int dst_buf) {
   g_cc_is_mod = 1;
+  g_cc_reloc_cnt = 0;
   int sz = cc_compile_core(src_ptr, src_len, dst_buf, 0x0040, 0x010000, 1);
   g_cc_is_mod = 0;
   return sz;

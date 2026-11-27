@@ -780,6 +780,11 @@ function buildTC32Core(customBanner = "SpiralOS 1.6") {
   emitI(0x1B, 0, 6, 20); emitJ(0x27, "sys_20_itoa");
   emitI(0x1B, 0, 6, 21); emitJ(0x27, "sys_21_task_spawn");
   emitI(0x1B, 0, 6, 22); emitJ(0x27, "sys_22_date");
+  emitI(0x1B, 0, 6, 23); emitJ(0x27, "sys_23_disk2_info");
+  emitI(0x1B, 0, 6, 24); emitJ(0x27, "sys_24_disk2_read");
+  emitI(0x1B, 0, 6, 25); emitJ(0x27, "sys_25_disk2_write");
+  emitI(0x1B, 0, 6, 26); emitJ(0x27, "sys_26_audio_info");
+  emitI(0x1B, 0, 6, 27); emitJ(0x27, "sys_27_audio_write");
 
   emitImm32(0, -1);
   emitJ(0x26, "sys_push_r0");
@@ -1122,7 +1127,7 @@ function buildTC32Core(customBanner = "SpiralOS 1.6") {
   label("sys_11_reboot");
   emitImm32(0, 0x00400000);
   emitImm32(1, 0);
-  emitImm32(2, 1920);
+  emitImm32(2, 2880);
   emitSys(35);
   emitImm32(0, 0x00400000);
   emitSys(36);
@@ -1361,6 +1366,44 @@ function buildTC32Core(customBanner = "SpiralOS 1.6") {
 
   label("sys_22_date");
   emitImm32(0, 0);
+  emitJ(0x26, "sys_push_r0");
+
+  // SYS 23: DISK2_INFO(cmd) -> TC-32 SYS 37
+  label("sys_23_disk2_info");
+  emitI(0x20, 0, 7, 0);
+  emitSys(37);
+  emitJ(0x26, "sys_push_r0");
+
+  // SYS 24: DISK2_READ(lba, count, dst_vm_ptr) -> TC-32 SYS 38
+  label("sys_24_disk2_read");
+  emitI(0x20, 0, 7, 0);
+  emitI(0x20, 1, 7, 4);
+  emitI(0x20, 2, 7, 8);
+  emitR(0x05, 2, 2, 8);
+  emitSys(38);
+  emitJ(0x26, "sys_push_r0");
+
+  // SYS 25: DISK2_WRITE(lba, count, src_vm_ptr) -> TC-32 SYS 39
+  label("sys_25_disk2_write");
+  emitI(0x20, 0, 7, 0);
+  emitI(0x20, 1, 7, 4);
+  emitI(0x20, 2, 7, 8);
+  emitR(0x05, 2, 2, 8);
+  emitSys(39);
+  emitJ(0x26, "sys_push_r0");
+
+  // SYS 26: AUDIO_INFO(cmd) -> TC-32 SYS 40
+  label("sys_26_audio_info");
+  emitI(0x20, 0, 7, 0);
+  emitSys(40);
+  emitJ(0x26, "sys_push_r0");
+
+  // SYS 27: AUDIO_WRITE(src_vm_ptr, num_frames) -> TC-32 SYS 41
+  label("sys_27_audio_write");
+  emitI(0x20, 0, 7, 0);
+  emitR(0x05, 0, 0, 8);
+  emitI(0x20, 1, 7, 4);
+  emitSys(41);
   emitJ(0x26, "sys_push_r0");
 
   // ==========================================================================

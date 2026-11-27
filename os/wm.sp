@@ -27,6 +27,7 @@ const APP_CHAT     = 12;
 const APP_TRANSFER = 13;
 const APP_BROWSER  = 14;
 const APP_ZORK     = 20;
+const APP_TRACKER  = 21;
 
 int win_used[16];
 int win_app[16];

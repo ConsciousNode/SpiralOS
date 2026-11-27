@@ -268,6 +268,7 @@ if (app_id == APP_SYSMON)    return "/apps/sysmon.spir";
 if (app_id == APP_FILES)     return "/apps/files.spir";
 if (app_id == APP_BUILD)     return "/apps/build.spir";
 if (app_id == APP_ZORK)      return "/apps/zork.spir";
+if (app_id == APP_TRACKER)   return "/apps/tracker.spir";
 return 0;
 }
 int app_attach_to_win(int wid, int app_id, int arg0) {
@@ -377,4 +378,24 @@ w32(ABI_TABLE_ADDR + 55 * 4, fn_addr(srrp_append_int));
 w32(ABI_TABLE_ADDR + 56 * 4, fn_addr(srrp_kv));
 w32(ABI_TABLE_ADDR + 57 * 4, fn_addr(sns_resolve));
 w32(ABI_TABLE_ADDR + 58 * 4, fn_addr(web_set_page_buf));
+w32(ABI_TABLE_ADDR + 59 * 4, fn_addr(fat_mount));
+w32(ABI_TABLE_ADDR + 60 * 4, fn_addr(fat_ensure_mounted));
+w32(ABI_TABLE_ADDR + 61 * 4, fn_addr(fat_stat));
+w32(ABI_TABLE_ADDR + 62 * 4, fn_addr(fat_read_file));
+w32(ABI_TABLE_ADDR + 63 * 4, fn_addr(fat_write_file));
+w32(ABI_TABLE_ADDR + 64 * 4, fn_addr(fat_append_file));
+w32(ABI_TABLE_ADDR + 65 * 4, fn_addr(fat_mkdir));
+w32(ABI_TABLE_ADDR + 66 * 4, fn_addr(fat_delete));
+w32(ABI_TABLE_ADDR + 67 * 4, fn_addr(fat_rename));
+w32(ABI_TABLE_ADDR + 68 * 4, fn_addr(fat_list_dir));
+w32(ABI_TABLE_ADDR + 69 * 4, fn_addr(audio_caps));
+w32(ABI_TABLE_ADDR + 70 * 4, fn_addr(audio_rate));
+w32(ABI_TABLE_ADDR + 71 * 4, fn_addr(audio_reset));
+w32(ABI_TABLE_ADDR + 72 * 4, fn_addr(audio_ch_play));
+w32(ABI_TABLE_ADDR + 73 * 4, fn_addr(audio_ch_stop));
+w32(ABI_TABLE_ADDR + 74 * 4, fn_addr(audio_ch_set_vol_pan));
+w32(ABI_TABLE_ADDR + 75 * 4, fn_addr(audio_ch_set_step));
+w32(ABI_TABLE_ADDR + 76 * 4, fn_addr(audio_mix_render));
+w32(ABI_TABLE_ADDR + 77 * 4, fn_addr(audio_mix_submit));
+w32(ABI_TABLE_ADDR + 78 * 4, fn_addr(audio_tone));
 }

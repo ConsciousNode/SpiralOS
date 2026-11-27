@@ -342,7 +342,7 @@ function emitPicPit(x, toBios) {
   }
 }
 
-function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000, rmProbeRamAddr = 0x00008000, opts = {}) {
+function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector().readRangeAddr, pmBiosRead2RetAddr = 0x00008000, rmProbeRamAddr = 0x00008000, rmDisk2Addr = 0x00008000, opts = {}) {
   const b = new Uint8Array(512);
   const dv = new DataView(b.buffer);
   let p = 0;
@@ -481,16 +481,14 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   // 0x20: 16-bit Data segment (base 0, limit 64KB, 0x92, 0x00)
   b.set([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0x00, 0x00], 0x108 + 32);
 
-  // Offset 0x0130 (phys 0x7F30): Real-Mode APM 1.2 Power-Off Helper (14 bytes, near jumps)
+  // Offset 0x0130 (phys 0x7F30): Real-Mode Dispatch to rm_disk2_io (handles 0xFFFF APM & 0xFFFE Disk2)
   p = 0x0130;
   const apmHelperOff = p;
-  put(0xB8); put16(0x5301);          // mov ax, 0x5301 (APM real-mode connect)
-  put(0x31, 0xDB);                   // xor bx, bx
-  put(0xCD, 0x15);                   // int 15h
-  put(0x0F, 0x82);                   // jc near wr_ok (APM unsupported -> return cleanly)
-  const jcApmFail1 = p; put16(0);
-  put(0xE9);                         // jmp near apm_step2
-  const jmpApm2Pos = p; put16(0);
+  const callD2Pos = p;
+  put(0xE8); put16(0);               // call rm_disk2_io
+  dv.setInt16(callD2Pos + 1, (rmDisk2Addr - 0x7E00) - (callD2Pos + 3), true);
+  const jmpD2Done = p;
+  put(0xE9); put16(0);               // jmp near wr_ok
 
   // --------------------------------------------------------------------------
   // Offset 0x0140 (phys 0x7F40): Real-Mode BIOS INT 13h AH=03h Write & APM Thunk
@@ -511,11 +509,10 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0xBC); put16(0x7C00);          // mov sp, 0x7C00
   put(0x0F, 0x01, 0x1E); put16(0x7FF0); // lidt [0x7FF0] (Real-Mode IVT)
 
-  // Compute CHS from LBA at [0x57FC] (or APM 1.2 power-off when [0x57FC] == 0xFFFF)
+  // Compute CHS from LBA at [0x57FC] (0xFFFF = APM power-off, 0xFFFE = Disk2 INT 13h ext)
   put(0xA1); put16(0x57FC);          // mov ax, [0x57FC]
-  put(0x40);                         // inc ax (0xFFFF -> 0)
-  put(0x74, (apmHelperOff - (p + 2)) & 0xFF); // jz apmHelperOff
-  put(0x48);                         // dec ax
+  put(0x3D); put16(0xFFFE);          // cmp ax, 0xFFFE
+  put(0x73, (apmHelperOff - (p + 2)) & 0xFF); // jae apmHelperOff
   put(0x8A, 0x1E); put16(0x7D90);    // mov bl, [0x7D90] (sectors per track, saved by stage 1)
   put(0xF6, 0xF3);                   // div bl -> al = track, ah = sect - 1
   put(0x88, 0xE1);                   // mov cl, ah
@@ -564,18 +561,8 @@ function buildStage2Loader(pmBiosWriteRetAddr, readRangeAddr = buildBootSector()
   put(0x75, (wrRetry - (p + 2)) & 0xFF);
   const jmpWrFailPos = p + 1;
   put(0xEB, 0);                      // jmp wr_ok
-  // apm_step2:
-  dv.setInt16(jmpApm2Pos, p - (jmpApm2Pos + 2), true);
-  put(0xB8); put16(0x530E);          // mov ax, 0x530E (APM driver version 1.2)
-  put(0x31, 0xDB);                   // xor bx, bx
-  put(0xB9); put16(0x0102);          // mov cx, 0x0102
-  put(0xCD, 0x15);                   // int 15h (530Eh driver version 1.2)
-  put(0xB8); put16(0x5307);          // mov ax, 0x5307 (set power state)
-  put(0x43);                         // inc bx (0 -> 1, all devices; saves 2B)
-  put(0xB9); put16(0x0003);          // mov cx, 0x0003 (Off)
-  put(0xCD, 0x15);                   // int 15h
   // wr_ok: return to 32-bit Protected Mode with Paging!
-  dv.setInt16(jcApmFail1, p - (jcApmFail1 + 2), true);
+  dv.setInt16(jmpD2Done + 1, p - (jmpD2Done + 3), true);
   b[jncWrPos] = (p - (jncWrPos + 1)) & 0xFF;
   b[jmpWrFailPos] = (p - (jmpWrFailPos + 1)) & 0xFF;
   put(0xFA);                            // cli (BIOS INT 13h/15h may have re-enabled IF!)
@@ -616,6 +603,7 @@ function buildProtectedModeCore(opts = {}) {
   const ADDR_KEY_EVENT   = 0x7028;
   const ADDR_HAS_SNET    = 0x7030;
   const ADDR_HAS_FDC     = 0x7034;
+  const ADDR_HAS_SB16    = 0x703C;
   const ADDR_VM_RAM_SIZE = 0x7038;
 
   // ==========================================================================
@@ -641,7 +629,10 @@ function buildProtectedModeCore(opts = {}) {
   x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
   x.repMovsd();
 
-  // Read Batch 2 (Sectors 960..1919, 480 KB) via 16-bit Real-Mode Read Thunk at 0x0018:0x00007EC5
+  // Batch-2 (Sectors 960..1919) then Batch-3 (Sectors 1920..2879) via Real-Mode Read Thunk
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.movMemReg32(R.EAX, 0x51EC, R.EAX);
+  x.label("pm_bios_read_batch_go");
   x.cli();
   // KEHAI REAL-HW FIX 2: a real CPU keeps each segment's cached attributes across the drop to
   // real mode. SS still held the 32-bit data descriptor (B=1), so the BIOS's stack ran on ESP
@@ -668,9 +659,20 @@ function buildProtectedModeCore(opts = {}) {
   x.u8(0x8E); x.u8(0xE8);
   x.movRegImm32(R.ESP, 0x00098000);
   x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8);
-  // Copy Batch 2 (Sectors 960..1919, 480 KB) from 0x00010000 to 0x00478000 (vmRam[0x278000..0x2EFFFF])
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, 0x51EC);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("pm_copy_batch3");
   x.movRegImm32(R.ESI, 0x00010000);
   x.movRegImm32(R.EDI, 0x00478000);
+  x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
+  x.repMovsd();
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movMemImm32(R.EDX, 0x51EC, 1);
+  x.jmpLabel("pm_bios_read_batch_go");
+  x.label("pm_copy_batch3");
+  x.movRegImm32(R.ESI, 0x00010000);
+  x.movRegImm32(R.EDI, 0x004F0000);
   x.movRegImm32(R.ECX, (480 * 1024) >>> 2);
   x.repMovsd();
 
@@ -969,6 +971,36 @@ function buildProtectedModeCore(opts = {}) {
   x.jlLabel("fdc_boot_ok");
   x.movMemImm32(R.EBX, ADDR_HAS_FDC, 0);
   x.label("fdc_boot_ok");
+
+  // Detect Sound Blaster 16 DSP at Base 0x220 (Reset 0x226 -> Read 0x22A == 0xAA)
+  x.xorRegReg32(R.EBX, R.EBX);
+  x.movMemImm32(R.EBX, ADDR_HAS_SB16, 0);
+  x.movRegImm32(R.EDX, 0x0226);
+  x.movRegImm32(R.EAX, 1);
+  x.outDxAl();
+  x.movRegImm32(R.ECX, 256);
+  x.label("sb16_rst_dly");
+  x.subRegImm32(R.ECX, 1);
+  x.jneLabel("sb16_rst_dly");
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.outDxAl();
+  x.movRegImm32(R.EDX, 0x022E);
+  x.inAlDx();
+  x.andRegImm32(R.EAX, 0x80);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("no_sb16_card");
+  x.movRegImm32(R.EDX, 0x022A);
+  x.inAlDx();
+  x.andRegImm32(R.EAX, 0xFF);
+  x.cmpRegImm32(R.EAX, 0xAA);
+  x.jneLabel("no_sb16_card");
+  x.movMemImm32(R.EBX, ADDR_HAS_SB16, 1);
+  x.movRegImm32(R.EDX, 0x022C);
+  x.movRegImm32(R.EAX, 0xD1); x.outDxAl();
+  x.movRegImm32(R.EAX, 0x41); x.outDxAl();
+  x.movRegImm32(R.EAX, 0x56); x.outDxAl();
+  x.movRegImm32(R.EAX, 0x22); x.outDxAl();
+  x.label("no_sb16_card");
 
   // Reprogram 8259A Master & Slave PICs (vectors 0x20..0x27 and 0x28..0x2F, unmask IRQ0 timer)
   // KEHAI REAL-HW FIX 3: remember the BIOS's PIC masks so BIOS calls made after the remap
@@ -1631,7 +1663,7 @@ function buildProtectedModeCore(opts = {}) {
 
   x.andRegImm32(R.EBX, 0xFFFF);
 
-  for (let s = 0; s <= 22; s++) {
+  for (let s = 0; s <= 27; s++) {
     x.cmpRegImm32(R.EBX, s);
     x.jeLabel("sys_" + String(s).padStart(2, "0"));
   }
@@ -2324,7 +2356,7 @@ function buildProtectedModeCore(opts = {}) {
   x.jleLabel("fdc_sync_done");
   // Copy 1 sector (512B) from 0x00400000 + EBX*512 to bounce buffer 0x00005800
   x.movRegReg32(R.ESI, R.EBX);
-  x.andRegImm32(R.ESI, 0x7FF);
+  x.andRegImm32(R.ESI, 0xFFF);
   x.shlRegImm(R.ESI, 9);
   x.addRegImm32(R.ESI, 0x00400000);
   x.movRegImm32(R.EDI, 0x00005800);
@@ -2365,6 +2397,8 @@ function buildProtectedModeCore(opts = {}) {
   emitPicPit(x, false);  // KEHAI REAL-HW FIX 3
   x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF8); // lidt [0x7FF8]
   x.u8(0xFB); // sti
+  x.cmpRegImm32(R.EBX, 0xFFFE);
+  x.jeLabel("pm_disk2_ret");
   x.addRegImm32(R.EBX, 1);
   x.subRegImm32(R.EDX, 1);
   x.jmpLabel("bios_sync_loop");
@@ -2723,6 +2757,200 @@ function buildProtectedModeCore(opts = {}) {
   x.movRegMem32(R.ECX, R.EBP, 0x0FFD98);
   x.orRegReg32(R.EAX, R.ECX);
   x.popReg32(R.ESI);
+  x.jmpLabel("sys_push_eax");
+
+  x.label("sub_call_rm_disk2");
+  x.pushReg32(R.ESI);
+  x.pushReg32(R.EDI);
+  x.pushReg32(R.EBX);
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movMemImm32(R.ECX, 0x57FC, 0xFFFE);
+  x.movMemReg32(R.ECX, 0x57F4, R.ESP);
+  x.cli();
+  emitPicPit(x, true);
+  x.movRegImm32(R.EAX, 0x0020);
+  x.u8(0x8E); x.u8(0xD8);
+  x.u8(0x8E); x.u8(0xC0);
+  x.u8(0x8E); x.u8(0xD0);
+  x.u8(0x8E); x.u8(0xE0);
+  x.u8(0x8E); x.u8(0xE8);
+  x.movRegImm32(R.ESP, 0x00007C00);
+  x.u8(0x0F); x.u8(0x01); x.u8(0x1D); x.u32(0x00007FF0);
+  x.movRegImm32(R.EAX, 0x00000011);
+  x.u8(0x0F); x.u8(0x22); x.u8(0xC0);
+  x.u8(0xEA); x.u32(0x00007F40); x.u16(0x0018);
+  x.label("pm_disk2_ret");
+  x.popReg32(R.EBX);
+  x.popReg32(R.EDI);
+  x.popReg32(R.ESI);
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movRegMem32(R.EAX, R.ECX, 0x57D4);
+  x.ret();
+
+  // SYS 23: DISK2_INFO(cmd)
+  x.label("sys_23");
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movMemImm32(R.ECX, 0x57E0, 0);
+  x.callLabel("sub_call_rm_disk2");
+  x.jmpLabel("sys_push_eax");
+
+  // SYS 24: DISK2_READ(lba, count, dst_vm_ptr)
+  x.label("sys_24");
+  x.pushReg32(R.ESI);
+  x.pushReg32(R.EDI);
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 8);
+  x.addRegReg32(R.EDX, R.EBP);
+  x.label("d2_rd_lp");
+  x.cmpRegImm32(R.EBX, 0);
+  x.jleLabel("d2_rw_ok");
+  x.movRegReg32(R.ESI, R.EBX);
+  x.cmpRegImm32(R.ESI, 4);
+  x.jleLabel("d2_rd_cnt_ok");
+  x.movRegImm32(R.ESI, 4);
+  x.label("d2_rd_cnt_ok");
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movMemImm32(R.ECX, 0x57E0, 1);
+  x.movMemReg32(R.ECX, 0x57DC, R.EAX);
+  x.movMemReg32(R.ECX, 0x57D8, R.ESI);
+  x.pushReg32(R.EAX); x.pushReg32(R.EBX); x.pushReg32(R.EDX); x.pushReg32(R.ESI);
+  x.callLabel("sub_call_rm_disk2");
+  x.popReg32(R.ESI); x.popReg32(R.EDX); x.popReg32(R.EBX); x.popReg32(R.ECX);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("d2_rw_err");
+  x.movRegReg32(R.EAX, R.ECX);
+  x.pushReg32(R.EAX); x.pushReg32(R.ESI);
+  x.movRegReg32(R.ECX, R.ESI);
+  x.shlRegImm(R.ECX, 7);
+  x.movRegImm32(R.ESI, 0x00005800);
+  x.movRegReg32(R.EDI, R.EDX);
+  x.repMovsd();
+  x.movRegReg32(R.EDX, R.EDI);
+  x.popReg32(R.ESI); x.popReg32(R.EAX);
+  x.addRegReg32(R.EAX, R.ESI);
+  x.subRegReg32(R.EBX, R.ESI);
+  x.jmpLabel("d2_rd_lp");
+
+  // SYS 25: DISK2_WRITE(lba, count, src_vm_ptr)
+  x.label("sys_25");
+  x.pushReg32(R.ESI);
+  x.pushReg32(R.EDI);
+  x.movRegSib32(R.EAX, R.EBP, R.EDI, 0, 0);
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 4);
+  x.movRegSib32(R.EDX, R.EBP, R.EDI, 0, 8);
+  x.addRegReg32(R.EDX, R.EBP);
+  x.label("d2_wr_lp");
+  x.cmpRegImm32(R.EBX, 0);
+  x.jleLabel("d2_rw_ok");
+  x.movRegReg32(R.ESI, R.EBX);
+  x.cmpRegImm32(R.ESI, 4);
+  x.jleLabel("d2_wr_cnt_ok");
+  x.movRegImm32(R.ESI, 4);
+  x.label("d2_wr_cnt_ok");
+  x.pushReg32(R.EAX); x.pushReg32(R.ESI);
+  x.movRegReg32(R.ECX, R.ESI);
+  x.shlRegImm(R.ECX, 7);
+  x.movRegReg32(R.ESI, R.EDX);
+  x.movRegImm32(R.EDI, 0x00005800);
+  x.repMovsd();
+  x.movRegReg32(R.EDX, R.ESI);
+  x.popReg32(R.ESI); x.popReg32(R.EAX);
+  x.xorRegReg32(R.ECX, R.ECX);
+  x.movMemImm32(R.ECX, 0x57E0, 2);
+  x.movMemReg32(R.ECX, 0x57DC, R.EAX);
+  x.movMemReg32(R.ECX, 0x57D8, R.ESI);
+  x.pushReg32(R.EAX); x.pushReg32(R.EBX); x.pushReg32(R.EDX); x.pushReg32(R.ESI);
+  x.callLabel("sub_call_rm_disk2");
+  x.popReg32(R.ESI); x.popReg32(R.EDX); x.popReg32(R.EBX); x.popReg32(R.ECX);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jneLabel("d2_rw_err");
+  x.movRegReg32(R.EAX, R.ECX);
+  x.addRegReg32(R.EAX, R.ESI);
+  x.subRegReg32(R.EBX, R.ESI);
+  x.jmpLabel("d2_wr_lp");
+
+  x.label("d2_rw_ok");
+  x.popReg32(R.EDI);
+  x.popReg32(R.ESI);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.jmpLabel("sys_push_eax");
+
+  x.label("d2_rw_err");
+  x.popReg32(R.EDI);
+  x.popReg32(R.ESI);
+  x.movRegImm32(R.EAX, -1);
+  x.jmpLabel("sys_push_eax");
+
+  // SYS 26: AUDIO_INFO(cmd)
+  x.label("sys_26");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SB16);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("sys_push_eax");
+  x.movRegSib32(R.EBX, R.EBP, R.EDI, 0, 0);
+  x.cmpRegImm32(R.EBX, 0);
+  x.jeLabel("a26_caps");
+  x.cmpRegImm32(R.EBX, 1);
+  x.jeLabel("a26_rate");
+  x.cmpRegImm32(R.EBX, 3);
+  x.jeLabel("a26_cap");
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.jmpLabel("sys_push_eax");
+  x.label("a26_caps"); x.movRegImm32(R.EAX, 7); x.jmpLabel("sys_push_eax");
+  x.label("a26_rate"); x.movRegImm32(R.EAX, 22050); x.jmpLabel("sys_push_eax");
+  x.label("a26_cap");  x.movRegImm32(R.EAX, 4096); x.jmpLabel("sys_push_eax");
+
+  // SYS 27: AUDIO_WRITE(src_vm_ptr, num_frames) -> SB16 16-bit Stereo DMA (8237 Ch 5 + DSP 0xB0)
+  x.label("sys_27");
+  x.xorRegReg32(R.EDX, R.EDX);
+  x.movRegMem32(R.EAX, R.EDX, ADDR_HAS_SB16);
+  x.cmpRegImm32(R.EAX, 0);
+  x.jeLabel("a27_absent");
+  x.pushReg32(R.ESI);
+  x.pushReg32(R.EDI);
+  x.movRegSib32(R.ESI, R.EBP, R.EDI, 0, 0);
+  x.addRegReg32(R.ESI, R.EBP);
+  x.movRegSib32(R.ECX, R.EBP, R.EDI, 0, 4);
+  x.cmpRegImm32(R.ECX, 0);
+  x.jleLabel("a27_done_zero");
+  x.cmpRegImm32(R.ECX, 4096);
+  x.jleLabel("a27_cnt_ok");
+  x.movRegImm32(R.ECX, 4096);
+  x.label("a27_cnt_ok");
+  x.movRegReg32(R.EBX, R.ECX);
+  x.movRegImm32(R.EDI, 0x00010000);
+  x.repMovsd();
+  x.movRegImm32(R.EAX, 0x05); x.outImm8Al(0xD4);
+  x.xorRegReg32(R.EAX, R.EAX); x.outImm8Al(0xD8);
+  x.movRegImm32(R.EAX, 0x49); x.outImm8Al(0xD6);
+  x.xorRegReg32(R.EAX, R.EAX); x.outImm8Al(0x8B);
+  x.xorRegReg32(R.EAX, R.EAX); x.outImm8Al(0xC4);
+  x.movRegImm32(R.EAX, 0x80); x.outImm8Al(0xC4);
+  x.movRegReg32(R.ECX, R.EBX);
+  x.shlRegImm(R.ECX, 1);
+  x.subRegImm32(R.ECX, 1);
+  x.movRegReg32(R.EAX, R.ECX); x.outImm8Al(0xC6);
+  x.shrRegImm(R.EAX, 8);       x.outImm8Al(0xC6);
+  x.movRegImm32(R.EAX, 0x01); x.outImm8Al(0xD4);
+  x.movRegImm32(R.EDX, 0x022C);
+  x.movRegImm32(R.EAX, 0xB0); x.outDxAl();
+  x.movRegImm32(R.EAX, 0x30); x.outDxAl();
+  x.movRegReg32(R.EAX, R.ECX); x.outDxAl();
+  x.shrRegImm(R.EAX, 8);       x.outDxAl();
+  x.movRegImm32(R.EDX, 0x022F); x.inAlDx();
+  x.movRegImm32(R.EAX, 0x20); x.outImm8Al(0x20);
+  x.movRegReg32(R.EAX, R.EBX);
+  x.popReg32(R.EDI);
+  x.popReg32(R.ESI);
+  x.jmpLabel("sys_push_eax");
+  x.label("a27_done_zero");
+  x.popReg32(R.EDI);
+  x.popReg32(R.ESI);
+  x.xorRegReg32(R.EAX, R.EAX);
+  x.jmpLabel("sys_push_eax");
+  x.label("a27_absent");
+  x.movRegImm32(R.EAX, -1);
   x.jmpLabel("sys_push_eax");
 
   // ==========================================================================
@@ -3114,6 +3342,14 @@ function buildProtectedModeCore(opts = {}) {
     const rput16 = (v) => { rb.push(v & 0xFF, (v >>> 8) & 0xFF); };
     const rput32 = (v) => { rb.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF); };
 
+    rput(0x83, 0x3E); rput16(0x51EC); rput(0x00);
+    const jeDoProbe = rb.length + 1;
+    rput(0x74, 0);
+    rput(0xBE); rput16(1920);
+    rput(0xBD); rput16(960);
+    rput(0xBF); rput16(0x1000);
+    rput(0xC3);
+    rb[jeDoProbe] = (rb.length - (jeDoProbe + 1)) & 0xFF;
     rput(0x31, 0xED);                       // xor bp, bp
     rput(0x66, 0x31, 0xDB);                 // xor ebx, ebx
     rput(0xBF); rput16(0x5200);             // mov di, 0x5200
@@ -3201,6 +3437,97 @@ function buildProtectedModeCore(opts = {}) {
     x.bytes(rb);
   }
 
+  x.label("rm_disk2_io");
+  {
+    const rb = [];
+    const rput = (...xs) => { for (const v of xs) rb.push(v & 0xFF); };
+    const rput16 = (v) => { rput(v & 0xFF, (v >>> 8) & 0xFF); };
+    // If AX == 0xFFFF -> APM 1.2 Power-Off (5301 -> 530E -> 5307)
+    rput(0x3D); rput16(0xFFFF);
+    const jneNotApm = rb.length + 1;
+    rput(0x75, 0);
+    rput(0xB8); rput16(0x5301);
+    rput(0x31, 0xDB);
+    rput(0xCD, 0x15);
+    const jcApmRet = rb.length + 1;
+    rput(0x72, 0);
+    rput(0xB8); rput16(0x530E);
+    rput(0x31, 0xDB);
+    rput(0xB9); rput16(0x0102);
+    rput(0xCD, 0x15);
+    rput(0xB8); rput16(0x5307);
+    rput(0x43);
+    rput(0xB9); rput16(0x0003);
+    rput(0xCD, 0x15);
+    rb[jcApmRet] = (rb.length - (jcApmRet + 1)) & 0xFF;
+    rput(0xC3);
+    rb[jneNotApm] = (rb.length - (jneNotApm + 1)) & 0xFF;
+    rput(0xB2, 0x81);
+    rput(0xB4, 0x41);
+    rput(0xBB); rput16(0x55AA);
+    rput(0xCD, 0x13);
+    const jncUseDl = rb.length + 1;
+    rput(0x73, 0);
+    rput(0x80, 0x3E); rput16(0x7DFC); rput(0x80);
+    const jneFail0 = rb.length + 1;
+    rput(0x75, 0);
+    rput(0xB2, 0x80);
+    rput(0xB4, 0x41);
+    rput(0xBB); rput16(0x55AA);
+    rput(0xCD, 0x13);
+    const jcFail1 = rb.length + 1;
+    rput(0x72, 0);
+    rb[jncUseDl] = (rb.length - (jncUseDl + 1)) & 0xFF;
+    rput(0x8A, 0x06); rput16(0x57E0);
+    rput(0x3C, 0x00);
+    const jneNotInfo = rb.length + 1;
+    rput(0x75, 0);
+    rput(0xBE); rput16(0x5800);
+    rput(0xC7, 0x04); rput16(0x001A);
+    rput(0xB4, 0x48);
+    rput(0xCD, 0x13);
+    const jcFail2 = rb.length + 1;
+    rput(0x72, 0);
+    rput(0x66, 0xA1); rput16(0x5810);
+    rput(0x66, 0xA3); rput16(0x57D4);
+    rput(0xC3);
+    rb[jneNotInfo] = (rb.length - (jneNotInfo + 1)) & 0xFF;
+    rput(0xBE); rput16(0x57C0);
+    rput(0xC7, 0x04); rput16(0x0010);
+    rput(0x8B, 0x0E); rput16(0x57D8);
+    rput(0x89, 0x4C, 0x02);
+    rput(0xC7, 0x44, 0x04); rput16(0x5800);
+    rput(0xC7, 0x44, 0x06); rput16(0x0000);
+    rput(0x66, 0x8B, 0x0E); rput16(0x57DC);
+    rput(0x66, 0x89, 0x4C, 0x08);
+    rput(0x66, 0xC7, 0x44, 0x0C, 0, 0, 0, 0);
+    rput(0xB4, 0x42);
+    rput(0x3C, 0x01);
+    const jeDoRw = rb.length + 1;
+    rput(0x74, 0);
+    rput(0xB8); rput16(0x4300);
+    rb[jeDoRw] = (rb.length - (jeDoRw + 1)) & 0xFF;
+    rput(0xCD, 0x13);
+    const jcFail3 = rb.length + 1;
+    rput(0x72, 0);
+    rput(0x66, 0xC7, 0x06); rput16(0x57D4); rput(0, 0, 0, 0);
+    rput(0xC3);
+    const failPos = rb.length;
+    rb[jneFail0] = (failPos - (jneFail0 + 1)) & 0xFF;
+    rb[jcFail1] = (failPos - (jcFail1 + 1)) & 0xFF;
+    rb[jcFail2] = (failPos - (jcFail2 + 1)) & 0xFF;
+    rb[jcFail3] = (failPos - (jcFail3 + 1)) & 0xFF;
+    rput(0x66, 0x31, 0xC0);
+    rput(0x80, 0x3E); rput16(0x57E0); rput(0x00);
+    const jeRetZero = rb.length + 1;
+    rput(0x74, 0);
+    rput(0x66, 0x48);
+    rb[jeRetZero] = (rb.length - (jeRetZero + 1)) & 0xFF;
+    rput(0x66, 0xA3); rput16(0x57D4);
+    rput(0xC3);
+    x.bytes(rb);
+  }
+
   return { bytes: x.finalize(), labels: x.labels, asmLines: x.asmLines };
 }
 
@@ -3221,7 +3548,7 @@ function formatHexLines(bytesArr, startIdx, endIdx) {
 function buildX86Core(customBanner = "SpiralOS 1.6", opts = {}) {
   const pm = buildProtectedModeCore(opts);
   const bootSector = buildBootSector(customBanner);
-  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr, pm.labels.pm_bios_read2_ret, pm.labels.rm_probe_ram, opts);
+  const stage2 = buildStage2Loader(pm.labels.pm_bios_write_ret, bootSector.readRangeAddr, pm.labels.pm_bios_read2_ret, pm.labels.rm_probe_ram, pm.labels.rm_disk2_io, opts);
   const combined = new Uint8Array(32 * 512); // Sectors 0..31 (16 KB)
   combined.set(bootSector, 0);
   combined.set(stage2, 512);
