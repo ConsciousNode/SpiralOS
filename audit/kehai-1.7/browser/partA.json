@@ -1,0 +1,34 @@
+{
+ "index.html file": {
+  "errors": [],
+  "tray": 0
+ },
+ "index.html http": {
+  "errors": [],
+  "tray": 0
+ },
+ "hummingbird.html file": {
+  "errors": [],
+  "tray": 1
+ },
+ "hummingbird.html http": {
+  "errors": [],
+  "tray": 1
+ },
+ "tabcomp.html file": {
+  "errors": [],
+  "tray": 1
+ },
+ "tabcomp.html http": {
+  "errors": [],
+  "tray": 1
+ },
+ "triton/spiralos-triton.html file": {
+  "errors": [],
+  "tray": 1
+ },
+ "triton/spiralos-triton.html http": {
+  "errors": [],
+  "tray": 1
+ }
+}
